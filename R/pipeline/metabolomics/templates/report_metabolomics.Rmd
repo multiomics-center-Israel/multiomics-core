@@ -2527,6 +2527,12 @@ make_dt(files_tbl, "Key Output Files")
 ```{r methods-text, results='asis'}
 padj_cut_m <- metab_cfg$de$p_cutoff %||% 0.05
 lfc_cut_m  <- metab_cfg$de$linear_fc_cutoff %||% 1.5
+# Resolved as the DE step resolves it: significance is gated on the raw
+# p-value when de$use_adjusted_pval is false, and the text must say so.
+p_label_m <- if (isTRUE(metab_cfg$de$use_adjusted_pval %||% TRUE))
+  "adjusted p-value" else "raw p-value"
+# Where the adjusted p-values came from, as the DE step recorded it.
+padj_sentence_m <- describe_padj_provenance(de_res$padj_provenance)
 
 n_metab <- if (!is.null(pre)) nrow(pre$expr_work) else "N"
 n_de_m  <- "N"
@@ -2547,8 +2553,8 @@ cat(sprintf(
 ))
 
 cat(sprintf(
-  "Metabolites were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.1f. ",
-  padj_cut_m, lfc_cut_m
+  "Metabolites were considered differentially expressed at %s <= %.2f and |fold change| >= %.1f. ",
+  p_label_m, padj_cut_m, lfc_cut_m
 ))
 
 cat(sprintf(
@@ -2590,9 +2596,9 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-  "Metabolomics analysis was performed using the multiomics-core pipeline (v1.0). %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.1f). A total of %s metabolites were quantified, with %s differentially expressed.",
+  "Metabolomics analysis was performed using the multiomics-core pipeline (v1.0). %sDifferential expression was assessed with %s (%s <= %.2f, |FC| >= %.1f). A total of %s metabolites were quantified, with %s differentially expressed.",
   if (norm_method != "N/A") sprintf("Data were normalized using %s. ", norm_method) else "",
-  de_method, padj_cut_m, lfc_cut_m,
+  de_method, p_label_m, padj_cut_m, lfc_cut_m,
   format(as.numeric(n_metab), big.mark = ","),
   format(as.numeric(n_de_m), big.mark = ",")
 ))
@@ -2615,9 +2621,10 @@ test_desc <- switch(tolower(de_method_s),
 
 cat(test_desc, "\n\n")
 
+if (!is.null(padj_sentence_m)) cat(padj_sentence_m, "")
 cat(sprintf(
-  "Multiple testing correction was applied using the Benjamini-Hochberg procedure to control the false discovery rate (FDR). Metabolites were considered differentially expressed at adjusted p-value $\\leq$ %s and |linear fold change| $\\geq$ %s.\n\n",
-  padj_cut_m, lfc_cut_m
+  "Metabolites were considered differentially expressed at %s $\\leq$ %s and |linear fold change| $\\geq$ %s.\n\n",
+  p_label_m, padj_cut_m, lfc_cut_m
 ))
 
 cat(sprintf(

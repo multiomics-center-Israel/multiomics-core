@@ -37,7 +37,19 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   
   clustering_dir <- file.path(out_dir, "Clustering")
   ensure_dir(clustering_dir)
-  
+
+  # Clear this run's hierarchical heatmap before any path that can skip
+  # rewriting it -- the early return below when fewer than two DE features are
+  # available, and a run where the hierarchical step is simply off. Otherwise a
+  # rerun into the same output directory leaves the previous run's image, which
+  # the report both displays and now reads as evidence that clustering ran.
+  # Same guard, and the same reason, as PCA_robust.png in 01_mod_qc_pre.R.
+  # The hierarchical step recreates the file whenever it actually runs.
+  # (Named without its call syntax on purpose: test-clustering-empty-de.R finds
+  # the first step by a fixed-string grep, and a comment would shadow it.)
+  f_hier_hm <- file.path(clustering_dir, "Hierarchical", "Hierarchical_DE_heatmap.png")
+  if (file.exists(f_hier_hm)) file.remove(f_hier_hm)
+
   flags <- clustering_run_flags(pre, cfg)
   message(sprintf(
     "Clustering flags: hierarchical=%s, partition=%s, binary=%s",
@@ -47,6 +59,21 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   annot_col   <- build_heatmap_annotation_col(pre$meta, cfg)
   de_features <- get_de_features(de_res, cfg)
   expr_mat    <- as.matrix(pre$expr_imp_single)
+
+  # Same guard the metabolomics and lipidomics modules already carry: a DE step
+  # that returns nothing is a legitimate result, not a pipeline failure.
+  # run_clustering() rightly refuses an empty feature set, but without this the
+  # error aborted the whole run -- so an unmoderated or unblocked comparison,
+  # expected to return few or no features at this n, could not reach its report.
+  n_available <- length(intersect(de_features, rownames(expr_mat)))
+  if (n_available < 2) {
+    message(sprintf(
+      "proteomics clustering: skipped — %d DE features present in the matrix (need >= 2)",
+      n_available
+    ))
+    return(list(plots = list(), files = character(0),
+                excel_order = NULL, objects = list()))
+  }
   
   prot_de_cfg <- cfg$de %||% list()
   annot_context <- list(

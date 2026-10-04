@@ -16,6 +16,34 @@
 # Main Orchestrator Function
 # -----------------------------------------------------------------------------
 
+#' Remove the consensus outputs of an earlier run
+#'
+#' The report reads the consensus files by name -- the per-sample cluster
+#' comparison, the ARI and NMI matrices, the plots -- and presents them as this
+#' run's. A run that skips, stops early or fails would otherwise leave the last
+#' run's in place. Everything in this directory is written by
+#' \code{run_integration_consensus()}, so the directory is cleared whole. It is
+#' the inner \code{consensus/} directory only: the stability analysis writes to
+#' a sibling \code{stability/}, which this never touches, and a directory that
+#' holds one is refused as the wrong level.
+#'
+#' @param out_dir The consensus output directory (\code{.../consensus/consensus}),
+#'   or NULL.
+#' @return The removed directory, invisibly; \code{character(0)} when there was
+#'   nothing to remove.
+clear_consensus_outputs <- function(out_dir) {
+    if (is.null(out_dir) || !dir.exists(out_dir)) return(invisible(character(0)))
+    if (dir.exists(file.path(out_dir, "stability"))) {
+        stop("clear_consensus_outputs() was given ", out_dir, ", which holds the ",
+             "stability outputs; pass the inner consensus/ directory instead.",
+             call. = FALSE)
+    }
+    unlink(out_dir, recursive = TRUE)
+    message("  Consensus: cleared the outputs of a previous run")
+    invisible(out_dir)
+}
+
+
 #' Run Integration Consensus Analysis
 #'
 #' Compare and synthesize results from multiple integration methods
@@ -27,6 +55,10 @@
 #' @return List containing consensus analysis results
 run_integration_consensus <- function(integration_results, mae, config, out_dir) {
     message("=== Running Integration Consensus Analysis ===")
+
+    # Before any early return: a run that compares nothing must not leave the
+    # previous run's comparison for the report to show.
+    clear_consensus_outputs(out_dir)
 
     # Get config settings
     consensus_config <- config$modes$multiomics$consensus %||% list()

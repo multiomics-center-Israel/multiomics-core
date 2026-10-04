@@ -1,12 +1,7 @@
 # ============================================================
 # Shiny Export — Proteomics
 # ============================================================
-# This file contains both:
-# 1. CANONICAL builder (v2.0): build_shiny_payload_proteomics()
-# 2. LEGACY builder (deprecated): build_data_to_shiny_legacy_proteomics()
-#
-# New code should use build_shiny_payload_proteomics().
-# Legacy builder is kept for backward compatibility during transition.
+# CANONICAL builder (v2.0): build_shiny_payload_proteomics()
 # ============================================================
 
 
@@ -17,7 +12,7 @@
 #' Build canonical Shiny payload for Proteomics
 #'
 #' Creates a Shiny payload conforming to the canonical contract (v2.0).
-#' All 26 keys are guaranteed to exist (NULL if not applicable).
+#' Every canonical key is guaranteed to exist (NULL if not applicable).
 #'
 #' @param pre Preprocessing results (from preprocess_proteomics)
 #' @param de_res DE results (from proteomics DE analysis). Can be NULL if DE was skipped.
@@ -26,7 +21,11 @@
 #' @param pca_res Optional: pre-computed PCA results
 #' @param clustering_res Optional: pre-computed clustering results
 #' @param annot Optional: external annotation data.frame
-#' @return A named list with 26 canonical keys (+ legacy aliases if requested)
+#' @param final_results Optional: the final-results data.frame (as built by
+#'   \code{build_final_results_proteomics()}), the source of \code{de_final_table}.
+#'   NULL leaves \code{de_final_table} NULL.
+#' @return A named list containing every canonical key (NULL where not applicable),
+#'   plus any omics-specific extension keys.
 #'
 #' @export
 build_shiny_payload_proteomics <- function(
@@ -56,7 +55,7 @@ build_shiny_payload_proteomics <- function(
     effects_cfg <- prot_cfg[["effects"]] %||% list()
 
     # ============================================================
-    # METADATA (3 keys)
+    # METADATA
     # ============================================================
 
     # sample_meta: Sample metadata with rownames as sample IDs
@@ -69,19 +68,19 @@ build_shiny_payload_proteomics <- function(
     }
 
     # contrasts: Contrast definitions
-    payload$contrasts <- inputs$contrasts
+    payload["contrasts"] <- list(inputs$contrasts)
 
     # feature_annot: Feature annotations (Protein.Names, Genes, descriptions).
     # An explicit `annot` arg overrides; otherwise derive from pre$row_data via
     # the shared helper so future annotation columns flow through automatically.
-    payload$feature_annot <- if (!is.null(annot)) {
+    payload["feature_annot"] <- list(if (!is.null(annot)) {
         annot
     } else {
         build_feature_annot(pre$row_data, prot_cfg$id_columns$protein_id)
-    }
+    })
 
     # ============================================================
-    # EXPRESSION DATA (2 keys)
+    # EXPRESSION DATA
     # ============================================================
 
     # expr_raw: Filtered expression (before imputation, may have NAs)
@@ -92,10 +91,10 @@ build_shiny_payload_proteomics <- function(
     payload$expr_norm <- pre$expr_imp_single %||% pre$expr_work
     
     # expr_long: Long-format expression with metadata
-    payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
+    payload["expr_long"] <- list(build_expr_long(payload$expr_norm, payload$sample_meta))
 
     # ============================================================
-    # QC/PCA (3 keys)
+    # QC/PCA
     # ============================================================
 
     if (!is.null(pca_res)) {
@@ -103,25 +102,24 @@ build_shiny_payload_proteomics <- function(
         pca_objects <- pca_res$objects %||% pca_res
 
         # pca_object: prcomp result
-        payload$pca_object <- pca_objects$norm_log_counts_pca %||%
-                              pca_objects$pca_object %||%
-                              NULL
+        payload["pca_object"] <- list(pca_objects$norm_log_counts_pca %||%
+                                      pca_objects$pca_object)
 
         # pca_scores: PCA scores data.frame with metadata
-        payload$pca_scores <- pca_objects$pca_scores %||% NULL
+        payload["pca_scores"] <- list(pca_objects$pca_scores)
 
         # pca_3d: 3D PCA plotly widget
-        payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
+        payload["pca_3d"] <- list(pca_res$plots$pca_3d)
 
         # QC plot
-        payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
-        payload$samples_hm <- pca_res$plots$dist_heatmap %||% NULL
-        payload$samples_hm_w_na <- pca_res$plots$dist_heatmap_na %||% NULL
+        payload["imp_hist_samp"] <- list(pca_res$plots$imputation_hist)
+        payload["samples_hm"] <- list(pca_res$plots$dist_heatmap)
+        payload["samples_hm_w_na"] <- list(pca_res$plots$dist_heatmap_na)
 
     }
 
     # ============================================================
-    # DE RESULTS (5 keys)
+    # DE RESULTS
     # Note: Keys already initialized to NULL by init_shiny_payload()
     # Do NOT use payload$key <- NULL here as it REMOVES the key!
     # ============================================================
@@ -196,23 +194,47 @@ build_shiny_payload_proteomics <- function(
             if (!is.null(summary_counts)) payload$de_summary <- summary_counts
         }
 
-        # de_final_table: DE-filtered final results table (richer than de_stats)
-        if (!is.null(final_results)){
-          message(sprintf("[shiny export] read %s file", final_results))
-          de_df = as.data.frame(readxl::read_excel(final_results, sheet = "Results"))
-          payload$de_final_table <- de_df
+        # de_final_table: clean DE table built from the final-results data.frame
+        # (not from the workbook, whose Results sheet is a presentation layout).
+        # Same construction as the RNA-seq and metabolomics payloads: DE rows
+        # only, cutoff/pass helper columns dropped, clustering order + z-scores
+        # appended.
+        if (!is.null(final_results)) {
+            # Same key and default the export module uses to build final_results.
+            id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
+
+            if (!all(c(id_col, "pass_any_contrast") %in% names(final_results))) {
+                warning("[shiny_export] de_final_table: final_results has no '",
+                        id_col, "' or 'pass_any_contrast' column; left NULL.")
+            } else {
+                is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
+                de_df <- final_results[is_de, , drop = FALSE]
+                de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs") & names(de_df) != "pass_any_contrast", drop = FALSE]
+
+                excel_ord <- clustering_res$excel_order %||% NULL
+                if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
+                    de_df$order <- match(de_df[[id_col]], excel_ord$ordered_ids)
+                    if (!is.null(excel_ord$zscore_mat)) {
+                        zmat <- excel_ord$zscore_mat
+                        idx <- match(de_df[[id_col]], rownames(zmat))
+                        de_df <- cbind(de_df, zmat[idx, , drop = FALSE])
+                    }
+                }
+
+                payload$de_final_table <- de_df
+            }
         }
     }
 
     # ============================================================
     # Embedded xlsx bytes (all_final_xlsx, de_final_xlsx)
-    # Independent of the de_final_table path above: that one still reads the
-    # DE xlsx via readxl to populate a data.frame; this one stores raw bytes.
+    # Independent of the de_final_table path above, which uses the final-results
+    # data.frame; this one stores the workbooks' raw bytes.
     # ============================================================
     payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
-    # CLUSTERING (4 keys)
+    # CLUSTERING
     # Note: Keys already initialized to NULL by init_shiny_payload()
     # Do NOT use payload$key <- NULL here as it REMOVES the key!
     # ============================================================
@@ -226,7 +248,7 @@ build_shiny_payload_proteomics <- function(
 
         if (!is.null(src$patterns)) {
           payload$clust_patterns <- src$patterns
-          payload$clust_patterns_list <- src$patterns_list}
+          payload["clust_patterns_list"] <- list(src$patterns_list)}
 
         val <- src$heatmaps %||% src$heatmaps_by_pattern
         if (!is.null(val)) payload$clust_heatmaps_by_pattern <- val
@@ -260,7 +282,7 @@ build_shiny_payload_proteomics <- function(
         payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
 
     # ============================================================
-    # CONFIGURATION (6 keys)
+    # CONFIGURATION
     # ============================================================
 
     payload$padj_cutoff <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05

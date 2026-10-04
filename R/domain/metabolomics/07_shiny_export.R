@@ -16,7 +16,7 @@
 #' Build canonical Shiny payload for Metabolomics
 #'
 #' Creates a Shiny payload conforming to the canonical contract (v2.0).
-#' All 26 keys are guaranteed to exist (NULL if not applicable).
+#' Every canonical key is guaranteed to exist (NULL if not applicable).
 #'
 #' @param pre Preprocessing results (from preprocess_metabolomics)
 #' @param de_res DE results (from metabolomics DE analysis). Can be NULL if DE was skipped.
@@ -28,8 +28,14 @@
 #' @param plsda_res Optional: PLS-DA results (from feature_sel_res$plsda)
 #' @param enrichment_res Optional: enrichment results (from mod_metabolomics_enrichment)
 #' @param annot Optional: external annotation data.frame
+#' @param mummichog_pathways Optional: per-contrast mummichog pathway tables, as
+#'   passed to the HTML report (`metab_mummichog_report_pathways`). Becomes
+#'   `payload$mummichog`, one section per contrast built by
+#'   `build_mummichog_report_sections()`; NULL when not supplied or empty.
 #'
-#' @return A named list with 26 canonical keys (+ legacy aliases if requested)
+#' @return A named list containing every canonical key (NULL where not applicable),
+#'   plus omics-specific extension keys (and legacy keys when
+#'   \code{include_legacy} is TRUE).
 #'
 #' @export
 build_shiny_payload_metabolomics <- function(
@@ -45,7 +51,8 @@ build_shiny_payload_metabolomics <- function(
     annot = NULL,
     include_legacy = TRUE,
     xlsx_files = NULL,
-    out_dir = NULL
+    out_dir = NULL,
+    mummichog_pathways = NULL
 ) {
     # ============================================================
     # Initialize canonical payload structure
@@ -63,7 +70,7 @@ build_shiny_payload_metabolomics <- function(
     effects_cfg <- metab_cfg$effects %||% list()
 
     # ============================================================
-    # METADATA (3 keys)
+    # METADATA
     # ============================================================
 
     # sample_meta: Sample metadata with rownames as sample IDs
@@ -76,20 +83,20 @@ build_shiny_payload_metabolomics <- function(
     }
 
     # contrasts: Contrast definitions
-    payload$contrasts <- inputs$contrasts %||% NULL
+    payload["contrasts"] <- list(inputs$contrasts)
 
     # feature_annot: Feature annotations (metabolite names, m/z, RT, etc.).
     # An explicit `annot` arg overrides; otherwise derive from pre$row_data via
     # the shared helper (feature_id -> rownames) so future annotation columns
     # flow through automatically.
-    payload$feature_annot <- if (!is.null(annot)) {
+    payload["feature_annot"] <- list(if (!is.null(annot)) {
         annot
     } else {
         build_feature_annot(pre$row_data, "feature_id")
-    }
+    })
 
     # ============================================================
-    # EXPRESSION DATA (2 keys)
+    # EXPRESSION DATA
     # ============================================================
 
     # expr_raw: Filtered expression (before normalization, may have NAs)
@@ -100,7 +107,7 @@ build_shiny_payload_metabolomics <- function(
     payload$expr_norm <- pre$expr_work
 
     # expr_long: Long-format expression with metadata
-    payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
+    payload["expr_long"] <- list(build_expr_long(payload$expr_norm, payload$sample_meta))
 
     # Handle NAs in expr_norm if present (warn but don't fail)
     if (!is.null(payload$expr_norm) && anyNA(payload$expr_norm)) {
@@ -123,7 +130,7 @@ build_shiny_payload_metabolomics <- function(
     }
 
     # ============================================================
-    # QC/PCA (3 keys)
+    # QC/PCA
     # ============================================================
 
     if (!is.null(pca_res)) {
@@ -131,26 +138,25 @@ build_shiny_payload_metabolomics <- function(
         pca_objects <- pca_res$objects %||% pca_res
 
         # pca_object: prcomp result
-        payload$pca_object <- pca_objects$norm_log_counts_pca %||%
-                              pca_objects$pca_object %||%
-                              pca_objects$pca %||%
-                              NULL
+        payload["pca_object"] <- list(pca_objects$norm_log_counts_pca %||%
+                                      pca_objects$pca_object %||%
+                                      pca_objects$pca)
 
         # pca_scores: PCA scores data.frame with metadata
-        payload$pca_scores <- pca_objects$pca_scores %||% NULL
+        payload["pca_scores"] <- list(pca_objects$pca_scores)
 
 
         # pca_3d: 3D PCA plotly widget
-        payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
+        payload["pca_3d"] <- list(pca_res$plots$pca_3d)
         
         # QC plot
-        payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
+        payload["imp_hist_samp"] <- list(pca_res$plots$imputation_hist)
         payload$samples_hm_w_qc <- pca_res$plots$dist_heatmap %||% NULL
-        payload$samples_hm <- pca_res$plots$dist_heatmap_noQC %||% NULL
+        payload["samples_hm"] <- list(pca_res$plots$dist_heatmap_noQC)
     }
 
     # ============================================================
-    # DE RESULTS (5 keys)
+    # DE RESULTS
     # Note: Keys already initialized to NULL by init_shiny_payload()
     # Do NOT use payload$key <- NULL here as it REMOVES the key!
     # ============================================================
@@ -213,16 +219,52 @@ build_shiny_payload_metabolomics <- function(
             } else {
                 character(0)
             }
-            payload$de_summary <- build_de_summary_counts_metabolomics(
+            payload["de_summary"] <- list(build_de_summary_counts_metabolomics(
                 payload$de_stats,
                 contrasts = contrasts_vec,
                 out_dir   = out_dir
-            )
+            ))
         }
 
-        # de_final_table: DE-significant rows (equivalent to Final_results_DE_P_*.xlsx)
-        if (!is.null(payload$de_sig_stats) && nrow(payload$de_sig_stats) > 0) {
-            payload$de_final_table <- payload$de_sig_stats
+        # de_final_table: clean DE table with the same rows and stat columns as the
+        # DE-only Final_results workbook, as a plain data.frame rather than the
+        # sheet layout. Built from the same final-results builder the workbook
+        # uses (summary_df, not the annotated de_stats), then filtered like the
+        # RNA-seq payload: DE rows only, cutoff/pass helper columns dropped,
+        # clustering order + z-scores appended.
+        if (!is.null(de_res$summary_df)) {
+            final_results <- tryCatch(
+                build_final_results_metabolomics(
+                    pre             = pre,
+                    summary_df      = de_res$summary_df,
+                    contrast_labels = names(de_res$de_tables),
+                    row_data        = pre$row_data,
+                    feature_id_col  = "feature_id",
+                    cv_contrasts_df = inputs$contrasts,
+                    config          = config
+                ),
+                error = function(e) {
+                    warning("[shiny_export] de_final_table: ", conditionMessage(e))
+                    NULL
+                }
+            )
+            if (!is.null(final_results) && "pass_any_contrast" %in% names(final_results)) {
+                is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
+                de_df <- final_results[is_de, , drop = FALSE]
+                de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs") & names(de_df) != "pass_any_contrast", drop = FALSE]
+
+                excel_ord <- clustering_res$excel_order %||% NULL
+                if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
+                    de_df$order <- match(de_df$feature_id, excel_ord$ordered_ids)
+                    if (!is.null(excel_ord$zscore_mat)) {
+                        zmat <- excel_ord$zscore_mat
+                        idx <- match(de_df$feature_id, rownames(zmat))
+                        de_df <- cbind(de_df, zmat[idx, , drop = FALSE])
+                    }
+                }
+
+                payload$de_final_table <- de_df
+            }
         }
     }
 
@@ -232,7 +274,7 @@ build_shiny_payload_metabolomics <- function(
     payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
-    # CLUSTERING (4 keys)
+    # CLUSTERING
     # Note: Keys already initialized to NULL by init_shiny_payload()
     # Do NOT use payload$key <- NULL here as it REMOVES the key!
     # ============================================================
@@ -242,7 +284,11 @@ build_shiny_payload_metabolomics <- function(
 
         val <- src$clusters %||% src$New_clusters
         if (!is.null(val)) payload$clust_partition <- val
-        if (!is.null(src$patterns)) payload$clust_patterns <- src$patterns
+        if (!is.null(src$patterns)) {
+            payload$clust_patterns <- src$patterns
+            # List-style assignment keeps the key present when the value is NULL.
+            payload["clust_patterns_list"] <- list(src$patterns_list)
+        }
         val <- src$heatmaps %||% src$heatmaps_by_pattern
         if (!is.null(val)) payload$clust_heatmaps_by_pattern <- val
 
@@ -275,7 +321,7 @@ build_shiny_payload_metabolomics <- function(
       payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
 
     # ============================================================
-    # CONFIGURATION (6 keys)
+    # CONFIGURATION
     # ============================================================
 
     # Canonical key names (overwrite init_shiny_payload defaults)
@@ -320,6 +366,18 @@ build_shiny_payload_metabolomics <- function(
     if (!is.null(effects_cfg$shape)) {
         payload$shape <- as.character(effects_cfg$shape)
     }
+
+    # ============================================================
+    # MUMMICHOG (metabolomics extension: per-contrast plot + table)
+    # ============================================================
+    # Built by the same function the HTML report uses, so the app receives the
+    # report's own ggplot and table (plus title, subtitle and slug) for each
+    # contrast instead of rebuilding them. NULL when mummichog did not run or no
+    # contrast has a result; list-style assignment keeps the key present then.
+    mummichog_sections <- build_mummichog_report_sections(mummichog_pathways, config)
+    payload["mummichog"] <- list(
+        if (length(mummichog_sections) > 0) mummichog_sections else NULL
+    )
 
     # ============================================================
     # VALIDATION

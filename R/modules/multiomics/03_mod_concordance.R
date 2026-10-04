@@ -20,12 +20,18 @@ mod_multiomics_concordance <- function(de_results, harmonization_res, config, ou
         return(NULL)
     }
 
+    # The ID space harmonization judged 1:1 mapping at, so concordance scopes its
+    # own 1:1 filter the same way rather than at whole-file or DE-survivor scope.
+    inputs <- harmonization_res$inputs
+
     concordance_res <- analyze_multiomics_concordance(
         de_results = de_results,
         gene_protein_mapping = harmonization_res$gene_protein_mapping,
         mae = harmonization_res$mae,
         config = config,
-        out_dir = out_dir
+        out_dir = out_dir,
+        scope_gene_ids = rownames(inputs$transcriptomics$expr_work),
+        scope_protein_ids = rownames(inputs$proteomics$expr_work)
     )
 
     # Write concordance tables

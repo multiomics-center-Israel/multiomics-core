@@ -653,21 +653,6 @@ run_openai_commentary <- function(fig, context, config, output_dir) {
 }
 
 
-#' Create placeholder commentary on error
-create_placeholder_commentary <- function(figure_id, error_message) {
-    list(
-        figure_id = figure_id,
-        title = "Commentary Generation Failed",
-        what_is_this = "Unable to generate automated commentary for this figure.",
-        observations = list(),
-        issues_checks = list(),
-        next_steps = list(),
-        confidence = "none",
-        limitations = paste("Error:", error_message)
-    )
-}
-
-
 #' Get static explanation for a plot type
 #'
 #' @param plot_type The type of plot

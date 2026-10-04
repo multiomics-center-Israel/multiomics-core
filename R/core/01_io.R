@@ -14,6 +14,95 @@ normalize_contrast_name <- function(x) {
   gsub(" ", "", x)
 }
 
+#' Canonical key for a contrast name
+#'
+#' Different omics spell the same contrast differently -- `"1.56ppm_vs_0ppm"`
+#' from RNA, `"1.56ppm vs. 0ppm"` from proteomics, `"1.56ppm - 0ppm"` from
+#' metabolomics, and the ORA exports drop the spaces again. All of those name
+#' one biological comparison and must reduce to one key, or per-contrast work
+#' silently splits a contrast in two, or pairs the wrong halves.
+#'
+#' This is identity, not display: keep the original string for headings and
+#' filenames, and use the key only to decide what belongs with what.
+#'
+#' Style is what gets dropped, not content. A decimal point survives, because
+#' stripping every non-alphanumeric character made `"1.56ppm vs 0ppm"` and
+#' `"15.6ppm vs 0ppm"` the same key -- two different doses merged into one, or,
+#' where the key picks a table, one contrast's fold changes rendered under the
+#' other's name.
+#'
+#' A hyphen is the separator only in a label with no "vs": "A - B" and "A-B"
+#' are comparisons, but in "A-B_vs_C" the hyphen belongs to a group name and is
+#' dropped like a space or underscore -- read as "vs", it made "A-B_vs_C" and
+#' "A_vs_B-C" one key, pairing two different comparisons.
+#'
+#' A dot that opens a number (at the start, or after a space or underscore) is
+#' a decimal point, written "0.": ".5ppm" and "0.5ppm" are one dose, and
+#' "5ppm" another. A dot after a letter stays punctuation ("vs.", make.names
+#' padding such as "Day.1").
+#'
+#' @param x Character vector of contrast names.
+#' @return Character vector of canonical keys, same length as \code{x}.
+#' @examples
+#' normalize_contrast_key(c("A vs. B", "A_vs_B", "a - b"))   # all "avsb"
+#' normalize_contrast_key(c("1.56ppm vs 0ppm", "15.6ppm vs 0ppm"))  # stay apart
+#' normalize_contrast_key(c("A-B_vs_C", "A_vs_B-C"))              # stay apart
+#' normalize_contrast_key(c(".5ppm_vs_0ppm", "0.5ppm_vs_0ppm"))   # one key
+normalize_contrast_key <- function(x) {
+    x <- tolower(trimws(x))
+    # A leading decimal point keeps its number: ".5" -> "0.5".
+    x <- gsub("(^|[^0-9a-z.])\\.(?=[0-9])", "\\10.", x, perl = TRUE)
+    # Treat " - " / "-" between groups as an alias for "vs", but only where no
+    # "vs" names the separator already.
+    no_vs <- !grepl("vs", x, fixed = TRUE)
+    x[no_vs] <- gsub("\\s*-\\s*", "vs", x[no_vs])
+    x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
+    x <- gsub("[^a-z0-9.]", "", x)        # strip separators, dots decided below
+    # A dot is only content when it sits between digits; everywhere else it is
+    # punctuation ("vs.", a trailing stop, make.names padding) and goes.
+    x <- gsub("(?<![0-9])\\.|\\.(?![0-9])", "", x, perl = TRUE)
+    x
+}
+
+#' Read a sample sheet, guarding both ways read.csv() mangles one
+#'
+#' \code{read.csv()} fails on a sample sheet in two independent ways, and a
+#' reader that handles one still falls to the other:
+#'
+#' \enumerate{
+#'   \item \strong{Wrong delimiter.} Sample sheets are frequently tab-separated
+#'     (.txt/.tsv). Read as CSV, every column collapses into one, and a consumer
+#'     then finds none of the columns it expects.
+#'   \item \strong{Ragged rows.} \code{read.csv()} treats column 1 as row names
+#'     whenever a data row has MORE fields than the header. One unquoted comma in
+#'     a free-text column is enough. The failure is silent: the frame keeps the
+#'     right column NAMES while every value sits one column to the left. On a
+#'     real run that put the raw file path into \code{SampleName}, no expression
+#'     column matched a sample id, and the report's explorer rendered empty with
+#'     no error. \code{row.names = NULL} does not fix it -- only a reader that
+#'     respects the header's column count does.
+#' }
+#'
+#' \code{read_table_auto()} already reads with readr, so it does not shift; what
+#' it cannot do is spot a sheet whose extension lies about its delimiter, since
+#' it decides from the extension alone. This wrapper reads the separator off the
+#' header line and hands it down, and returns NULL instead of erroring so a
+#' report chunk can carry on without the sheet. Everything else -- the Latin1
+#' retry, the character sanitization, the data.frame conversion -- is
+#' \code{read_table_auto()}'s and is not duplicated here.
+#'
+#' @param path Path to the sample sheet (CSV or TSV).
+#' @return A data.frame, or \code{NULL} when \code{path} is missing, empty or
+#'   unreadable.
+read_samplesheet <- function(path) {
+  if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+
+  l1  <- tryCatch(readLines(path, n = 1, warn = FALSE), error = function(e) character(0))
+  sep <- if (length(l1) > 0 && grepl("\t", l1, fixed = TRUE)) "\t" else ","
+
+  tryCatch(read_table_auto(path, sep = sep), error = function(e) NULL)
+}
+
 #' Load omics input files from config
 #'
 #' Generic loader for any omics mode. Validates required files, loads CSV/TSV
@@ -106,7 +195,17 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
   if (!is.null(inputs$contrasts)) {
     validate_contrasts_content(inputs$contrasts, mode)
   }
-  
+
+  # Warn early about commas in a tab-separated sample sheet — they parse fine
+  # here but break the CSV-assuming report readers at render time.
+  if (!is.null(inputs$metadata) && is.character(files$metadata) && nzchar(files$metadata)) {
+    check_metadata_delimiter_safety(
+      as.data.frame(inputs$metadata),
+      resolve_raw_path(config, files$metadata),
+      mode
+    )
+  }
+
   inputs
 }
 
@@ -211,9 +310,18 @@ sanitize_character_columns <- function(df, source = "input") {
 }
 
 #' Read a table automatically detecting TSV vs CSV by extension
-read_table_auto <- function(path) {
+#'
+#' @param path Path to the file.
+#' @param sep Optional separator, \code{"\t"} or \code{","}. Overrides the
+#'   extension, for callers that have determined the delimiter another way (see
+#'   \code{\link{read_samplesheet}}, which reads it off the header because a
+#'   sample sheet's extension often lies). \code{NULL} keeps the extension rule,
+#'   so existing callers are unaffected.
+#' @return A data.frame.
+read_table_auto <- function(path, sep = NULL) {
   ext <- tolower(tools::file_ext(path))
-  read_fn <- if (ext %in% c("tsv", "txt")) readr::read_tsv else readr::read_csv
+  use_tsv <- if (is.null(sep)) ext %in% c("tsv", "txt") else identical(sep, "\t")
+  read_fn <- if (use_tsv) readr::read_tsv else readr::read_csv
   df <- tryCatch(
     read_fn(path, show_col_types = FALSE),
     error = function(e) {
@@ -236,4 +344,108 @@ read_table_auto <- function(path) {
   # Sanitize character columns: NBSP, whitespace
   df <- sanitize_character_columns(df, source = basename(path))
   df
+}
+
+
+# =============================================================================
+# Pre-computed DE summary tables
+# =============================================================================
+
+#' Suffixed statistic columns a summary table holds, and the contrast each names
+#'
+#' Assigns each column to the FIRST prefix, in the caller's preference order,
+#' that claims it. Claiming once is what keeps overlapping prefixes such as
+#' \code{pvalue.imputs} and \code{pvalue} from reading a single column twice --
+#' as contrast \code{S_vs_NS} under the first and \code{imputs.S_vs_NS} under
+#' the second -- which would make one contrast look like two.
+#'
+#' Shared so that deciding which column to use and asking how many contrasts a
+#' file holds cannot drift apart.
+#'
+#' @param cn Character vector of column names in the table.
+#' @param prefixes Candidate prefixes, in preference order.
+#' @return List with \code{col} (claimed columns, in prefix-preference order)
+#'   and \code{contrast} (the contrast each one names), positionally aligned.
+#' @keywords internal
+.de_summary_candidates <- function(cn, prefixes) {
+    cand_col <- character(0)
+    cand_contrast <- character(0)
+    for (stem in paste0(prefixes, ".")) {
+        for (col in cn[startsWith(cn, stem)]) {
+            if (col %in% cand_col) next
+            cand_col <- c(cand_col, col)
+            cand_contrast <- c(cand_contrast, substring(col, nchar(stem) + 1L))
+        }
+    }
+    list(col = cand_col, contrast = cand_contrast)
+}
+
+
+#' Resolve a column in a per-contrast DE summary table
+#'
+#' Our own \code{Datasets/*_summary_p0.05.tsv} exports hold every contrast in one
+#' table and suffix the statistic columns with the contrast name, e.g.
+#' \code{log2FC.S_vs_NS} or \code{padj.imputs.SP_vs_NSP}. The pre-computed DE
+#' loaders matched bare names only, so pointing one at an export this pipeline
+#' itself wrote loaded "successfully", logged a plausible feature count, and
+#' returned every statistic as NA -- indistinguishable downstream from a run with
+#' nothing differentially expressed. This resolves both shapes.
+#'
+#' Matching order: an exact bare name first, then an exact
+#' \code{<prefix>.<contrast_label>} across every candidate prefix, and only then
+#' the single-contrast fallback. Both later steps look at every prefix before
+#' deciding, because either one taken prefix-at-a-time guesses: an early prefix
+#' carrying one column would be taken while the exact match sat under the next,
+#' or while other prefixes held other contrasts entirely.
+#'
+#' The fallback exists because a file holding one contrast should resolve
+#' regardless of its short code -- that is what lets a single-omics export serve
+#' a multiomics run whose contrast is labelled differently. "One contrast" is
+#' counted across all the prefixes, not within one. A file holding several
+#' requires a matching label and otherwise aborts naming what it found.
+#'
+#' @param cn Character vector of column names in the table.
+#' @param bare Candidate bare column names, in the caller's preference order.
+#' @param prefixes Candidate prefixes for the suffixed form (e.g. "log2FC",
+#'   "linearFC.imputs"), in the caller's preference order.
+#' @param contrast_label Contrast name to prefer when the table holds several.
+#' @return The resolved column name, or NA_character_ when nothing matches.
+resolve_de_summary_col <- function(cn, bare, prefixes, contrast_label = NULL) {
+    # Subset `bare`, not `cn`: the preference order that decides this is the
+    # caller's, and `cn[cn %in% bare]` would instead have returned whichever
+    # candidate the table happened to list first.
+    hit <- bare[bare %in% cn]
+    if (length(hit) > 0) return(hit[1])
+
+    stems <- paste0(prefixes, ".")
+
+    if (!is.null(contrast_label)) {
+        for (stem in stems) {
+            exact <- paste0(stem, contrast_label)
+            if (exact %in% cn) return(exact)
+        }
+    }
+
+    cand <- .de_summary_candidates(cn, prefixes)
+    cand_col <- cand$col
+    if (length(cand_col) == 0) return(NA_character_)
+
+    contrasts <- unique(cand$contrast)
+    if (length(contrasts) == 1) {
+        # Genuinely one contrast across every candidate prefix. Its short code
+        # need not match the label: that is what lets a single-omics export
+        # serve a multiomics run whose contrast is named differently. cand_col
+        # is built in prefix-preference order, so its first entry is preferred.
+        return(cand_col[1])
+    }
+
+    if (!is.null(contrast_label)) {
+        stop("Cannot resolve a column for contrast '", contrast_label,
+             "': the table holds several contrasts (",
+             paste(contrasts, collapse = ", "), ") and none is named '",
+             contrast_label, "'. Columns examined: ",
+             paste(cand_col, collapse = ", "),
+             ". Rename the contrast or split the table.")
+    }
+    NA_character_
 }

@@ -137,7 +137,7 @@ test_that("a protein at the floor in both groups of a contrast is NA there, test
 })
 
 test_that("min_val-imputed matrix (no NAs) is still filtered by the per-contrast floor", {
-    # Mirrors the real Serge input: values are floored to a repeated minimum, and
+    # Mirrors a min_val-imputed input: values are floored to a repeated minimum, and
     # the observed mask carries no NA information (all TRUE). The per-contrast floor
     # detection must still drop floor-in-both proteins.
     samples <- c("C1", "C2", "C3", "A1", "A2", "A3", "B1", "B2", "B3")

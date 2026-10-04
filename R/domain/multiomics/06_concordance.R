@@ -93,9 +93,15 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
 #' @param mae MultiAssayExperiment with harmonized features (fallback)
 #' @param config Full config object
 #' @param out_dir Output directory for plots
+#' @param scope_gene_ids Gene IDs measured in this experiment (RNA expression
+#'   matrix rownames). Used to scope 1:1 mapping filtering as harmonization
+#'   does; NULL falls back to the whole mapping file.
+#' @param scope_protein_ids Protein IDs measured in this experiment, likewise.
 #' @return List with: concordance (named list of per-pair results), plots
 analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NULL,
-                                            mae = NULL, config, out_dir = NULL) {
+                                            mae = NULL, config, out_dir = NULL,
+                                            scope_gene_ids = NULL,
+                                            scope_protein_ids = NULL) {
 
     if (length(de_results) < 2) {
         stop("Concordance analysis requires at least 2 omics layers with DE results")
@@ -124,30 +130,61 @@ analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NU
     concordance_list <- list()
     plots <- list()
 
-    # Try RNA-protein concordance via gene-protein mapping
+    # RNA-protein concordance. Rebuild the gene-protein mapping FROM SCRATCH
+    # from the DE feature IDs (original ID space) rather than trusting the
+    # harmonized MAE, then join the per-omic DE log2FCs through it. The reported
+    # correlation and the scatter plot are both driven from this joined,
+    # checkable table (see analyze_rna_protein_concordance()).
     if ("transcriptomics" %in% names(de_flat) &&
-        "proteomics" %in% names(de_flat) &&
-        !is.null(gene_protein_mapping)) {
+        "proteomics" %in% names(de_flat)) {
 
-        rna_prot <- tryCatch({
-            analyze_rna_protein_concordance(
-                rna_de = de_flat$transcriptomics,
-                prot_de = de_flat$proteomics,
-                mapping = gene_protein_mapping,
+        fresh_mapping <- tryCatch(
+            build_gene_protein_mapping_from_ids(
+                gene_ids = de_flat$transcriptomics$feature_id,
+                protein_ids = de_flat$proteomics$feature_id,
                 config = config,
-                out_dir = out_dir
-            )
-        }, error = function(e) {
-            warning("RNA-protein concordance failed: ", e$message)
-            NULL
-        })
+                scope_gene_ids = scope_gene_ids,
+                scope_protein_ids = scope_protein_ids
+            ),
+            error = function(e) {
+                warning("From-scratch gene-protein mapping failed: ", e$message)
+                NULL
+            }
+        )
 
-        if (!is.null(rna_prot) && !is.null(rna_prot$concordance_table) &&
-            nrow(rna_prot$concordance_table) > 0) {
-            concordance_list[["transcriptomics_vs_proteomics"]] <- rna_prot
-            plots <- c(plots, rna_prot$plots)
-            message("  DE-based RNA-protein concordance: ",
-                    nrow(rna_prot$concordance_table), " matched features")
+        # Fall back only to the mapping passed in (still not the MAE); never to
+        # the MAE group-mean path for this pair.
+        if (is.null(fresh_mapping) || nrow(fresh_mapping) == 0) {
+            fresh_mapping <- gene_protein_mapping
+        }
+
+        if (is.null(fresh_mapping) || nrow(fresh_mapping) == 0) {
+            warning("No gene-protein mapping available; skipping RNA-protein ",
+                    "concordance (the MAE fallback is deliberately not used here)")
+        } else {
+            rna_prot <- tryCatch({
+                analyze_rna_protein_concordance(
+                    rna_de = de_flat$transcriptomics,
+                    prot_de = de_flat$proteomics,
+                    mapping = fresh_mapping,
+                    config = config,
+                    out_dir = out_dir
+                )
+            }, error = function(e) {
+                warning("RNA-protein concordance failed: ", e$message)
+                NULL
+            })
+
+            if (!is.null(rna_prot) && !is.null(rna_prot$concordance_table) &&
+                nrow(rna_prot$concordance_table) > 0) {
+                concordance_list[["transcriptomics_vs_proteomics"]] <- rna_prot
+                plots <- c(plots, rna_prot$plots)
+                message("  RNA-protein concordance (from-scratch mapping): ",
+                        nrow(rna_prot$concordance_table), " matched features")
+            } else {
+                warning("RNA-protein concordance produced no matched features; ",
+                        "not substituting the MAE group-mean fallback for this pair")
+            }
         }
     }
 
@@ -166,6 +203,10 @@ analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NU
 
             # Skip if already handled by DE-based approach
             if (pair_name %in% names(concordance_list)) next
+            # Never use the MAE group-mean fallback for RNA-protein: that pair
+            # must come from the from-scratch mapping join (a checkable table
+            # with original IDs and both log2FCs), handled above.
+            if (setequal(pair, c("transcriptomics", "proteomics"))) next
 
             mae_conc <- tryCatch({
                 compute_mae_concordance(mae, pair[1], pair[2], config, out_dir)
@@ -337,40 +378,123 @@ compute_mae_concordance <- function(mae, om1, om2, config, out_dir = NULL) {
 }
 
 
+#' Join RNA and protein DE tables through the gene-protein mapping
+#'
+#' The single implementation of the RNA-protein pairing. Two code paths used to
+#' do this join independently -- this file and
+#' \code{06b_rna_protein_correlation.R} -- and disagreed on how many pairs
+#' exist, so the number a reader got depended on which table they happened to
+#' open. The difference was every gene whose \code{Protein.Group} is a
+#' semicolon-separated group of several accessions: the other path matched
+#' feature ids through a long-form mapping keyed on \code{gene_symbol} and lost
+#' them, while this one merged on the mapping directly and kept them. No pair
+#' present in both tables ever disagreed on a value.
+#'
+#' One gene legitimately pairs with several protein groups (isoform-level
+#' groups), so the result can carry repeated \code{gene_id}s. That is kept, not
+#' deduplicated: collapsing it would silently pick one protein per gene.
+#'
+#' @param rna_de RNA DE table with feature_id plus a log2FC-like column.
+#' @param prot_de Protein DE table with feature_id plus a log2FC-like column.
+#' @param mapping Data frame with gene_id and protein_id (optionally
+#'   mapping_source), in the original ID space of both DE tables.
+#' @return Data frame with gene_id, protein_id, mapping_source and gene_symbol
+#'   (each when the mapping supplies it), logFC_rna, logFC_prot, padj_rna,
+#'   padj_prot. Zero rows when nothing joins.
+build_rna_protein_pairs <- function(rna_de, prot_de, mapping) {
+    if (is.null(mapping) || nrow(mapping) == 0) return(data.frame())
+    if (!"feature_id" %in% names(rna_de)) rna_de$feature_id <- rownames(rna_de)
+    if (!"feature_id" %in% names(prot_de)) prot_de$feature_id <- rownames(prot_de)
+
+    # Each side is reduced to the columns this join needs, under names that
+    # appear on exactly one input. merge() suffixes only the columns the two
+    # frames have in common, so leaving the full tables in place made the
+    # resulting name depend on what the OTHER table happened to carry: a DE
+    # table with its own gene_symbol pushed the mapping's copy to gene_symbol.x
+    # while the other side's stayed bare, and a padj alias present on only one
+    # side never picked up a _rna / _prot suffix at all. Renaming up front
+    # removes the whole class rather than guessing at the shapes afterwards.
+    keep <- intersect(c("gene_id", "protein_id", "mapping_source", "gene_symbol"),
+                      names(mapping))
+    map_slim <- mapping[, keep, drop = FALSE]
+    names(map_slim) <- sub("^gene_symbol$", ".map_gene_symbol", names(map_slim))
+    names(map_slim) <- sub("^mapping_source$", ".map_mapping_source",
+                           names(map_slim))
+
+    rna_mapped <- merge(map_slim, .de_side_columns(rna_de, "rna"),
+                        by.x = "gene_id", by.y = "feature_id", all = FALSE)
+    merged <- merge(rna_mapped, .de_side_columns(prot_de, "prot"),
+                    by.x = "protein_id", by.y = "feature_id", all = FALSE)
+    if (nrow(merged) == 0) return(data.frame())
+
+    out <- data.frame(
+        gene_id    = merged$gene_id,
+        protein_id = merged$protein_id,
+        stringsAsFactors = FALSE
+    )
+    if (".map_mapping_source" %in% names(merged)) {
+        out$mapping_source <- merged$.map_mapping_source
+    }
+    if (".map_gene_symbol" %in% names(merged)) {
+        out$gene_symbol <- merged$.map_gene_symbol
+    }
+    out$logFC_rna  <- merged$logFC_rna
+    out$logFC_prot <- merged$logFC_prot
+    out$padj_rna   <- merged$padj_rna
+    out$padj_prot  <- merged$padj_prot
+
+    if (all(is.na(out$logFC_rna)) || all(is.na(out$logFC_prot))) {
+        stop("Cannot find logFC columns in merged DE results")
+    }
+    out
+}
+
+
+#' One side of the RNA-protein join, under names that cannot collide
+#'
+#' Reduces a DE table to the feature id plus the fold change and adjusted
+#' p-value, already labelled for its side. The aliases are the ones this
+#' pipeline's producers emit: DESeq2-style \code{log2FoldChange}, limma-style
+#' \code{logFC} and \code{adj.P.Val}, edgeR's \code{FDR}, and the standardised
+#' \code{log2FC} / \code{padj}. Dropping an alias here does not fail loudly --
+#' it marks every feature non-significant -- so all three adjusted-p spellings
+#' are resolved rather than only the standardised one.
+#'
+#' @param df DE table carrying feature_id.
+#' @param side "rna" or "prot", used to suffix the returned statistic columns.
+#' @return Data frame with feature_id, logFC_<side>, padj_<side>.
+#' @keywords internal
+.de_side_columns <- function(df, side) {
+    fc_col   <- intersect(c("log2FC", "logFC", "log2FoldChange"), names(df))[1]
+    padj_col <- intersect(c("padj", "adj.P.Val", "FDR"), names(df))[1]
+
+    out <- data.frame(feature_id = as.character(df$feature_id),
+                      stringsAsFactors = FALSE)
+    out[[paste0("logFC_", side)]] <- if (is.na(fc_col)) {
+        rep(NA_real_, nrow(df))
+    } else {
+        df[[fc_col]]
+    }
+    out[[paste0("padj_", side)]] <- if (is.na(padj_col)) {
+        rep(NA_real_, nrow(df))
+    } else {
+        df[[padj_col]]
+    }
+    out
+}
+
+
 #' Analyze RNA-protein concordance using gene-protein mapping
 analyze_rna_protein_concordance <- function(rna_de, prot_de, mapping, config, out_dir = NULL) {
 
     message("  Analyzing RNA-protein concordance...")
 
-    # Ensure feature_id column
-    if (!"feature_id" %in% names(rna_de)) rna_de$feature_id <- rownames(rna_de)
-    if (!"feature_id" %in% names(prot_de)) prot_de$feature_id <- rownames(prot_de)
-
-    # Merge DE results via mapping
-    rna_mapped <- merge(mapping, rna_de, by.x = "gene_id", by.y = "feature_id", all = FALSE)
-    merged <- merge(rna_mapped, prot_de, by.x = "protein_id", by.y = "feature_id",
-                    suffixes = c("_rna", "_prot"))
+    merged <- build_rna_protein_pairs(rna_de, prot_de, mapping)
 
     if (nrow(merged) == 0) {
         message("  No overlapping features found between RNA and protein DE results via mapping")
         return(list(concordance_table = data.frame(), stats = NULL))
     }
-
-    # Standardize column names
-    logfc_rna_col <- grep("^log.*FC.*_rna$|^logFC_rna$", names(merged), value = TRUE)[1]
-    logfc_prot_col <- grep("^log.*FC.*_prot$|^logFC_prot$", names(merged), value = TRUE)[1]
-    padj_rna_col <- grep("padj_rna", names(merged), value = TRUE)[1]
-    padj_prot_col <- grep("padj_prot", names(merged), value = TRUE)[1]
-
-    if (is.na(logfc_rna_col) || is.na(logfc_prot_col)) {
-        stop("Cannot find logFC columns in merged DE results")
-    }
-
-    # Extract logFC values
-    merged$logFC_rna <- merged[[logfc_rna_col]]
-    merged$logFC_prot <- merged[[logfc_prot_col]]
-    merged$padj_rna <- if (!is.na(padj_rna_col)) merged[[padj_rna_col]] else NA
-    merged$padj_prot <- if (!is.na(padj_prot_col)) merged[[padj_prot_col]] else NA
 
     # Classify concordance
     p_cutoff <- 0.05
@@ -419,8 +543,18 @@ analyze_rna_protein_concordance <- function(rna_de, prot_de, mapping, config, ou
         dev.off()
     }
 
+    # Transparent, checkable table: original IDs (gene_id, protein_id) side by
+    # side with both log2FCs. The reported correlation (stats) and the scatter
+    # plot are both computed from `merged`, so this written table is the exact
+    # source of the reported r.
+    id_cols <- intersect(c("gene_id", "protein_id", "mapping_source", "gene_symbol"),
+                         names(merged))
+    concordance_table <- merged[, c(id_cols, "logFC_rna", "padj_rna",
+                                    "logFC_prot", "padj_prot", "concordance"),
+                                drop = FALSE]
+
     list(
-        concordance_table = merged,
+        concordance_table = concordance_table,
         stats = stats,
         plots = plots
     )

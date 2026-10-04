@@ -1,0 +1,755 @@
+# GSEA on DIABLO loadings and MOFA2 weights (07e_loadings_gsea.R).
+#
+# All fixtures are synthetic: made-up feature ids, sample names and values. No
+# network: the id mappers and the KEGG classification are stubbed, and on the
+# KEGG branch clusterProfiler::gseKEGG is mocked in its own namespace.
+
+# Stub by assignment into the functions' own environment. with_mocked_bindings()
+# errors with "No packages loaded with pkgload" here, since these are sourced
+# functions rather than a package. File-local, as in test-loadings-gmt-fallback.R.
+local_stubs <- function(stubs, env = parent.frame()) {
+    target <- environment(run_loadings_gsea)
+    nms <- names(stubs)
+
+    had <- vapply(nms, exists, logical(1), envir = target, inherits = FALSE)
+    old <- lapply(nms[had], get, envir = target, inherits = FALSE)
+    names(old) <- nms[had]
+
+    withr::defer({
+        for (nm in nms) {
+            if (nm %in% names(old)) {
+                assign(nm, old[[nm]], envir = target)
+            } else if (exists(nm, envir = target, inherits = FALSE)) {
+                rm(list = nm, envir = target)
+            }
+        }
+    }, envir = env)
+
+    for (nm in nms) assign(nm, stubs[[nm]], envir = target)
+    invisible(NULL)
+}
+
+# 60 features with signed values; SET_UP holds the 15 largest, SET_DOWN the 15
+# smallest, SET_MIX alternates.
+synthetic_values <- function() {
+    stats::setNames(seq(3, by = -0.1, length.out = 60), paste0("G", 1:60))
+}
+
+write_synthetic_gmt <- function(path) {
+    lines <- c(
+        paste(c("SET_UP", "Set up", paste0("G", 1:15)), collapse = "\t"),
+        paste(c("SET_DOWN", "Set down", paste0("G", 46:60)), collapse = "\t"),
+        paste(c("SET_MIX", "Set mixed", paste0("G", seq(2, 60, by = 4))), collapse = "\t")
+    )
+    writeLines(lines, path)
+    path
+}
+
+gmt_config <- function(gmt_path, method = NULL) {
+    cfg <- list(
+        project = list(dir = tempdir()),
+        params = list(seed = 7),
+        global = list(organism = "Synthetic organism"),
+        modes = list(
+            proteomics = list(pathway = list(gmt_file = gmt_path)),
+            multiomics = list(condition_column = "group",
+                              enrichment = list(loadings = list(min_size = 5,
+                                                                max_size = 100)))))
+    if (!is.null(method)) cfg$modes$multiomics$enrichment$loadings$method <- method
+    cfg
+}
+
+
+# ---- ranking ---------------------------------------------------------------
+
+test_that("the ranking keeps the sign and sorts decreasing", {
+    r <- collapse_loading_ranks(c(-0.5, 0.9, 0.1), c("a", "b", "c"))
+    expect_identical(names(r), c("b", "c", "a"))
+    expect_equal(unname(r), c(0.9, 0.1, -0.5))
+})
+
+test_that("duplicate keys keep the largest absolute value", {
+    r <- collapse_loading_ranks(c(0.4, -0.9, 0.2), c("g1", "g1", "g2"))
+    expect_equal(r[["g1"]], -0.9)
+    expect_length(r, 2)
+})
+
+test_that("a +x / -x tie goes to the positive value, whatever the row order", {
+    a <- collapse_loading_ranks(c(0.5, -0.5), c("g1", "g1"))
+    b <- collapse_loading_ranks(c(-0.5, 0.5), c("g1", "g1"))
+    expect_equal(a[["g1"]], 0.5)
+    expect_identical(a, b)
+})
+
+test_that("missing keys and non-finite values are dropped", {
+    r <- collapse_loading_ranks(c(1, 2, NA, Inf), c("a", NA, "c", "d"))
+    expect_identical(names(r), "a")
+    expect_identical(collapse_loading_ranks(numeric(0), character(0)), numeric(0))
+})
+
+test_that("GENE_N ids resolve in place, keeping the vector's length", {
+    harm <- list(gene_protein_mapping = data.frame(
+        gene_id = c("GID1", "GID2"), protein_id = c("PID1", "PID2"),
+        stringsAsFactors = FALSE))
+    ids <- c("GENE_2", "GENE_9", "GENE_1_proteomics", "P_OTHER")
+    out <- .resolve_feature_ids_aligned(ids, harm, "proteomics")
+    expect_identical(out, c("PID2", NA, "PID1", "P_OTHER"))
+    expect_identical(.resolve_feature_ids_aligned(ids, harm, "metabolomics"), ids)
+})
+
+
+# ---- entries ---------------------------------------------------------------
+
+diablo_fixture <- function() {
+    list(
+        loadings = list(
+            proteomics = matrix(c(0.5, -0.2, 0.1, 0.3, -0.4, 0.0), ncol = 2,
+                                dimnames = list(c("P1", "P2", "P3"),
+                                                c("comp1", "comp2"))),
+            Y = matrix(c(1, -1), ncol = 1, dimnames = list(c("A", "B"), "comp1"))),
+        sample_scores = list(
+            proteomics = matrix(c(2, 1, -1, -2, 0.5, -0.5, 0.1, -0.1), ncol = 2,
+                                dimnames = list(paste0("s", 1:4),
+                                                c("comp1", "comp2"))),
+            Y = matrix(0, 4, 2, dimnames = list(paste0("s", 1:4),
+                                                c("comp1", "comp2")))))
+}
+
+test_that("DIABLO entries skip the outcome block and keep signed loadings", {
+    e <- diablo_loading_entries(diablo_fixture())
+    expect_setequal(names(e), c("DIABLO_proteomics_comp1", "DIABLO_proteomics_comp2"))
+    one <- e[["DIABLO_proteomics_comp1"]]
+    expect_identical(one$integration, "DIABLO")
+    expect_identical(one$axis, "comp1")
+    expect_equal(one$values, c(P1 = 0.5, P2 = -0.2, P3 = 0.1))
+    expect_equal(one$scores, c(s1 = 2, s2 = 1, s3 = -1, s4 = -2))
+})
+
+test_that("MOFA2 entries take the leading factors and their sample scores", {
+    w <- matrix(1:8 / 10, ncol = 4,
+                dimnames = list(c("m1", "m2"), paste0("Factor", 1:4)))
+    factors <- data.frame(sample_id = c("s1", "s2"), Factor1 = c(1, -1),
+                          Factor2 = c(0, 2), Factor3 = c(3, 3), Factor4 = c(1, 1))
+    e <- mofa_weight_entries(list(weights = list(metabolomics = w),
+                                  factors = factors), n_factors = 3)
+    expect_identical(names(e), paste0("MOFA_metabolomics_Factor", 1:3))
+    expect_equal(e[["MOFA_metabolomics_Factor2"]]$scores, c(s1 = 0, s2 = 2))
+    expect_equal(e[["MOFA_metabolomics_Factor1"]]$values, c(m1 = 0.1, m2 = 0.2))
+})
+
+
+# ---- orientation -----------------------------------------------------------
+
+test_that("the orientation names the condition that scores higher", {
+    o <- axis_orientation(c(s1 = 2, s2 = 1, s3 = -1, s4 = -2),
+                          c(s1 = "B", s2 = "B", s3 = "A", s4 = "A"), "comp1")
+    expect_identical(o$higher, "B")
+    expect_identical(o$lower, "A")
+    expect_match(o$note, "positive NES points towards B")
+})
+
+test_that("a tie in the group means breaks on the condition name", {
+    o <- axis_orientation(c(s1 = 1, s2 = 1), c(s1 = "Z", s2 = "A"), "Factor1")
+    expect_identical(o$higher, "A")
+})
+
+test_that("with one condition or no scores the orientation is not stated", {
+    one <- axis_orientation(c(s1 = 1, s2 = 2), c(s1 = "A", s2 = "A"), "comp1")
+    expect_true(is.na(one$higher))
+    expect_true(is.na(axis_orientation(NULL, c(s1 = "A"), "comp1")$lower))
+})
+
+
+# ---- config ----------------------------------------------------------------
+
+test_that("GSEA is the default and ORA has to be asked for", {
+    expect_identical(loadings_enrichment_method(list()), "gsea")
+    cfg <- list(modes = list(multiomics = list(enrichment = list(
+        loadings = list(method = "ORA")))))
+    expect_identical(loadings_enrichment_method(cfg), "ora")
+})
+
+test_that("an unknown method falls back to GSEA with a warning", {
+    cfg <- list(modes = list(multiomics = list(enrichment = list(
+        loadings = list(method = "fisher")))))
+    expect_warning(m <- loadings_enrichment_method(cfg), "gsea")
+    expect_identical(m, "gsea")
+})
+
+test_that("the validator fills GSEA and the size bounds, and rejects a typo", {
+    validated <- suppressMessages(suppressWarnings(validate_multiomics_config(
+        list(integration = list(methods = "SNF")))))
+    expect_identical(validated$enrichment$loadings$method, "gsea")
+    expect_equal(validated$enrichment$loadings$min_size, 10)
+    expect_equal(validated$enrichment$loadings$max_size, 500)
+
+    expect_error(suppressMessages(suppressWarnings(validate_multiomics_config(
+        list(integration = list(methods = "SNF"),
+             enrichment = list(loadings = list(method = "fisher")))))),
+        "loadings.method")
+})
+
+
+# ---- dispatch --------------------------------------------------------------
+
+test_that("the default runs GSEA and records it", {
+    out_dir <- withr::local_tempdir()
+    calls <- character(0)
+    local_stubs(list(
+        run_loadings_gsea = function(...) { calls <<- c(calls, "gsea"); list() },
+        run_diablo_loadings_enrichment = function(...) { calls <<- c(calls, "ora"); NULL },
+        run_mofa_weights_enrichment = function(...) { calls <<- c(calls, "ora"); NULL }))
+
+    suppressMessages(run_loadings_enrichment(
+        list(diablo_results = list(), mofa_results = list()), list(),
+        list(global = list(organism = "Synthetic organism")), out_dir))
+
+    expect_identical(calls, "gsea")
+    expect_identical(readLines(file.path(out_dir, "loadings_enrichment_method.txt")),
+                     "gsea")
+})
+
+test_that("method ora runs the ORA path and records it", {
+    out_dir <- withr::local_tempdir()
+    calls <- character(0)
+    local_stubs(list(
+        run_loadings_gsea = function(...) { calls <<- c(calls, "gsea"); list() },
+        run_diablo_loadings_enrichment = function(...) { calls <<- c(calls, "diablo_ora"); NULL },
+        run_mofa_weights_enrichment = function(...) { calls <<- c(calls, "mofa_ora"); NULL }))
+
+    cfg <- list(global = list(organism = "Synthetic organism"),
+                modes = list(multiomics = list(enrichment = list(
+                    loadings = list(method = "ora")))))
+    suppressMessages(run_loadings_enrichment(
+        list(diablo_results = list(x = 1), mofa_results = list(x = 1)), list(),
+        cfg, out_dir))
+
+    expect_identical(calls, c("diablo_ora", "mofa_ora"))
+    expect_identical(readLines(file.path(out_dir, "loadings_enrichment_method.txt")),
+                     "ora")
+})
+
+
+# ---- scoring ---------------------------------------------------------------
+
+test_that("GMT-based loadings GSEA is reproducible and signed", {
+    skip_if_not_installed("fgsea")
+    gmt <- write_synthetic_gmt(file.path(withr::local_tempdir(), "sets.gmt"))
+    cfg <- gmt_config(gmt)
+
+    run <- function() suppressMessages(suppressWarnings(gene_loadings_gsea(
+        synthetic_values(), "proteomics", harmonization_res = list(), config = cfg,
+        kegg_org = NULL, org_db = NULL, min_size = 5, max_size = 100, seed = 7)))
+    a <- run()
+    b <- run()
+
+    expect_identical(a, b)
+    expect_gt(a$NES[a$ID == "SET_UP"], 0)
+    expect_lt(a$NES[a$ID == "SET_DOWN"], 0)
+    expect_identical(a$pathway[a$ID == "SET_UP"], "Set up")
+})
+
+test_that("metabolite loadings are scored on their signed values", {
+    skip_if_not_installed("fgsea")
+    ids <- paste0("feature_", 1:40)
+    vals <- stats::setNames(seq(2, by = -0.1, length.out = 40), ids)
+    cpd <- sprintf("C%05d", 1:40)
+    local_stubs(list(map_metabolite_ids_to_kegg = function(de_tables, harmonization_res) {
+        data.frame(feature_id = ids, KEGG_CPD = cpd, stringsAsFactors = FALSE)
+    }))
+    cpd_pathways <- data.frame(
+        pathway = rep(c("map90001", "map90002"), each = 8),
+        compound = c(cpd[1:8], cpd[33:40]),
+        name = rep(c("Pathway high", "Pathway low"), each = 8),
+        stringsAsFactors = FALSE)
+
+    res <- suppressMessages(metabolite_loadings_gsea(
+        vals, harmonization_res = list(), cache_dir = withr::local_tempdir(),
+        min_size = 3, max_size = 100, seed = 7, cpd_pathways = cpd_pathways))
+
+    expect_gt(res$NES[res$ID == "map90001"], 0)
+    expect_lt(res$NES[res$ID == "map90002"], 0)
+})
+
+
+# ---- plot and files --------------------------------------------------------
+
+gsea_table <- function() {
+    data.frame(pathway = c("Set up", "Set down", "Set flat"),
+               ID = c("SET_UP", "SET_DOWN", "SET_FLAT"),
+               NES = c(2.4, -2.1, 0.3), pvalue = c(0.001, 0.004, 0.8),
+               padj = c(0.003, 0.006, 0.8), stringsAsFactors = FALSE)
+}
+
+test_that("the NES plot carries dashed guides at -2 and +2", {
+    skip_if_not_installed("ggplot2")
+    p <- plot_loadings_gsea_nes(gsea_table(), "DIABLO_proteomics_comp1",
+                                subtitle = "B scores higher than A on comp1")
+    expect_true(inherits(p, "ggplot"))
+
+    vlines <- Filter(function(l) inherits(l$geom, "GeomVline"), p$layers)
+    guides <- Filter(function(l) identical(l$aes_params$linetype, "dashed"), vlines)
+    expect_length(guides, 1)
+    expect_setequal(guides[[1]]$data$xintercept, c(-2, 2))
+    expect_identical(guides[[1]]$aes_params$colour, "red")
+})
+
+test_that("an empty table draws nothing", {
+    expect_null(plot_loadings_gsea_nes(gsea_table()[0, ], "x"))
+})
+
+test_that("entries are written with their orientation, replacing a previous run", {
+    skip_if_not_installed("ggplot2")
+    out_dir <- withr::local_tempdir()
+    writeLines("old", file.path(out_dir, "DIABLO_proteomics_comp9_gsea.csv"))
+    writeLines("keep", file.path(out_dir, "DIABLO_proteomics_comp1_enrichment.csv"))
+    local_stubs(list(gene_loadings_gsea = function(...) gsea_table()))
+
+    entries <- diablo_loading_entries(diablo_fixture())
+    ctx <- list(harmonization_res = list(), config = list(), kegg_org = NULL,
+                org_db = NULL, min_size = 5, max_size = 100, seed = 7,
+                exclude_classes = NULL, cpd_pathways = NULL,
+                conditions = c(s1 = "B", s2 = "B", s3 = "A", s4 = "A"),
+                cache_dir = out_dir)
+    combined <- suppressMessages(run_loadings_gsea_entries(
+        entries, ctx, out_dir, "diablo_loadings_gsea_all.csv"))
+
+    expect_false(file.exists(file.path(out_dir, "DIABLO_proteomics_comp9_gsea.csv")))
+    expect_true(file.exists(file.path(out_dir, "DIABLO_proteomics_comp1_enrichment.csv")))
+    for (lab in c("DIABLO_proteomics_comp1", "DIABLO_proteomics_comp2")) {
+        expect_true(file.exists(file.path(out_dir, paste0(lab, "_gsea.csv"))))
+        expect_true(file.exists(file.path(out_dir, paste0(lab, "_gsea_nes.png"))))
+    }
+    expect_true(file.exists(file.path(out_dir, "diablo_loadings_gsea_all.csv")))
+    comp1 <- combined[combined$axis == "comp1", ]
+    expect_true(all(comp1$higher_scoring_group == "B"))
+    expect_true(all(comp1$integration == "DIABLO"))
+})
+
+
+# ---- KEGG branch -----------------------------------------------------------
+
+# One row per feature, as map_feature_ids_to_entrez() returns since #244: G1
+# and G2 share a gene, G60 maps to none.
+entrez_map <- function(...) {
+    ids <- paste0("G", 1:59)
+    data.frame(feature_id = ids,
+               ENTREZID = c("1001", "1001", as.character(1003:1059)),
+               stringsAsFactors = FALSE)
+}
+
+# gseKEGG's result, reduced to the columns gene_loadings_gsea() reads.
+fake_gsekegg <- function(seen) {
+    function(geneList, organism, keyType, minGSSize, maxGSSize, ...) {
+        seen$geneList <- geneList
+        seen$organism <- organism
+        seen$keyType <- keyType
+        data.frame(ID = c("hsa00010", "hsa04260"),
+                   Description = c("Glycolysis", "Cardiac muscle contraction"),
+                   setSize = c(10L, 12L), enrichmentScore = c(0.6, -0.5),
+                   NES = c(1.9, -1.7), pvalue = c(0.001, 0.01),
+                   p.adjust = c(0.01, 0.05),
+                   core_enrichment = c("1001/1003", "1050/1051"),
+                   stringsAsFactors = FALSE)
+    }
+}
+
+run_kegg_branch <- function(exclude_classes = NULL) {
+    suppressMessages(gene_loadings_gsea(
+        synthetic_values(), "proteomics", harmonization_res = list(),
+        config = list(), kegg_org = "hsa", org_db = "stub_org_db",
+        min_size = 5, max_size = 100, seed = 7,
+        exclude_classes = exclude_classes))
+}
+
+test_that("the KEGG branch ranks one value per NCBI gene and keeps gseKEGG's numbers", {
+    skip_if_not_installed("clusterProfiler")
+    seen <- new.env()
+    local_stubs(list(map_feature_ids_to_entrez = entrez_map))
+    testthat::local_mocked_bindings(gseKEGG = fake_gsekegg(seen),
+                                    .package = "clusterProfiler")
+
+    out <- run_kegg_branch()
+
+    # G2 folds into G1's gene (the larger loading wins) and unmapped G60 is
+    # dropped; nothing else is lost or duplicated.
+    expect_length(seen$geneList, 58)
+    expect_false(anyDuplicated(names(seen$geneList)) > 0)
+    expect_equal(seen$geneList[["1001"]], 3)
+    expect_false(is.unsorted(rev(seen$geneList)))
+    expect_identical(seen$organism, "hsa")
+    expect_identical(seen$keyType, "ncbi-geneid")
+
+    expect_identical(out$ID, c("hsa00010", "hsa04260"))
+    expect_equal(out$NES, c(1.9, -1.7))
+    expect_equal(out$padj, c(0.01, 0.05))
+    expect_identical(out$leadingEdge, c("1001,1003", "1050,1051"))
+    expect_true(all(out$database == "KEGG"))
+    expect_true(all(out$method == "gsea"))
+})
+
+test_that("an excluded KEGG class is dropped from the loadings GSEA table", {
+    skip_if_not_installed("clusterProfiler")
+    seen <- new.env()
+    local_stubs(list(
+        map_feature_ids_to_entrez = entrez_map,
+        kegg_pathway_categories = function(...) data.frame(
+            pathway_id = c("00010", "04260"),
+            category = c("Metabolism", "Organismal Systems"),
+            subcategory = c("Carbohydrate metabolism", "Circulatory system"),
+            pathway_name = c("Glycolysis", "Cardiac muscle contraction"),
+            stringsAsFactors = FALSE)))
+    testthat::local_mocked_bindings(gseKEGG = fake_gsekegg(seen),
+                                    .package = "clusterProfiler")
+
+    kept <- run_kegg_branch(exclude_classes = "Organismal Systems")
+    expect_identical(kept$ID, "hsa00010")
+    # The surviving row is the one gseKEGG returned, not a re-scored one.
+    expect_equal(kept$NES, 1.9)
+    expect_equal(kept$padj, 0.01)
+})
+
+
+# ---- missing GMT -------------------------------------------------------------
+
+collect_warnings <- function(expr) {
+    seen <- character(0)
+    value <- withCallingHandlers(expr, warning = function(w) {
+        seen <<- c(seen, conditionMessage(w))
+        invokeRestart("muffleWarning")
+    })
+    list(value = value, warnings = seen)
+}
+
+test_that("a missing GMT is skipped, and the rest of the enrichment still runs", {
+    skip_if_not_installed("fgsea")
+    skip_if_not_installed("ggplot2")
+    dir <- withr::local_tempdir()
+    gmt <- write_synthetic_gmt(file.path(dir, "sets.gmt"))
+    absent <- file.path(dir, "absent.gmt")
+
+    entries <- list(
+        list(label = "MOFA_proteomics_Factor1", integration = "MOFA2",
+             omics = "proteomics", axis = "Factor1",
+             values = synthetic_values(), scores = NULL),
+        list(label = "MOFA_proteomics_Factor2", integration = "MOFA2",
+             omics = "proteomics", axis = "Factor2",
+             values = -synthetic_values(), scores = NULL))
+    ctx <- function(cfg) list(
+        harmonization_res = list(), config = cfg, kegg_org = NULL, org_db = NULL,
+        min_size = 5, max_size = 100, seed = 7, exclude_classes = NULL,
+        cpd_pathways = NULL, conditions = NULL, cache_dir = dir)
+
+    run <- collect_warnings(suppressMessages(run_loadings_gsea_entries(
+        entries, ctx(gmt_config(c(gmt, absent))), file.path(dir, "with_missing"),
+        "mofa_weights_gsea_all.csv")))
+    ref <- suppressWarnings(suppressMessages(run_loadings_gsea_entries(
+        entries, ctx(gmt_config(gmt)), file.path(dir, "present_only"),
+        "mofa_weights_gsea_all.csv")))
+
+    expect_true(any(grepl("not found", run$warnings) &
+                    grepl("absent.gmt", run$warnings, fixed = TRUE)))
+    # Both factors were scored, and exactly as if only the present GMT had been
+    # configured.
+    expect_setequal(unique(run$value$axis), c("Factor1", "Factor2"))
+    expect_identical(run$value, ref)
+    f1 <- run$value[run$value$axis == "Factor1", ]
+    f2 <- run$value[run$value$axis == "Factor2", ]
+    expect_gt(f1$NES[f1$ID == "SET_UP"], 0)
+    expect_lt(f2$NES[f2$ID == "SET_UP"], 0)
+})
+
+test_that("with every GMT missing the view is skipped, not given other gene sets", {
+    dir <- withr::local_tempdir()
+    cfg <- gmt_config(c(file.path(dir, "a.gmt"), file.path(dir, "b.gmt")))
+    # load_gene_sets() must not be reached: given no GMT it would generate gene
+    # sets for a non-model organism instead.
+    local_stubs(list(load_gene_sets = function(...) stop("load_gene_sets reached")))
+
+    run <- collect_warnings(suppressMessages(gene_loadings_gsea(
+        synthetic_values(), "proteomics", harmonization_res = list(), config = cfg,
+        kegg_org = NULL, org_db = NULL, min_size = 5, max_size = 100, seed = 7)))
+
+    expect_null(run$value)
+    expect_true(any(grepl("a.gmt", run$warnings, fixed = TRUE) &
+                    grepl("b.gmt", run$warnings, fixed = TRUE)))
+})
+
+
+# ---- switching methods, and what the report shows ----------------------------
+
+# The report's setup chunk, evaluated as the report evaluates it: it decides
+# which test's files to show from the record, not from what is on disk.
+report_loadings_setup <- function(loadings_enrich_dir) {
+    rmd <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
+        collapse = "\n")
+    chunk <- regmatches(rmd, regexpr(
+        "(?s)```\\{r loadings-enrich-setup[^}]*\\}\n.*?\n```", rmd, perl = TRUE))
+    code <- sub("^```\\{r[^}]*\\}\n", "", sub("\n```$", "", chunk))
+    env <- new.env()
+    env$loadings_enrich_dir <- loadings_enrich_dir
+    eval(parse(text = code), envir = env)
+    env
+}
+
+test_that("a GSEA -> ORA -> GSEA sequence leaves the report on each run's own test", {
+    out_dir <- withr::local_tempdir()
+    diablo_dir <- file.path(out_dir, "diablo_loadings")
+    dir.create(diablo_dir)
+    calls <- character(0)
+    local_stubs(list(
+        run_loadings_gsea = function(...) { calls <<- c(calls, "gsea"); list() },
+        run_diablo_loadings_enrichment = function(...) { calls <<- c(calls, "ora"); NULL },
+        run_mofa_weights_enrichment = function(...) NULL))
+
+    run_with <- function(method) {
+        cfg <- list(global = list(organism = "Synthetic organism"),
+                    modes = list(multiomics = list(enrichment = list(
+                        loadings = list(method = method)))))
+        suppressMessages(run_loadings_enrichment(
+            list(diablo_results = list(x = 1)), list(), cfg, out_dir))
+        report_loadings_setup(out_dir)$loadings_method
+    }
+
+    expect_identical(c(run_with("gsea"), run_with("ora"), run_with("gsea")),
+                     c("gsea", "ora", "gsea"))
+    expect_identical(calls, c("gsea", "ora", "gsea"))
+
+    # Each branch lists only its own figures; the other test's leftovers are
+    # not picked up as this run's. Both kinds side by side, as after a switch
+    # (an ORA run clears only ORA's own files, so GSEA figures can remain).
+    file.create(file.path(diablo_dir, c("DIABLO_proteomics_comp1_gsea_nes.png",
+                                        "DIABLO_proteomics_comp1_enrichment.png")))
+    rmd <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
+        collapse = "\n")
+    expect_true(grepl('show_loadings_plots(diablo_le_dir, "_gsea_nes\\\\.png$"',
+                      rmd, fixed = TRUE))
+    expect_true(grepl('list.files(diablo_le_dir, pattern = "_enrichment\\\\.png$"',
+                      rmd, fixed = TRUE))
+    expect_identical(basename(list.files(diablo_dir, "_gsea_nes\\.png$")),
+                     "DIABLO_proteomics_comp1_gsea_nes.png")
+    expect_identical(basename(list.files(diablo_dir, "_enrichment\\.png$")),
+                     "DIABLO_proteomics_comp1_enrichment.png")
+})
+
+test_that("a run from before the record existed is shown as ORA", {
+    expect_identical(report_loadings_setup(withr::local_tempdir())$loadings_method,
+                     "ora")
+})
+
+test_that("the report legends say what was ranked, and caveat DIABLO only", {
+    env <- report_loadings_setup(withr::local_tempdir())
+    expect_match(env$loadings_gsea_legend, "every mapped feature", fixed = TRUE)
+    expect_match(env$diablo_loadings_caveat, "descriptive", fixed = TRUE)
+
+    rmd <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
+        collapse = "\n")
+    # Both DIABLO legends (GSEA and ORA) carry the caveat; MOFA2 is unsupervised.
+    expect_length(gregexpr("diablo_loadings_caveat)", rmd, fixed = TRUE)[[1]], 2)
+    mofa_chunk <- regmatches(rmd, regexpr(
+        "(?s)```\\{r loadings-enrich-mofa[^}]*\\}\n.*?\n```", rmd, perl = TRUE))
+    expect_false(grepl("diablo_loadings_caveat", mofa_chunk, fixed = TRUE))
+})
+
+
+# ---- Codex review of 8ffb3f1 -------------------------------------------------
+
+test_that("a rerun without an integration clears that integration's GSEA files", {
+    out_dir <- withr::local_tempdir()
+    stale <- c(file.path(out_dir, "diablo_loadings",
+                         c("DIABLO_proteomics_comp1_gsea.csv",
+                           "DIABLO_proteomics_comp1_gsea_nes.png",
+                           "diablo_loadings_gsea_all.csv")),
+               file.path(out_dir, "mofa_loadings",
+                         c("MOFA_proteomics_Factor1_gsea.csv",
+                           "mofa_weights_gsea_all.csv")))
+    ora_file <- file.path(out_dir, "diablo_loadings",
+                          "DIABLO_proteomics_comp1_enrichment.png")
+    for (d in unique(dirname(stale))) dir.create(d)
+    file.create(c(stale, ora_file))
+
+    # Neither DIABLO nor MOFA2 produced anything this time.
+    res <- suppressMessages(run_loadings_gsea(
+        list(), list(), list(global = list(organism = "Synthetic organism")), out_dir))
+
+    expect_identical(res, list())
+    expect_false(any(file.exists(stale)))
+    # Only this path's own files go; the ORA output beside them stays.
+    expect_true(file.exists(ora_file))
+})
+
+test_that("the validator rejects unusable loadings size bounds", {
+    validate <- function(loadings) suppressMessages(suppressWarnings(
+        validate_multiomics_config(list(integration = list(methods = "SNF"),
+                                        enrichment = list(loadings = loadings)))))
+
+    expect_error(validate(list(min_size = "ten")), "positive whole numbers")
+    expect_error(validate(list(min_size = 0)), "positive whole numbers")
+    expect_error(validate(list(max_size = 2.5)), "positive whole numbers")
+    expect_error(validate(list(min_size = 50, max_size = 20)), "larger than max_size")
+
+    ok <- validate(list(min_size = 5, max_size = 100))
+    expect_equal(ok$enrichment$loadings$min_size, 5)
+    expect_equal(ok$enrichment$loadings$max_size, 100)
+})
+
+
+# ---- Codex review of 69e10ce -------------------------------------------------
+
+metab_mofa <- function() {
+    list(weights = list(metabolomics = matrix(
+        seq(1, -1, length.out = 6), ncol = 1,
+        dimnames = list(paste0("feature_", 1:6), "Factor1"))))
+}
+
+test_that("an unavailable compound lookup is tried once, not once per entry", {
+    skip_if_not_installed("ggplot2")
+    out_dir <- withr::local_tempdir()
+    fetches <- 0L
+    local_stubs(list(
+        get_kegg_compound_pathways = function(...) { fetches <<- fetches + 1L; NULL },
+        gene_loadings_gsea = function(...) gsea_table()))
+
+    integ <- list(mofa_results = list(weights = list(
+        metabolomics = matrix(c(1, -1, 0.5, -0.5), ncol = 2,
+                              dimnames = list(c("m1", "m2"), c("Factor1", "Factor2"))),
+        proteomics = matrix(c(0.3, -0.3), ncol = 1,
+                            dimnames = list(c("P1", "P2"), "Factor1")))))
+    res <- suppressMessages(run_loadings_gsea(
+        integ, list(), list(global = list(organism = "Synthetic organism")), out_dir))
+
+    # One shared attempt; the two metabolomics factors are skipped without
+    # another, and the proteomics view is still scored.
+    expect_identical(fetches, 1L)
+    expect_setequal(unique(res$mofa$omics), "proteomics")
+})
+
+test_that("a class exclusion warms the classification cache the compound path reads", {
+    out_dir <- withr::local_tempdir()
+    cache_dirs <- character(0)
+    local_stubs(list(
+        get_kegg_compound_pathways = function(...) data.frame(
+            pathway = "map90001", compound = "C00001", name = "P",
+            stringsAsFactors = FALSE),
+        kegg_pathway_categories = function(cache_dir = NULL, ...) {
+            cache_dirs <<- c(cache_dirs, cache_dir)
+            NULL
+        },
+        metabolite_loadings_gsea = function(...) NULL))
+
+    cfg <- function(excl) list(global = list(organism = "Synthetic organism"),
+                               modes = list(multiomics = list(enrichment = list(
+                                   exclude_pathway_classes = excl))))
+    suppressMessages(run_loadings_gsea(list(mofa_results = metab_mofa()), list(),
+                                       cfg("Human Diseases"), out_dir))
+    expect_identical(cache_dirs, out_dir)
+
+    # Nothing to exclude: no classification is fetched at all.
+    cache_dirs <- character(0)
+    suppressMessages(run_loadings_gsea(list(mofa_results = metab_mofa()), list(),
+                                       cfg(NULL), out_dir))
+    expect_length(cache_dirs, 0)
+})
+
+test_that("the report finds loadings results that are tables only", {
+    rmd <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
+        collapse = "\n")
+    def <- regmatches(rmd, regexpr("has_loadings_enrich <- [^\n]*\n[^\n]*", rmd))
+    expect_match(def, "\\.(png|csv)$", fixed = TRUE)
+    # And it does not also say nothing was scored when the table is there.
+    expect_match(rmd, 'else if (!file.exists(file.path(diablo_le_dir, "diablo_loadings_gsea_all.csv")))',
+                 fixed = TRUE)
+    expect_match(rmd, 'else if (!file.exists(file.path(mofa_le_dir, "mofa_weights_gsea_all.csv")))',
+                 fixed = TRUE)
+})
+
+
+# ---- Copilot review of 69e10ce -----------------------------------------------
+
+# A directory as a previous run leaves it: both tests' outputs for both
+# integrations, the method record, and the KEGG caches beside them.
+previous_run <- function(out_dir) {
+    files <- list(
+        diablo_ora = file.path(out_dir, "diablo_loadings", c(
+            "DIABLO_proteomics_comp1_enrichment.csv",
+            "DIABLO_proteomics_comp2_enrichment.png",
+            "diablo_loadings_enrichment_all.csv")),
+        mofa_ora = file.path(out_dir, "mofa_loadings", c(
+            "MOFA_proteomics_Factor1_enrichment.csv",
+            "MOFA_proteomics_Factor1_enrichment.png",
+            "mofa_weights_enrichment_all.csv")),
+        gsea = c(file.path(out_dir, "diablo_loadings", c(
+                     "DIABLO_proteomics_comp1_gsea.csv",
+                     "DIABLO_proteomics_comp1_gsea_nes.png",
+                     "diablo_loadings_gsea_all.csv")),
+                 file.path(out_dir, "mofa_loadings", "mofa_weights_gsea_all.csv")),
+        record = file.path(out_dir, "loadings_enrichment_method.txt"),
+        cache = c(file.path(out_dir, "kegg_compound_pathways.rds"),
+                  file.path(out_dir, "diablo_loadings", "kegg_pathway_categories.rds")))
+    for (d in unique(dirname(unlist(files)))) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    file.create(unlist(files))
+    files
+}
+
+test_that("an ORA rerun with smaller or empty output leaves no previous ORA files", {
+    out_dir <- withr::local_tempdir()
+    old <- previous_run(out_dir)
+    # This run: DIABLO yields one component instead of two, MOFA2 is absent.
+    local_stubs(list(run_diablo_loadings_enrichment = function(out_dir, ...) {
+        write.csv(data.frame(x = 1),
+                  file.path(out_dir, "DIABLO_proteomics_comp1_enrichment.csv"),
+                  row.names = FALSE)
+        NULL
+    }))
+
+    cfg <- list(global = list(organism = "Synthetic organism"),
+                modes = list(multiomics = list(enrichment = list(
+                    loadings = list(method = "ora")))))
+    suppressMessages(run_loadings_enrichment(
+        list(diablo_results = list(x = 1)), list(), cfg, out_dir))
+
+    # Only what this run wrote is left of the ORA outputs.
+    expect_identical(
+        sort(basename(list.files(out_dir, "_enrichment(_all)?\\.(csv|png)$",
+                                 recursive = TRUE))),
+        "DIABLO_proteomics_comp1_enrichment.csv")
+    # Only ORA's own files went: GSEA outputs and caches are untouched.
+    expect_true(all(file.exists(c(old$gsea, old$cache))))
+    expect_identical(readLines(old$record), "ora")
+})
+
+test_that("a skipped or failed step removes the record and every loadings output", {
+    out_dir <- withr::local_tempdir()
+    old <- previous_run(out_dir)
+
+    removed <- clear_loadings_enrichment_outputs(out_dir)
+
+    gone <- c(old$diablo_ora, old$mofa_ora, old$gsea, old$record)
+    expect_false(any(file.exists(gone)))
+    expect_setequal(removed, gone)
+    expect_true(all(file.exists(old$cache)))
+    # A directory that was never written is not an error.
+    expect_length(clear_loadings_enrichment_outputs(file.path(out_dir, "absent")), 0)
+})
+
+test_that("the pipeline clears the step's outputs on both the skip and the error path", {
+    src <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "pipeline", "multiomics", "00_pipe_multiomics.R")),
+        collapse = "\n")
+    block <- regmatches(src, regexpr(
+        "(?s)multiomics_loadings_enrichment,.*?\n        \\),", src, perl = TRUE))
+    expect_length(block, 1)
+
+    skip <- regmatches(block, regexpr(
+        "(?s)Skipping loadings enrichment.*?return\\(NULL\\)", block, perl = TRUE))
+    expect_match(skip, "clear_loadings_enrichment_outputs(loadings_dir)", fixed = TRUE)
+    err <- regmatches(block, regexpr(
+        "(?s)error = function\\(e\\).*?NULL\n", block, perl = TRUE))
+    expect_match(err, "clear_loadings_enrichment_outputs(loadings_dir)", fixed = TRUE)
+    # And the step writes where it clears.
+    expect_match(block, "out_dir = loadings_dir", fixed = TRUE)
+})

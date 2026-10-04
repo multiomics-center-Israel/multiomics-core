@@ -34,7 +34,26 @@ preprocess_proteomics <- function(inputs, config) {
     }
   }
   assert_numeric_matrix(expr_raw, "expr_raw")
-  
+
+  # A non-finite intensity is a missing measurement, not a measurement. Linear
+  # DIA-NN input carrying a zero becomes -Inf at log2 -- the loader warns and
+  # lets it through -- while every step after this asks is.na(). Left alone,
+  # min-count filtering counts such a cell towards the observations that keep a
+  # feature, and impute_proteomics() records it as measured rather than imputed.
+  # Normalising here, before filtering, is what makes "missing" mean the same
+  # thing everywhere downstream.
+  # Inf/-Inf/NaN only: !is.finite() would also be TRUE for cells that are
+  # already NA, and reporting those as newly converted overstates what the run
+  # found. One mask, so the count and the conversion cannot disagree.
+  nonfinite <- is.infinite(expr_raw) | is.nan(expr_raw)
+  n_nonfinite <- sum(nonfinite)
+  if (n_nonfinite > 0) {
+    message(sprintf(
+      "Treating %d non-finite intensities as missing (log2 of a zero or negative value).",
+      n_nonfinite))
+    expr_raw[nonfinite] <- NA_real_
+  }
+
   # Contaminant filtering (e.g. cRAP proteins)
   contam_res <- filter_contaminants(expr_raw, row_data, cfg)
   expr_raw <- contam_res$expr_mat
@@ -46,20 +65,18 @@ preprocess_proteomics <- function(inputs, config) {
   expr_raw <- align_matrix_to_meta(expr_raw, col_data, sample_id_col)
   col_data <- align_meta_to_expr(expr_raw, col_data, cfg)
   
-  # Optional: sample_filter
+  # Optional: sample_filter (keep only the configured Group levels, etc.)
   rules <- get_sample_filter_rules(config, mode = "proteomics")
-  if (!is.null(rules)) {
-    # implementation specific to sample filtering would act here
-    # assuming logic similar to utils::apply_sample_filter is available or moved.
-    # We will assume apply_sample_filter is in R/core/something.R or we need to copy it.
-    # I didn't see apply_sample_filter in my extraction list, it was in 00_utils.R (lines 158).
-    # I should have put it in R/core/02_validation.R or 03_alignment.R.
-    # I'll check if I missed it. Just in case, I'll allow this file to assume it's available.
-    if (exists("apply_sample_filter")) {
-      filtered <- apply_sample_filter(sample_col = sample_id_col, meta = col_data, expr = expr_raw, rules = rules, mode = "proteomics")
-      col_data <- filtered$meta
-      expr_raw <- filtered$expr
-    }
+  if (!is.null(rules) && exists("apply_sample_filter")) {
+    # align_meta_to_expr() reorders col_data to the expression columns but leaves
+    # its rownames as positional indices; apply_sample_filter requires the meta
+    # rownames to equal colnames(expr) exactly, so key col_data by sample id first.
+    rownames(col_data) <- as.character(col_data[[sample_id_col]])
+    col_data <- col_data[colnames(expr_raw), , drop = FALSE]
+    filtered <- apply_sample_filter(sample_col = sample_id_col, meta = col_data,
+                                    expr = expr_raw, rules = rules, mode = "proteomics")
+    col_data <- filtered$meta
+    expr_raw <- filtered$expr
   }
   
   # Filtering
@@ -78,6 +95,18 @@ preprocess_proteomics <- function(inputs, config) {
   }
   
   # Single imputation (QC/plots) — dispatches based on cfg$imputation$method
+  #
+  # Seeded here because the imputation functions do not seed themselves: the
+  # caller owns reproducibility (see make_imputations_proteomics()). Read from
+  # the FULL config, not cfg, which is mode-level and has no params.
+  #
+  # params$seed with no offset. The DE runs take params$seed + 1 .. + n, so
+  # this draw cannot collide with any of them, and the whole proteomics
+  # imputation sequence is reproducible from one number.
+  #
+  # Before this, perseus_like reached here on whatever RNG state preceded it,
+  # so the default method's QC draw was not reproducible at all.
+  set.seed(as.integer(config$params$seed %||% 1L))
   imp_res <- impute_proteomics(expr_mat = expr_filt, cfg = cfg, return_flags = TRUE)
   expr_imp_single <- imp_res$imputed
   assert_numeric_matrix(expr_imp_single, "expr_imp_single")

@@ -75,7 +75,10 @@ read_gmt <- function(gmt_file) {
 #'
 #' @param organism Organism name (used for OrgDb/KEGG lookups)
 #' @param pathway_database Character vector of databases to use (e.g. "GO", "KEGG")
-#' @param gmt_file Optional custom GMT file path
+#' @param gmt_file Optional custom GMT path, or a vector/list of paths. A single
+#'   path becomes one collection named "custom"; several paths stay separate,
+#'   one collection per file named after its basename, so each source is scored
+#'   and FDR-corrected on its own.
 #' @param annotation Gene annotation data frame (with gene_id and entrez_id columns)
 #' @return Named list of gene set collections (each a named list of character vectors)
 #' @export
@@ -95,7 +98,11 @@ load_gene_sets <- function(organism,
 
     # Custom GMT takes priority. gmt_file may be a vector/list of paths (GO +
     # KEGG, etc.); keep only those that exist and merge via read_gmt().
-    requested_gmt_paths <- unlist(gmt_file, use.names = FALSE)
+    # as.character() matters: gmt_file is NULL whenever the config says
+    # `gmt_file: null`, and unlist(NULL) stays NULL. file.exists(NULL) is an
+    # error, not FALSE, so without the coercion every built-in GO/KEGG run
+    # aborted here and was reported as "no gene sets" by the caller's tryCatch.
+    requested_gmt_paths <- as.character(unlist(gmt_file, use.names = FALSE))
     requested_gmt_paths <- requested_gmt_paths[nzchar(requested_gmt_paths)]
     missing_gmt_paths <- requested_gmt_paths[!file.exists(requested_gmt_paths)]
     if (length(missing_gmt_paths) > 0) {
@@ -104,9 +111,56 @@ load_gene_sets <- function(organism,
     }
     gmt_paths <- requested_gmt_paths[file.exists(requested_gmt_paths)]
     if (length(gmt_paths) > 0) {
-        gene_sets$custom <- read_gmt(gmt_paths)
-        message("Loaded custom gene sets from: ",
-                paste(gmt_paths, collapse = ", "))
+        # One GMT keeps the historical "custom" collection name. Several GMTs
+        # stay separate, one collection per file, so that each source gets its
+        # own result table and its own multiple-testing correction — merging
+        # them would pool unrelated (and often redundant) sets into a single
+        # FDR family.
+        if (length(gmt_paths) == 1) {
+            collection_names <- "custom"
+        } else {
+            # Uniqueness has to be established on the name the output will
+            # actually carry. save_pathway_results() writes each collection
+            # through gsub("[^a-zA-Z0-9_-]", "_", ...), so GO.v1.gmt and
+            # GO_v1.gmt are two collections that land on one filename and the
+            # second overwrites the first. Normalise first, then make unique.
+            #
+            # The reserved names are those this function gives its own
+            # collections further down. The GMTs are loaded first, so a file
+            # called KEGG.gmt would take the gene_sets$KEGG slot and then be
+            # silently overwritten when KEGG is requested as well -- a collision
+            # the pooled "custom" name could not produce. Seeding make.unique()
+            # with them renames only a file that actually collides,
+            # deterministically, and leaves every other name exactly as it is.
+            # Uniqueness is decided on the lower-cased name, because the files
+            # these become collide on a case-insensitive filesystem: kegg.gmt
+            # beside the built-in KEGG writes pathway_<contrast>_kegg_fgsea.csv
+            # and pathway_<contrast>_KEGG_fgsea.csv, which are one file on macOS
+            # and Windows. The file's own capitalisation is put back afterwards,
+            # so a name that did not collide is untouched and one that did keeps
+            # its case with the suffix appended.
+            reserved <- c("GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
+            output_safe <- gsub("[^a-zA-Z0-9_-]", "_",
+                                tools::file_path_sans_ext(basename(gmt_paths)))
+            keys <- make.unique(
+                c(tolower(reserved), tolower(output_safe)),
+                sep = "_")[-seq_along(reserved)]
+            collection_names <- vapply(seq_along(output_safe), function(i) {
+                lower <- tolower(output_safe[i])
+                if (identical(keys[i], lower)) {
+                    output_safe[i]
+                } else {
+                    # make.unique() only ever appends to the string it was given
+                    paste0(output_safe[i], substring(keys[i], nchar(lower) + 1L))
+                }
+            }, character(1))
+        }
+
+        for (i in seq_along(gmt_paths)) {
+            gene_sets[[collection_names[i]]] <- read_gmt(gmt_paths[i])
+            message("Loaded gene set collection '", collection_names[i],
+                    "' from: ", gmt_paths[i])
+        }
 
         # Validate GMT coverage against annotation features if available
         if (!is.null(annotation) && "gene_id" %in% colnames(annotation)) {
@@ -118,17 +172,34 @@ load_gene_sets <- function(organism,
         }
 
         if (!is.null(feature_ids) && length(feature_ids) > 0) {
-            gmt_val <- tryCatch(
-                validate_gmt(gene_sets$custom, feature_ids, verbose = TRUE),
-                error = function(e) {
-                    warning("GMT validation failed: ", e$message)
-                    NULL
+            for (nm in collection_names) {
+                gmt_val <- tryCatch(
+                    validate_gmt(gene_sets[[nm]], feature_ids, verbose = TRUE),
+                    error = function(e) {
+                        warning("GMT validation failed for '", nm, "': ", e$message)
+                        NULL
+                    }
+                )
+                # An empty result is a real answer: falling back to the
+                # unfiltered sets would test the pathways validation just
+                # rejected. The collection stays, empty, so a non-model run is
+                # not sent to the GO/KEGG fallback below, and
+                # run_pathway_analysis() skips it.
+                if (!is.null(gmt_val)) {
+                    gene_sets[[nm]] <- gmt_val$filtered_pathways
+                    if (length(gmt_val$filtered_pathways) == 0) {
+                        warning("GMT '", nm, "': none of its ",
+                                gmt_val$n_pathways_original,
+                                " pathways passed validation against the data ",
+                                "(too few or too many members found); the ",
+                                "collection is left empty and will not be tested.",
+                                call. = FALSE)
+                    } else {
+                        message("GMT '", nm, "' filtered to ",
+                                length(gmt_val$filtered_pathways),
+                                " pathways with coverage in data")
+                    }
                 }
-            )
-            if (!is.null(gmt_val) && length(gmt_val$filtered_pathways) > 0) {
-                gene_sets$custom <- gmt_val$filtered_pathways
-                message("GMT filtered to ", length(gmt_val$filtered_pathways),
-                        " pathways with coverage in data")
             }
         }
     }
@@ -418,13 +489,19 @@ load_gene_sets <- function(organism,
 #' @export
 run_ora <- function(sig_genes, gene_sets, background, min_size = 10, max_size = 500) {
 
-    gs_sizes <- lengths(gene_sets)
-    gs_filtered <- gene_sets[gs_sizes >= min_size & gs_sizes <= max_size]
+    # Size-filter on the members actually measured, not on raw GMT size. A set
+    # with 300 GMT members but 3 in the background carries no information yet
+    # still consumed a slot in the BH denominator, and could surface as a
+    # "significant" term backed by a handful of features. This also makes ORA
+    # test the same collection fgsea() does, which filters the same way.
+    gs_measured <- lapply(gene_sets, intersect, y = background)
+    gs_sizes <- lengths(gs_measured)
+    gs_filtered <- gs_measured[gs_sizes >= min_size & gs_sizes <= max_size]
 
     if (length(gs_filtered) == 0) return(data.frame())
 
     results <- lapply(names(gs_filtered), function(gs_name) {
-        gs_genes <- intersect(gs_filtered[[gs_name]], background)
+        gs_genes <- gs_filtered[[gs_name]]
         sig_in_gs <- length(intersect(sig_genes, gs_genes))
         sig_not_gs <- length(sig_genes) - sig_in_gs
         gs_not_sig <- length(gs_genes) - sig_in_gs
@@ -559,6 +636,136 @@ lookup_go_term_names <- function(go_ids) {
     term_names
 }
 
+# =============================================================================
+# KEGG pathway classification
+# =============================================================================
+
+#' Fetch and cache KEGG's BRITE classification of pathway maps
+#'
+#' KEGG's reference maps are pan-species. An organism with no KEGG code of its
+#' own is therefore tested against the whole map universe, and vertebrate organ
+#' or human-disease maps can score well purely because the orthologs underneath
+#' them are generic -- kinases, ion channels, cytoskeleton -- that KEGG happens
+#' to file under a human organ. Knowing each map's class lets a project exclude
+#' those from its report rather than read them as findings.
+#'
+#' Fail-open by contract: every failure path -- no network, timeout, an
+#' unexpected BRITE layout, an empty parse, an unreadable cache -- returns NULL,
+#' which \code{keep_kegg_pathways()} treats as "classification unavailable, keep
+#' everything". It never returns an empty table, because a caller cannot tell
+#' that apart from "nothing is classified" and would exclude the lot.
+#'
+#' @param cache_dir Directory for the cached RDS. Defaults to a `kegg_cache`
+#'   folder under \code{tempdir()}, matching \code{fetch_kegg_via_rest()}. That
+#'   spares repeated downloads within one R session; it does not persist across
+#'   sessions, and is not meant to.
+#' @param cache_days Refetch once the cached copy is older than this.
+#' @param timeout_sec Bound on the download, so a hanging endpoint cannot stall
+#'   a pipeline run.
+#' @return Data frame with columns `pathway_id` (the bare five-digit map
+#'   number), `category`, `subcategory`, `pathway_name`; or NULL when the
+#'   classification could not be obtained.
+kegg_pathway_categories <- function(cache_dir = NULL, cache_days = 7,
+                                    timeout_sec = 30) {
+    if (is.null(cache_dir)) cache_dir <- file.path(tempdir(), "kegg_cache")
+    cache_file <- file.path(cache_dir, "kegg_pathway_categories.rds")
+
+    if (file.exists(cache_file)) {
+        cache_age <- difftime(Sys.time(), file.mtime(cache_file), units = "days")
+        cached <- if (as.numeric(cache_age) < cache_days) {
+            tryCatch(readRDS(cache_file), error = function(e) NULL)
+        } else NULL
+        # A cache that is stale, unreadable or not the shape we wrote is simply
+        # not a cache: fall through and fetch again.
+        if (.is_kegg_category_table(cached)) return(cached)
+    }
+
+    lines <- tryCatch(
+        withr::with_options(list(timeout = timeout_sec), {
+            con <- url("https://rest.kegg.jp/get/br:br08901", open = "r")
+            on.exit(close(con), add = TRUE)
+            readLines(con, warn = FALSE)
+        }),
+        error = function(e) {
+            message("  KEGG pathway classification unavailable (",
+                    conditionMessage(e), ")")
+            NULL
+        }
+    )
+    res <- parse_kegg_brite_pathways(lines)
+    if (is.null(res)) return(NULL)
+
+    dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+    tryCatch(saveRDS(res, cache_file), error = function(e) NULL)
+    res
+}
+
+
+#' Is this the classification table we wrote?
+#'
+#' @param x Object read back from the cache.
+#' @return TRUE when \code{x} is a non-empty table with the expected columns.
+#' @keywords internal
+.is_kegg_category_table <- function(x) {
+    is.data.frame(x) && nrow(x) > 0 &&
+        all(c("pathway_id", "category", "subcategory", "pathway_name") %in% names(x))
+}
+
+
+#' Parse KEGG's br08901 hierarchy into one row per pathway map
+#'
+#' The flat file nests `A` categories over `B` subcategories over `C` pathway
+#' lines; anything else in it (headers, markup, blank lines) is not a pathway
+#' and is skipped. Kept separate from the download so the parse can be tested
+#' against a fixture without a network call.
+#'
+#' @param lines Character vector of the BRITE flat file's lines, or NULL.
+#' @return Data frame of `pathway_id`, `category`, `subcategory`,
+#'   `pathway_name`, or NULL when nothing parsed -- never an empty table, since
+#'   "no pathway is classified" and "exclude everything" must not look alike.
+parse_kegg_brite_pathways <- function(lines) {
+    if (is.null(lines) || length(lines) == 0) return(NULL)
+
+    # KEGG has shipped this hierarchy with and without bold markup around the
+    # heading text, so headings are read with it stripped either way.
+    strip_markup <- function(x) trimws(gsub("<[^>]*>", "", x))
+
+    # A and B headings carry their own BRITE hierarchy code before the readable
+    # name ("09150 Organismal Systems"). The config matches on the name, so the
+    # code comes off; a heading that carries none is left as it is. Applied to
+    # headings only -- a pathway's name has already had its map number removed,
+    # and one that happened to begin with digits must keep them.
+    heading <- function(x) sub("^[0-9]{5}[[:space:]]+", "", strip_markup(x))
+
+    category <- NA_character_
+    subcategory <- NA_character_
+    ids <- character(0); cats <- character(0)
+    subs <- character(0); names_ <- character(0)
+
+    for (ln in lines) {
+        if (grepl("^A", ln)) {
+            category <- heading(sub("^A", "", ln))
+            subcategory <- NA_character_
+        } else if (grepl("^B", ln)) {
+            subcategory <- heading(sub("^B", "", ln))
+        } else if (grepl("^C\\s+[0-9]{5}\\s", ln)) {
+            ids <- c(ids, sub("^C\\s+([0-9]{5})\\s+.*$", "\\1", ln))
+            cats <- c(cats, category)
+            subs <- c(subs, subcategory)
+            names_ <- c(names_, strip_markup(sub("^C\\s+[0-9]{5}\\s+", "", ln)))
+        }
+    }
+    if (length(ids) == 0) {
+        message("  KEGG pathway classification: no pathway lines found, ",
+                "so the hierarchy could not be read")
+        return(NULL)
+    }
+
+    data.frame(pathway_id = ids, category = cats, subcategory = subs,
+               pathway_name = names_, stringsAsFactors = FALSE)
+}
+
+
 #' Add pathway names to fGSEA/ORA results
 #'
 #' @param pathway_df Data frame with pathway analysis results (has 'pathway' column)
@@ -571,9 +778,18 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
     pathway_ids <- pathway_df$pathway
 
     if (database == "GO" || grepl("^GO", database, ignore.case = TRUE)) {
-        # Look up GO term names
-        names_vec <- lookup_go_term_names(pathway_ids)
-        pathway_df$pathway_name <- unname(names_vec[pathway_ids])
+        # Prefer the names the collection already carries — a custom GO GMT
+        # names its own terms, and the biomaRt-generated sets attach the same
+        # GO term names — then fill any gap from GO.db.
+        descriptions <- if (!is.null(gene_sets)) attr(gene_sets, "descriptions") else NULL
+        names_vec <- if (!is.null(descriptions)) unname(descriptions[pathway_ids]) else
+            rep(NA_character_, length(pathway_ids))
+        unnamed <- is.na(names_vec) | !nzchar(names_vec)
+        if (any(unnamed)) {
+            looked_up <- lookup_go_term_names(pathway_ids[unnamed])
+            names_vec[unnamed] <- unname(looked_up[pathway_ids[unnamed]])
+        }
+        pathway_df$pathway_name <- names_vec
     } else if (database == "KEGG" || grepl("KEGG", database, ignore.case = TRUE)) {
         # Use the ID -> name lookup attached by load_gene_sets(); fall back to the
         # bare ID for any pathway without a resolved name (e.g. KEGGREST fallback
@@ -615,6 +831,52 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
     pathway_df
 }
 
+#' Build the ranked gene vector fgsea scores one contrast on
+#'
+#' The ranking source is chosen for the whole table, on usable values rather
+#' than on column presence. \code{load_precomputed_rna_de()} always emits a
+#' `stat` column and fills it with NA when the source export carries no Wald or
+#' t statistic, so testing presence alone selected a column of NAs, dropped
+#' every rank, handed fgsea an empty vector, and reported "no gene set overlap"
+#' for every collection -- with the fallback below never firing and nothing in
+#' the log saying the ranking had failed rather than the biology.
+#'
+#' One source per table. A row the chosen source cannot rank is dropped, never
+#' filled from the other one: two ranking scales mixed into one vector is not a
+#' ranking, and the reader has no way to tell which rows came from which.
+#'
+#' \code{is.numeric()} states the requirement the gate actually has, rather than
+#' leaning on \code{is.finite()} to reject a non-numeric column as a side
+#' effect -- a factor is an integer vector underneath. A `stat` that is not a
+#' usable numeric ranking source takes the fallback instead of erroring. No
+#' coercion is attempted: every producer in this pipeline already emits numeric.
+#'
+#' @param res One contrast's DE table. Needs `FeatureID`, and either a usable
+#'   `stat` column or `log2FoldChange` and `pvalue`.
+#' @return Named numeric vector of finite ranks, sorted decreasing. Empty when
+#'   neither source yields a finite value.
+#' @keywords internal
+.build_fgsea_ranks <- function(res) {
+    stat_usable <- "stat" %in% colnames(res) &&
+        is.numeric(res$stat) &&
+        any(is.finite(res$stat))
+
+    ranks <- if (stat_usable) {
+        setNames(res$stat, res$FeatureID)
+    } else {
+        setNames(
+            sign(res$log2FoldChange) * -log10(res$pvalue + 1e-300),
+            res$FeatureID
+        )
+    }
+
+    # is.finite() rather than !is.na(): Inf and -Inf survive an NA test, and
+    # fgsea does not reject them, it ranks on them.
+    ranks <- ranks[is.finite(ranks)]
+    sort(ranks, decreasing = TRUE)
+}
+
+
 #' Run pathway analysis on DE results
 #'
 #' @param de_tables Named list of DE result data frames (from run_deseq2_de()$tables).
@@ -624,6 +886,9 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #' @param method "fgsea", "ora", or "both"
 #' @param min_size Minimum gene set size for fGSEA
 #' @param max_size Maximum gene set size for fGSEA
+#' @param seed Integer seed for fgsea's stochastic multilevel step.
+#' @param p_cutoff Adjusted-p cutoff defining a significant feature for ORA.
+#' @param lfc_cutoff Absolute log2 fold-change cutoff for ORA.
 #' @return Named list (by contrast) of named lists (by db+method) of result data frames
 #' @export
 run_pathway_analysis <- function(de_tables,
@@ -631,7 +896,10 @@ run_pathway_analysis <- function(de_tables,
                                   annotation = NULL,
                                   method = "fgsea",
                                   min_size = 10,
-                                  max_size = 500) {
+                                  max_size = 500,
+                                  seed = 1L,
+                                  p_cutoff = 0.05,
+                                  lfc_cutoff = log2(1.5)) {
 
     if (length(gene_sets) == 0) {
         message("No gene sets available. Skipping pathway analysis.")
@@ -657,27 +925,20 @@ run_pathway_analysis <- function(de_tables,
                 # ---- fGSEA ----
                 if (method %in% c("fgsea", "both")) {
 
-                    # Build ranked gene list from DE table
-                    # Prefer stat column (Wald statistic); fallback to sign(lfc)*-log10(p)
-                    if ("stat" %in% colnames(res)) {
-                        ranks <- setNames(res$stat, res$FeatureID)
-                    } else {
-                        ranks <- setNames(
-                            sign(res$log2FoldChange) * -log10(res$pvalue + 1e-300),
-                            res$FeatureID
-                        )
-                    }
+                    # Prefer the Wald statistic, fall back to sign(lfc)*-log10(p);
+                    # see .build_fgsea_ranks() for why the choice is made on
+                    # values rather than on the column being present.
+                    ranks <- .build_fgsea_ranks(res)
 
-                    ranks <- ranks[!is.na(ranks)]
-                    ranks <- sort(ranks, decreasing = TRUE)
-
-                    fgsea_res <- fgsea::fgsea(
+                    # fgseaMultilevel is stochastic: without a seed, terms near
+                    # the padj threshold flip between otherwise identical runs.
+                    fgsea_res <- withr::with_seed(seed, fgsea::fgsea(
                         pathways = gs,
                         stats = ranks,
                         minSize = min_size,
                         maxSize = max_size,
                         nPermSimple = 10000
-                    )
+                    ))
 
                     fgsea_df <- as.data.frame(fgsea_res)
 
@@ -704,9 +965,11 @@ run_pathway_analysis <- function(de_tables,
                 # ---- ORA ----
                 if (method %in% c("ora", "both")) {
 
-                    # Identify significant up/down genes
-                    de_cfg_padj <- 0.05
-                    de_cfg_lfc  <- log2(1.5)
+                    # Identify significant up/down genes. Cutoffs come from the
+                    # caller's de: block rather than being hard-coded, so ORA
+                    # and the DE tables agree on what "significant" means.
+                    de_cfg_padj <- p_cutoff
+                    de_cfg_lfc  <- lfc_cutoff
                     sig_up   <- res$FeatureID[!is.na(res$padj) &
                                               res$padj < de_cfg_padj &
                                               res$log2FoldChange > de_cfg_lfc]
@@ -791,8 +1054,13 @@ save_pathway_results <- function(pathway_results, output_dir) {
 #' For GO terms, uses rrvgo (semantic similarity via GOSemSim).
 #' For KEGG/custom terms, uses Jaccard similarity on gene overlap.
 #'
+#' Which of the two applies is decided by the pathway identifiers, not by
+#' \code{database}: collections are named after their GMT file, so the name is
+#' not evidence of what the identifiers are.
+#'
 #' @param enrichment_df Data frame with enrichment results (must have 'pathway' and 'padj' columns)
-#' @param database Character: "GO", "KEGG", or "custom"
+#' @param database Character: "GO", "KEGG", or "custom". Retained for the
+#'   existing call sites; no longer used to choose the clustering method.
 #' @param gene_sets Named list of gene sets (needed for Jaccard clustering of non-GO terms)
 #' @param organism Character: organism name for OrgDb lookup (needed for GO clustering)
 #' @param threshold Numeric: similarity threshold for merging (0-1, default 0.7). Lower = more aggressive merging.
@@ -813,8 +1081,11 @@ cluster_enrichment_terms <- function(enrichment_df,
     sig <- enrichment_df[!is.na(enrichment_df$padj) & enrichment_df$padj < 0.05, ]
     if (nrow(sig) < 2) return(NULL)
 
-    is_go <- grepl("^GO", database, ignore.case = TRUE) ||
-        all(grepl("^GO:[0-9]+", sig$pathway))
+    # Decided by the identifiers, not by the collection's name. Collections are
+    # now named after the GMT file, so a custom set called GOLD_domains would
+    # otherwise be sent to rrvgo semantic clustering with identifiers that are
+    # not GO terms at all. GO ids are what makes semantic similarity meaningful.
+    is_go <- all(grepl("^GO:[0-9]+", sig$pathway))
 
     if (is_go) {
         clustered <- .cluster_go_terms(sig, organism, threshold, ont)
@@ -1575,36 +1846,44 @@ run_gsea_local <- function(ranked_genes,
 #'   RNG-using enrichment method inherits reproducibility for free. If
 #'   `future`/`future.apply` are not installed, it degrades to plain `lapply()`.
 #' @return List of results, one per job, in input order.
-run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
+#' @param prefer_lapply_when_sequential When TRUE and `workers <= 1`, use a true
+#'   base-R `lapply()` path (no `future_lapply`, hence no future global discovery
+#'   and no `future.globals.maxSize` guard). Only safe for DETERMINISTIC stages
+#'   with no RNG — ORA (`clusterProfiler::enricher`) qualifies; GSEA (fgsea
+#'   permutations) must NOT opt in, so it keeps the `future_lapply(future.seed)`
+#'   path at every worker count and its RNG streams / worker-count invariance are
+#'   unchanged. Default FALSE preserves the previous behavior.
+run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L,
+                                prefer_lapply_when_sequential = FALSE) {
     if (length(jobs) == 0) return(list())
 
     have_future <- requireNamespace("future", quietly = TRUE) &&
         requireNamespace("future.apply", quietly = TRUE)
 
-    if (!have_future) {
-        if (workers > 1) {
+    # True sequential base-R path. Taken when future is unavailable, OR when the
+    # caller opts in for a deterministic (no-RNG) stage at workers <= 1 (ORA).
+    # base::lapply performs NO global export/size check, so the ORA sequential
+    # run never touches the future.globals.maxSize guard — the intended behavior
+    # for workers = 1. withr::with_seed sets the RNG deterministically and
+    # RESTORES the caller's global RNG state on exit (no leak); it has no effect
+    # on ORA (which uses no RNG) and is not used for GSEA (see @param).
+    use_lapply <- !have_future || (isTRUE(prefer_lapply_when_sequential) && workers <= 1)
+    if (use_lapply) {
+        if (!have_future && workers > 1) {
             message("  future/future.apply not available — running sequentially. ",
                     "Install with: renv::install(c('future', 'future.apply'))")
         }
-        # Reproducibility in the no-future fallback: seed the sequential run from
-        # the same project `seed` the future path uses. withr::with_seed sets the
-        # RNG deterministically and RESTORES the caller's global RNG state on exit
-        # (no leak). Streams are not byte-identical to future's L'Ecuyer-CMRG
-        # per-job streams, but results are reproducible across independent runs
-        # with the same seed — which is what matters for permutation-based GSEA.
         return(withr::with_seed(seed, lapply(jobs, fun)))
     }
 
-    # NB: workers must capture ONLY the data they use. Callers build worker
-    # functions with a minimal environment (see .make_ora_worker()), which keeps
-    # exported globals tiny (~5 MiB here) — well under future's default 500 MiB
-    # guard. That guard is intentionally left at its default: it is a useful
-    # early warning if a future method ever starts broadcasting large objects.
-    # Route EVERY worker count through future_lapply with an EXPLICIT integer
-    # future.seed (see @param seed): RNG streams depend only on `seed` + job
-    # position — not on ambient RNG, backend, or worker count — so results are
-    # worker-count-invariant AND identical across independent rebuilds. Sequential
-    # plan for workers <= 1 keeps one-job-at-a-time, in-process semantics.
+    # Future path. Each job carries ONLY the data it needs (its single database's
+    # TERM2GENE/TERM2NAME — see .make_ora_worker()/.make_gsea_worker()), so the
+    # worker closure captures no large objects and future exports at most one
+    # database's tables per job — well under the default 500 MiB guard, which is
+    # intentionally left at its default as an early warning. Route through
+    # future_lapply with an EXPLICIT integer future.seed: RNG streams depend only
+    # on `seed` + job position — not on ambient RNG, backend, or worker count — so
+    # results are worker-count-invariant AND identical across independent rebuilds.
     old_plan <- if (workers > 1) {
         future::plan(future::multisession, workers = workers)
     } else {
@@ -1613,6 +1892,64 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
     on.exit(future::plan(old_plan), add = TRUE)
 
     future.apply::future_lapply(jobs, fun, future.seed = seed)
+}
+
+# ==============================================================================
+# ENRICHMENT AVAILABILITY MANIFEST + INDEX — shared empty-schema builders
+# ==============================================================================
+# The enrichment manifest is the three-state availability index consumed by the
+# Shiny payload (see rnaseq-enrichment-shiny.md §14.3). It is built INSIDE the
+# enrichment engine — while every evaluated unit and its per-item significance
+# count are still known — because empty units are dropped from pathway_results
+# and leave no trace afterwards. The index records the storage coordinates of the
+# stored ORA/GSEA objects so downstream (Stage 3B) export never parses the
+# concatenated result keys. These helpers fix the column schema in ONE place so
+# ORA (assembled in mod_rnaseq_pathway) and GSEA (assembled in run_gsea_all)
+# fragments rbind together cleanly.
+
+#' Empty enrichment manifest (canonical column schema)
+#'
+#' The three-state Shiny UX is derived from `status` (+ `n_significant`):
+#'   - "significant" -> evaluated, n_significant > 0  -> enabled;
+#'   - "empty"       -> evaluated, n_significant == 0 -> greyed "no significant results";
+#'   - "failed"      -> technical/computational failure; n_significant = NA, and
+#'                      `evaluated = FALSE` -> hidden (NOT shown as a successful
+#'                      zero-result). A failure is never conflated with a
+#'                      successful empty analysis.
+#' `evaluated = (status != "failed")` is kept as a convenience boolean.
+#'
+#' @return A 0-row data.frame with the manifest columns.
+#' @noRd
+.empty_enrichment_manifest <- function() {
+    data.frame(
+        analysis      = character(0),
+        database      = character(0),
+        group         = character(0),
+        item          = character(0),
+        evaluated     = logical(0),
+        status        = character(0),
+        n_significant = integer(0),
+        has_simplify  = logical(0),
+        storage_key   = character(0),
+        stringsAsFactors = FALSE
+    )
+}
+
+#' Empty enrichment index (canonical column schema)
+#' @return A 0-row data.frame with the index columns.
+#' @noRd
+.empty_enrichment_index <- function() {
+    data.frame(
+        analysis     = character(0),
+        database     = character(0),
+        group        = character(0),
+        item         = character(0),
+        container    = character(0),
+        storage_key  = character(0),
+        has_simplify = logical(0),
+        simplify_key = character(0),
+        stringsAsFactors = FALSE
+    )
 }
 
 # ==============================================================================
@@ -1680,25 +2017,25 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
 #' Build a pure-compute GSEA worker with a minimal captured environment
 #'
 #' Returns a `function(job)` that runs GSEA for one job. Defining it here (not
-#' nested inside run_gsea_all) bounds the closure's environment to just the
-#' arguments below — so future.apply serializes only `local_tables` + scalars,
-#' never the `run_gsea_all` frame (which holds the large `jobs` list of per-job
-#' ranked vectors and `ranked_genes`). The per-job ranked vector arrives in
-#' `job$ranked` (built in run_gsea_all); the worker does pure computation only
-#' (no file I/O, no messages), with fgsea forced serial via SerialParam.
-#' Analogous to .make_ora_worker().
+#' nested inside run_gsea_all) bounds the closure's environment to just the two
+#' scalar arguments below — so future.apply serializes NOTHING large from the
+#' closure. Everything the job needs travels IN the job: the per-job ranked
+#' vector (`job$ranked`) AND this job's single-database `job$term2gene` /
+#' `job$term2name` (both built in run_gsea_all). The worker never captures the
+#' whole multi-database `local_tables`, so future exports at most one database's
+#' tables per job. Pure computation only (no file I/O, no messages), fgsea forced
+#' serial via SerialParam. Analogous to .make_ora_worker().
 #'
-#' @param local_tables Output of load_local_pathway_tables().
 #' @param pvalueCutoff GSEA adjusted-p cutoff.
 #' @param pAdjustMethod P-value adjustment method.
 #' @return A function(job) -> list(ranking_method, contrast, db_name, gsea_result).
 #' @noRd
-.make_gsea_worker <- function(local_tables, pvalueCutoff, pAdjustMethod) {
-    force(local_tables); force(pvalueCutoff); force(pAdjustMethod)
+.make_gsea_worker <- function(pvalueCutoff, pAdjustMethod) {
+    force(pvalueCutoff); force(pAdjustMethod)
     function(job) {
         ranked    <- job$ranked
-        term2gene <- local_tables[[job$db_name]]$TERM2GENE
-        term2name <- local_tables[[job$db_name]]$TERM2NAME
+        term2gene <- job$term2gene
+        term2name <- job$term2name
 
         res <- tryCatch({
             clusterProfiler::GSEA(
@@ -1765,13 +2102,16 @@ run_gsea_all <- function(ranked_genes,
     }
 
     # ------------------------------------------------------------------
-    # 1. Build flat job list. Each job carries its OWN ranked vector
-    #    (`ranked`), not a reference into `ranked_genes`. This keeps the whole
-    #    `ranked_genes` structure OUT of the worker closure's environment, so it
-    #    is never broadcast as a future global — the per-job vectors ride in the
-    #    `jobs` iteration list (sent one-at-a-time to workers, held once on the
-    #    master), keeping exported globals ~= local_tables regardless of the
-    #    number of contrasts. (`local_tables` stays a captured global: small.)
+    # 1. Build flat job list. Each job carries EVERYTHING it needs: its OWN
+    #    ranked vector (`ranked`) AND its OWN single database's TERM2GENE/
+    #    TERM2NAME (`term2gene`/`term2name`). Neither the whole `ranked_genes`
+    #    structure nor the whole multi-database `local_tables` is captured by the
+    #    worker closure, so future never broadcasts them as globals. The per-job
+    #    payloads ride in the `jobs` iteration list (sent one-at-a-time to
+    #    workers). NB: `local_tables[[db]]$TERM2GENE` is assigned by REFERENCE
+    #    (copy-on-write) — jobs sharing a database point at the same object in the
+    #    master, so this does NOT duplicate the annotation tables in memory; only
+    #    the single database in play is serialized when a job is dispatched.
     # ------------------------------------------------------------------
     jobs <- list()
     for (ranking_method in names(ranked_genes)) {
@@ -1783,14 +2123,18 @@ run_gsea_all <- function(ranked_genes,
                     ranking_method = ranking_method,
                     contrast       = contrast,
                     db_name        = db_name,
-                    ranked         = ranked_genes[[ranking_method]][[contrast]]
+                    ranked         = ranked_genes[[ranking_method]][[contrast]],
+                    term2gene      = local_tables[[db_name]]$TERM2GENE,
+                    term2name      = local_tables[[db_name]]$TERM2NAME
                 )
             }
         }
     }
 
     if (length(jobs) == 0) {
-        return(list(results = list(), plot_files = list()))
+        return(list(results = list(), plot_files = list(),
+                    manifest = .empty_enrichment_manifest(),
+                    index = .empty_enrichment_index()))
     }
 
     message("  ", length(jobs), " GSEA jobs to run",
@@ -1801,12 +2145,13 @@ run_gsea_all <- function(ranked_genes,
     # ------------------------------------------------------------------
     # Build the worker via a factory (NOT a nested closure). A closure defined
     # inside run_gsea_all() would carry this whole execution frame — including
-    # the large `jobs` list (which holds every per-job ranked vector) and
-    # `ranked_genes` — as its environment, and future would serialize all of it
-    # (the 500 MiB-globals failure). The factory bounds the worker's environment
-    # to only `local_tables` + scalars; the ranked vectors ride in `jobs` (the
-    # future_lapply iteration list, sent per-job, not a broadcast global).
-    run_one_gsea_job <- .make_gsea_worker(local_tables, pvalueCutoff, pAdjustMethod)
+    # the large `jobs` list and `ranked_genes` — as its environment, and future
+    # would serialize all of it. The factory bounds the worker's environment to
+    # only two scalar cutoffs; the ranked vector AND the single-database
+    # TERM2GENE/TERM2NAME ride in each `job` (the future_lapply iteration list,
+    # sent per-job), so no multi-database `local_tables` is ever broadcast — the
+    # fix for the >500 MiB future-globals failure exposed by the full Assaf run.
+    run_one_gsea_job <- .make_gsea_worker(pvalueCutoff, pAdjustMethod)
 
     # Dispatch pure GSEA compute through the generic parallel orchestration
     # layer. Assembly + all file I/O happen serially below (deterministic).
@@ -1819,6 +2164,22 @@ run_gsea_all <- function(ranked_genes,
     # ------------------------------------------------------------------
     results <- list()
     plot_files <- list()
+    # Availability manifest + storage index accumulators. One manifest row per
+    # EVALUATED (db x ranking x contrast) job. `status` distinguishes a
+    # SUCCESSFUL-EMPTY analysis ("empty", n_significant = 0) from a TECHNICAL
+    # FAILURE ("failed", n_significant = NA, evaluated = FALSE) so Shiny never
+    # renders a crashed unit as "no significant results". fgsea statistical
+    # warnings (ties, unbalanced p-values) do NOT reach here — they occur inside
+    # a successful GSEA call and never raise the caught `gsea_error` condition.
+    # Index rows are recorded only for units that actually get a stored table.
+    manifest_rows <- list()
+    index_rows    <- list()
+    gsea_manifest_row <- function(status, n_sig) data.frame(
+        analysis = "GSEA", database = db_name, group = ranking_method,
+        item = contrast, evaluated = !identical(status, "failed"),
+        status = status,
+        n_significant = if (identical(status, "failed")) NA_integer_ else as.integer(n_sig),
+        has_simplify = FALSE, storage_key = result_key, stringsAsFactors = FALSE)
 
     for (jr in job_results) {
         db_name        <- jr$db_name
@@ -1827,16 +2188,29 @@ run_gsea_all <- function(ranked_genes,
         res            <- jr$gsea_result
         result_key     <- paste0(db_name, "_gsea_", ranking_method)
 
-        # Handle failed jobs
+        # TECHNICAL FAILURE: the worker caught an error (class "gsea_error"), or —
+        # defensively — returned no result object at all. This is NOT a successful
+        # zero-result: mark status = "failed" (evaluated = FALSE, n_significant = NA)
+        # so the three-state UX hides it rather than greying it as empty.
         if (inherits(res, "gsea_error")) {
-            message("  GSEA failed: ", db_name, " | ", ranking_method, " | ",
-                    contrast, " — ", res$message)
+            message("  GSEA FAILED (technical): ", db_name, " | ", ranking_method,
+                    " | ", contrast, " — ", res$message)
+            manifest_rows[[length(manifest_rows) + 1]] <- gsea_manifest_row("failed", NA_integer_)
+            next
+        }
+        if (is.null(res)) {
+            message("  GSEA FAILED (no result object): ", db_name, " | ",
+                    ranking_method, " | ", contrast)
+            manifest_rows[[length(manifest_rows) + 1]] <- gsea_manifest_row("failed", NA_integer_)
             next
         }
 
-        if (is.null(res) || nrow(as.data.frame(res)) == 0) {
+        # SUCCESSFUL but zero rows -> evaluated-but-empty (a real biological
+        # outcome), distinct from the failures above.
+        if (nrow(as.data.frame(res)) == 0) {
             message("  ", db_name, " | ", ranking_method, " | ", contrast,
-                    ": no results returned")
+                    ": evaluated, 0 significant")
+            manifest_rows[[length(manifest_rows) + 1]] <- gsea_manifest_row("empty", 0L)
             next
         }
 
@@ -1861,6 +2235,17 @@ run_gsea_all <- function(ranked_genes,
         n_sig <- nrow(.gsea_significant_rows(res_df, pvalueCutoff))
         message("  ", db_name, " | ", ranking_method, " | ", contrast,
                 ": ", n_sig, " significant (padj <= ", pvalueCutoff, ")")
+
+        # Availability manifest + storage index for this stored unit. A stored
+        # table is a successful evaluation; status tracks whether it cleared the
+        # significance cutoff.
+        manifest_rows[[length(manifest_rows) + 1]] <-
+            gsea_manifest_row(if (n_sig > 0) "significant" else "empty", n_sig)
+        index_rows[[length(index_rows) + 1]] <- data.frame(
+            analysis = "GSEA", database = db_name, group = ranking_method,
+            item = contrast, container = contrast, storage_key = result_key,
+            has_simplify = FALSE, simplify_key = NA_character_,
+            stringsAsFactors = FALSE)
 
         # Write CSV
         if (!is.null(output_dir)) {
@@ -1979,7 +2364,10 @@ run_gsea_all <- function(ranked_genes,
         }
     }
 
-    list(results = results, plot_files = plot_files)
+    manifest <- if (length(manifest_rows) > 0) do.call(rbind, manifest_rows) else .empty_enrichment_manifest()
+    index    <- if (length(index_rows) > 0)    do.call(rbind, index_rows)    else .empty_enrichment_index()
+
+    list(results = results, plot_files = plot_files, manifest = manifest, index = index)
 }
 
 # ==============================================================================
@@ -2865,20 +3253,21 @@ build_gene_lists <- function(de_tables,
 
     gene_lists <- list()
 
-    # Match the pipeline's canonical DE significance rule (see
-    # R/domain/rnaseq/04_de_summary.R:167-180) exactly, so ORA operates on the same
-    # gene set the summary reports as DE: padj <= p_cutoff AND
-    # abs(signif(linearFC, 3)) >= linear cutoff, where
-    # linearFC = ifelse(lfc >= 0, 2^lfc, -2^-lfc). The caller passes lfc_cutoff in
-    # log2 units (log2(linear_fc_cutoff)), so recover the linear cutoff here.
-    # Direction uses the sign of the rounded linear FC (also matching the summary).
-    linear_cut <- 2 ^ lfc_cutoff
+    # Match the pipeline's canonical DE significance rule (the <contrast>_pass
+    # gate in build_rnaseq_summary_df(), R/domain/rnaseq/04_de_summary.R)
+    # exactly, so ORA operates on the same gene set the summary reports as DE:
+    # padj <= p_cutoff AND |log2FC| >= lfc_cutoff, on the unrounded estimate.
+    # The caller passes lfc_cutoff as log2(linear_fc_cutoff), the same threshold
+    # the summary compares against. Gating on signif(linearFC, 3) instead would
+    # admit genes in [1.495, 1.5)-fold, which round up to 1.50.
+    # Direction uses the sign of the rounded linear FC; rounding never changes
+    # that sign, so it agrees with the summary's linearFC column.
     .sig_rows <- function(dt) {
         lin_fc     <- ifelse(dt$log2FoldChange >= 0, 2 ^ dt$log2FoldChange,
                              -1 * (2 ^ -dt$log2FoldChange))
         rounded_fc <- signif(lin_fc, 3)
         keep <- !is.na(dt$padj) & dt$padj <= p_cutoff &
-                !is.na(dt$log2FoldChange) & abs(rounded_fc) >= linear_cut
+                !is.na(dt$log2FoldChange) & abs(dt$log2FoldChange) >= lfc_cutoff
         out <- dt[keep, , drop = FALSE]
         out$.rounded_fc <- rounded_fc[keep]
         out

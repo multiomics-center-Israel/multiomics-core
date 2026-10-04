@@ -1061,7 +1061,6 @@ modes:
       width: %s
       downshift: %s
       dep2_method: "%s"
-      dep2_random_seed: 1
     de:
       method: "limma"
       use_adj_for_pass1: true
@@ -2229,10 +2228,19 @@ wizard_multiomics <- function(project_dir, project_name, analyst, round) {
     for (folder in result_folders) {
       rds_files <- list.files(folder, pattern = "shiny_payload_.*\\.rds$",
                               recursive = TRUE, full.names = TRUE)
+      # A rerun leaves the older bare-named payload next to the run-named one, and
+      # the first match per layer wins below. Put the bare names last so a
+      # run-named file is preferred, instead of relying on list.files() order.
+      is_bare <- tools::file_path_sans_ext(basename(rds_files)) %in% names(payload_map)
+      rds_files <- c(rds_files[!is_bare], rds_files[is_bare])
       for (rds in rds_files) {
         base <- tools::file_path_sans_ext(basename(rds))
-        if (base %in% names(payload_map)) {
-          layer_name <- payload_map[[base]]
+        # Current names are "<prefix>_<run_name>"; the older bare "<prefix>" is
+        # still accepted. Matching is per explicit prefix, not a broad pattern.
+        prefix <- names(payload_map)[base == names(payload_map) |
+                                     startsWith(base, paste0(names(payload_map), "_"))]
+        if (length(prefix) == 1) {
+          layer_name <- payload_map[[prefix]]
           if (!layer_name %in% names(layer_configs)) {
             layer_configs[[layer_name]] <- rds
             cat(sprintf("  Found %s: %s\n", layer_name, rds))
@@ -2491,11 +2499,22 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     cat(sprintf("  Linked config -> %s\n", root_config))
   }
   Sys.setenv(MULTIOMICS_CONFIG = config_path)
+  # Each run gets its own targets store, named from the config. The shared
+  # _targets.yaml used to decide this, so a run of one project could build
+  # in, or --fresh could destroy, another project's cache. The store is checked
+  # before TAR_CONFIG points at it, and TAR_CONFIG is put back however the run
+  # ends, so an interactive session is not left on this project's store.
+  source(file.path(getwd(), "R", "core", "18_targets_store.R"), local = TRUE)
+  old_tar_config <- Sys.getenv("TAR_CONFIG", unset = NA)
+  on.exit(restore_tar_config(old_tar_config), add = TRUE)
+  store <- use_targets_store(cfg_tmp)
+  cat(sprintf("  Targets store: %s\n", store))
   if (fresh) {
     cat("  Clearing targets cache (fresh run)...\n")
     targets::tar_destroy(ask = FALSE)
-    dir.create("_targets/scratch", recursive = TRUE, showWarnings = FALSE)
+    dir.create(file.path(store, "scratch"), recursive = TRUE, showWarnings = FALSE)
   }
+  stamp_targets_store(file.path(getwd(), store), cfg_tmp)
   # Quick pre-flight: verify input files exist before starting pipeline
   cfg <- yaml::read_yaml(config_path)
   if (!is.null(cfg$modes$rna)) {

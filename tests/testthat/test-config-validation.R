@@ -146,6 +146,111 @@ test_that("validate_proteomics_config errors on invalid scale_in", {
     expect_error(validate_proteomics_config(cfg))
 })
 
+# --- filtering$min_count (#236) ---
+# pass_filter() keeps a group when a feature has at least min_count values in
+# it, so 0 passed every feature, including ones never measured.
+
+with_min_count <- function(min_count) {
+    cfg <- create_mock_proteomics_config()
+    cfg$filtering <- list(min_count = min_count, min_groups = 1)
+    cfg
+}
+
+test_that("validate_proteomics_config accepts whole-number min_count >= 1", {
+    expect_true(validate_proteomics_config(with_min_count(3)))
+    expect_true(validate_proteomics_config(with_min_count(1)))
+    expect_true(validate_proteomics_config(with_min_count(list(default = 3))))
+    expect_true(validate_proteomics_config(with_min_count(list(default = 3, Treated = 2))))
+    expect_true(validate_proteomics_config(with_min_count(list(Control = 3, Treated = 2))))
+})
+
+test_that("validate_proteomics_config leaves an absent min_count to the default", {
+    cfg <- create_mock_proteomics_config()
+    cfg$filtering <- list(min_groups = 1)
+    expect_true(validate_proteomics_config(cfg))
+})
+
+test_that("validate_proteomics_config refuses min_count 0, naming the exact key", {
+    expect_error(validate_proteomics_config(with_min_count(0)),
+                 "'filtering$min_count' must be a whole number of at least 1", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = 0))),
+                 "'filtering$min_count$default' must be a whole number of at least 1", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = 3, Treated = 0))),
+                 "'filtering$min_count$Treated' must be a whole number of at least 1", fixed = TRUE)
+    # The message points at the least-filtering setting that remains valid.
+    expect_error(validate_proteomics_config(with_min_count(0)),
+                 "min_count: 1 with min_groups: 1", fixed = TRUE)
+})
+
+test_that("validate_proteomics_config refuses a fractional, negative, infinite or non-numeric min_count", {
+    expect_error(validate_proteomics_config(with_min_count(1.5)),
+                 "'filtering$min_count' must be a whole number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(-1)),
+                 "'filtering$min_count' must be a whole number", fixed = TRUE)
+    # YAML `.inf` arrives as Inf; no finite count reaches it, so every feature
+    # would be filtered out.
+    expect_error(validate_proteomics_config(with_min_count(Inf)),
+                 "'filtering$min_count' must be a whole number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = 3, Treated = Inf))),
+                 "'filtering$min_count$Treated' must be a whole number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = 3, Treated = 2.5))),
+                 "'filtering$min_count$Treated' must be a whole number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count("3")),
+                 "'filtering$min_count' must be a number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = NA))),
+                 "'filtering$min_count$default' must be a number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(c(3, 2))),
+                 "'filtering$min_count' must be a number", fixed = TRUE)
+})
+
+# --- de pass-1 p-value keys (#258) ---
+# use_adj_for_pass1 is canonical; use_fdr_for_pass1 is a deprecated alias.
+
+with_pass1 <- function(...) {
+    cfg <- create_mock_proteomics_config()
+    cfg$de <- c(cfg$de, list(...))
+    cfg
+}
+
+test_that("validate_proteomics_config accepts the canonical pass-1 key silently", {
+    expect_no_warning(validate_proteomics_config(with_pass1(use_adj_for_pass1 = TRUE)),
+                      message = "use_fdr_for_pass1")
+    expect_true(validate_proteomics_config(with_pass1(use_adj_for_pass1 = FALSE)))
+})
+
+test_that("validate_proteomics_config warns once for the deprecated alias alone", {
+    expect_warning(res <- validate_proteomics_config(with_pass1(use_fdr_for_pass1 = TRUE)),
+                   "de$use_fdr_for_pass1 is deprecated", fixed = TRUE)
+    expect_true(res)
+})
+
+test_that("validate_proteomics_config accepts both keys when they agree, and stops when they conflict", {
+    expect_no_warning(
+        validate_proteomics_config(with_pass1(use_adj_for_pass1 = TRUE, use_fdr_for_pass1 = TRUE)),
+        message = "use_fdr_for_pass1")
+    expect_error(
+        validate_proteomics_config(with_pass1(use_adj_for_pass1 = TRUE, use_fdr_for_pass1 = FALSE)),
+        "disagree", fixed = TRUE)
+})
+
+test_that("validate_proteomics_config refuses the other modes' spellings, naming the canonical key", {
+    expect_error(validate_proteomics_config(with_pass1(use_adj = TRUE)),
+                 "de$use_adj is not a proteomics setting", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_pass1(use_adjusted_pval = TRUE)),
+                 "de$use_adjusted_pval is not a proteomics setting", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_pass1(use_adj = TRUE)),
+                 "de$use_adj_for_pass1", fixed = TRUE)
+})
+
+test_that("validate_proteomics_config refuses a non-boolean pass-1 value", {
+    expect_error(validate_proteomics_config(with_pass1(use_adj_for_pass1 = "yes")),
+                 "'de$use_adj_for_pass1' must be TRUE/FALSE", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_pass1(use_fdr_for_pass1 = 1)),
+                 "'de$use_fdr_for_pass1' must be TRUE/FALSE", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_pass1(use_adj_for_pass1 = NA)),
+                 "'de$use_adj_for_pass1' must be TRUE/FALSE", fixed = TRUE)
+})
+
 # --- RNA-seq Config ---
 
 create_mock_rna_config <- function() {
@@ -221,4 +326,41 @@ test_that("validate_rna_config rejects a non-boolean enrichment plot toggle", {
     cfg <- create_mock_rna_config()
     cfg$enrichment <- list(plots = list(dotplot = "yes"))
     expect_error(validate_rna_config(cfg))
+})
+
+# --- Multi-omics config ---
+
+create_mock_multiomics_config <- function() {
+    list(
+        integration = list(
+            methods = c("DIABLO", "SNF"),
+            diablo = list(ncomp = 2),
+            snf = list(K = 3, alpha = 0.5, T = 20, n_clusters = 2)
+        ),
+        feature_selection = list(method = "variance", top_n = 500),
+        condition_column = "Group"
+    )
+}
+
+test_that("validate_multiomics_config returns the config section, not TRUE", {
+    # validate_config() assigns the return value back onto
+    # config$modes$multiomics; returning TRUE wiped the whole section.
+    cfg <- create_mock_multiomics_config()
+    res <- validate_multiomics_config(cfg)
+    expect_type(res, "list")
+    expect_equal(res$condition_column, "Group")
+    expect_equal(res$integration$methods, c("DIABLO", "SNF"))
+})
+
+test_that("validate_config keeps config$modes$multiomics a list", {
+    config <- list(
+        paths  = list(raw = "data", out = "outputs"),
+        params = list(seed = 1),
+        modes  = list(multiomics = create_mock_multiomics_config())
+    )
+    validated <- validate_config(config)
+    expect_type(validated$modes$multiomics, "list")
+    expect_equal(
+        validated$modes$multiomics$feature_selection$top_n, 500
+    )
 })

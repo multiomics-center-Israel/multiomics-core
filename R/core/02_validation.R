@@ -15,6 +15,61 @@ check_has_cols <- function(df, required, df_name = deparse(substitute(df))) {
     }
 }
 
+#' Warn when a tab-separated sample sheet has commas inside its values
+#'
+#' The pipeline reads metadata by extension (see \code{read_table_auto}), so a
+#' tab-separated sheet with commas in its cells parses correctly here. Readers
+#' that assume CSV do not: they see more fields in the data rows than in the
+#' header, silently decide column 1 holds row names, and abort with
+#' "duplicate 'row.names' are not allowed". That is how a comma in a sample
+#' sheet takes down the report render long after the analysis itself succeeded,
+#' with no traceback pointing back at the sheet. Flag it at load time instead.
+#'
+#' Only column names and affected-row counts are reported — never cell values,
+#' which may carry identifying information.
+#'
+#' @param df Parsed metadata data frame.
+#' @param path Path the metadata was read from; its extension decides whether
+#'   the file is tab-separated and therefore at risk.
+#' @param mode Omics mode or scope, used as the message prefix.
+#' @return Invisibly \code{TRUE}. Emits a warning when commas are found.
+#' @examples
+#' df <- data.frame(SampleName = c("S1", "S2"),
+#'                  Source = c("run-1,run-2", "run-3,run-4"))
+#' # check_metadata_delimiter_safety(df, "samples.txt", "proteomics")
+check_metadata_delimiter_safety <- function(df, path, mode = "design") {
+    if (!is.data.frame(df) || nrow(df) == 0) return(invisible(TRUE))
+    # Only tab-separated sheets are at risk; a real CSV quotes its commas.
+    if (!tolower(tools::file_ext(path)) %in% c("tsv", "txt")) return(invisible(TRUE))
+
+    chr_cols <- names(df)[vapply(df, is.character, logical(1))]
+    n_affected <- vapply(
+        chr_cols,
+        function(cn) sum(grepl(",", df[[cn]], fixed = TRUE), na.rm = TRUE),
+        integer(1)
+    )
+    hits <- chr_cols[n_affected > 0]
+    if (length(hits) == 0) return(invisible(TRUE))
+
+    warning(
+        sprintf(
+            paste0(
+                "[%s] Metadata '%s' is tab-separated but %d column(s) contain commas: %s.\n",
+                "  This pipeline parses it correctly, but any reader that assumes CSV — ",
+                "including the report templates — will mis-parse it and abort with\n",
+                "  \"duplicate 'row.names' are not allowed\".\n",
+                "  Fix: remove the commas from those values (e.g. rename 'A,B' to 'A_B'), ",
+                "or drop the column if the analysis does not use it."
+            ),
+            mode, basename(path), length(hits),
+            paste(sprintf("%s (%d/%d rows)", hits, n_affected[hits], nrow(df)),
+                  collapse = ", ")
+        ),
+        call. = FALSE
+    )
+    invisible(TRUE)
+}
+
 #' Check that all values in x are present in y
 check_all_in <- function(x, y, label_x = "x", label_y = "y") {
     missing <- setdiff(x, y)
@@ -250,11 +305,47 @@ assert_scalar_num <- function(x, name, allow_null = FALSE, min_val = -Inf, max_v
 #'
 #' Proteomics linear FC convention: positive values = up, negative = down
 #' (e.g. 2 = 2x up, -1.5 = 1.5x down). Converts to log2 space preserving sign.
+#' A plain \code{log2()} would return NaN for every down-regulated feature,
+#' silently dropping about half the table wherever the value is reused.
+#'
+#' The single conversion for this convention: the multiomics concordance join
+#' and the pre-computed proteomics DE loader call this rather than keeping their
+#' own copy.
+#'
 #' @param fc Numeric vector of signed linear fold changes
-#' @return Numeric vector of log2 fold changes
+#' @return Numeric vector of log2 fold changes; NA where \code{fc} is NA or zero
 signed_fc_to_log2 <- function(fc) {
     fc <- as.numeric(fc)
+    # Guarded rather than left to ifelse(): ifelse() returns the shape of its
+    # test, so on a zero-length input it yields logical(0), which would put a
+    # logical column into a zero-row results frame instead of a numeric one.
+    if (length(fc) == 0) return(numeric(0))
     ifelse(is.na(fc) | fc == 0, NA_real_, log2(abs(fc)) * sign(fc))
+}
+
+#' Log2 fold changes for one contrast, preferring the stored log2FC column
+#'
+#' Proteomics DE summaries carry an unrounded \code{log2FC.imputs.<contrast>}
+#' beside \code{linearFC.imputs.<contrast>}, which is written with
+#' \code{signif(x, 3)}. Rebuilding log2 from the rounded column moves borderline
+#' features onto the cutoff: any ratio in [1.4950, 1.5049] is stored as 1.50, and
+#' log2(1.50) equals the log2(1.5) threshold exactly, so features just below
+#' 1.5-fold were counted as passing. The stored log2FC is used whenever it
+#' exists; linearFC is converted only for tables that predate that column.
+#'
+#' @param df DE summary or per-contrast table.
+#' @param contrast Contrast name as it appears in the column suffix, e.g.
+#'   "C_vs_V".
+#' @return Numeric vector of log2 fold changes, one per row of \code{df}; all NA
+#'   when \code{df} has no fold-change column for \code{contrast}.
+resolve_log2fc <- function(df, contrast) {
+    for (nm in c(paste0("log2FC.imputs.", contrast), paste0("log2FC.", contrast))) {
+        if (nm %in% names(df)) return(as.numeric(df[[nm]]))
+    }
+    for (nm in c(paste0("linearFC.imputs.", contrast), paste0("linearFC.", contrast))) {
+        if (nm %in% names(df)) return(signed_fc_to_log2(as.numeric(df[[nm]])))
+    }
+    rep(NA_real_, nrow(df))
 }
 
 assert_one_of <- function(x, name, choices, allow_null = FALSE) {

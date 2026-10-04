@@ -40,6 +40,8 @@ renv.lock          dependency lockfile — gitted, do NOT casually change
 _targets/          pipeline cache — gitignored, NEVER touch
 ```
 
+**Layers depend downward only.** `core` must not depend on `services`, `domain` or `modules`; `domain` must not depend on `modules`. A helper shared across layers belongs in the lowest appropriate shared layer consistent with its ownership; do not move domain-specific logic into `core` merely to make it reachable.
+
 > **Repo map:** see `PROJECT_STRUCTURE.md` for the full scanned map (layers, per-file roles, config layout, Shiny contract) — read it after this file. If the layout here drifts from reality, fix it — *but only after asking the user.*
 
 ---
@@ -87,6 +89,22 @@ A few conventions specific to the metabolomics mode:
 - **No `library()` calls inside functions.** Use `pkg::fn()` for external calls, or declare imports in `DESCRIPTION` if this is a package.
 - **Side effects (writing files, plotting to disk) go in their own targets**, separated from computation.
 - **Match the dependency family already used in the codebase.** If the existing code uses `dplyr`, don't introduce `data.table` for a new helper, and vice versa. Same for `purrr` vs `lapply`, `cli` vs `message()`, etc. Consistency beats your personal preference. If the codebase is mixed, ask the user which family to use for new code.
+
+---
+
+## Configuration is intent, not evidence
+
+- **Resolve a config value the way the code that acts on it resolves it** — same key, same default, same fallback. Read the consumer before you branch on a setting or describe it.
+- **A flag being set is not evidence that the step ran.** Steps skip themselves on data conditions, often with a message rather than an error. Where the outcome matters, the evidence is runtime state or a produced artefact, not the flag that requested it.
+- **One semantic decision, one resolver.** When several consumers interpret the same config or statistical contract, they call one shared resolver rather than each reading the raw keys.
+- **Old branches and commits are history, not specification.** Verify against the current implementation and runtime path before reviving logic or wording from one.
+
+---
+
+## Describing results
+
+- **Reports describe; they do not decide.** Report code must not own or recreate statistical/scientific decisions that belong to the analysis pipeline. It reads established results and semantics rather than recomputing a quantity or independently reinterpreting a rule.
+- **Say no more than the implementation supports.** Reader-facing scientific wording is a claim about what ran. If the code applies a weaker, narrower or conditional version of what the sentence says, the sentence is wrong.
 
 ---
 
@@ -142,9 +160,22 @@ If you think one of these is needed, *propose* it in chat and wait for an explic
 We work with biological data. Some of it may be unpublished, patient-associated, or regulated.
 
 - **Never copy data file contents into commit messages, PR descriptions, comments, issue threads, or any text you produce.** This includes sample IDs that could re-identify a subject, raw expression values, sequencing reads, anything from `data/` or `data-raw/`.
+- **Numbers measured on a real run count as data too.** Consider this sentence, whose figures are invented for the purpose: *"Verified on a 12-sample run: 5,000 features agree, the other 1,000 differ by a median of 0.5."* It reads like evidence, but its shape discloses the cohort size, the assay depth and an effect size of an unpublished dataset — into a commit message, which is permanent. The same goes for DE gene counts, numbers of significant pathways, and how many features a filter kept. Say *what* you verified and *how*, not the figures it produced: *"verified that the two columns agree to floating-point precision on fully observed features, and differ on partially observed ones by the imputation's spread."* If a concrete number genuinely helps a reader, invent one as above and say so. **When in doubt, leave it out** — a reviewer can rerun the check; they cannot un-publish a number.
 - **In examples and docstrings, use synthetic data only.** Don't paste real values from the user's files. If you need to illustrate behavior, generate something like `data.frame(sample = c("S1", "S2"), counts = c(100, 200))`.
 - **Don't `cat()` / `print()` / `head()` data into the chat to "understand its structure."** Use `str()`, `glimpse()`, `colnames()`, `dim()` — they describe shape without exposing values. If you really need to see values, ask the user to share a redacted excerpt.
 - **Don't read large raw files** (FASTQ, BAM, large H5) "to understand the format." Read 5 lines, or read the docs of the package that parses them.
+
+---
+
+## Running R — you don't, we do
+
+- **Never run R.** Not `R`, not `Rscript`, not the test suite, not `tar_validate()`, not a one-liner to check what a function returns.
+- **Never install R or an R package.** Not `install.packages()`, not a system package manager, not into a scratch library. A missing package is a reason to hand the check over, not to go and fetch it.
+- **When you need a result from R, write the commands and ask us to run them.** Give a block we can paste, say what you expect to see, and wait for the answer before continuing.
+
+**Why:** your environment is not the one this pipeline runs in. Different R version, no Bioconductor packages, and options like `keep.source` differ from an interactive session. A green result there can hide a failure we would hit, and a red one can be an artefact of your sandbox — we have had both. Running it yourself does not save a round trip, it adds one.
+
+This applies to verification claims too. If you could not run something, **say so plainly** in the PR body and leave the checklist box unticked, rather than wording it so it reads as checked. Checks that need no R are still yours to do and worth doing: re-reading the diff, brace balance, grepping for a symbol, confirming a function is defined once.
 
 ---
 
@@ -223,6 +254,24 @@ This protects the user from autopilot mistakes while not blocking them when they
 
 ---
 
+## A PR is not ready until Codex comes back clean
+
+Your own reading of a diff is not the bar. A PR is ready to merge when **CI is green and Codex returns with no findings, both on the head you last pushed** — not before.
+
+This is the same reasoning as *Running R — you don't, we do*: it is a check you cannot perform on yourself, so hand it over and wait for the answer.
+
+**Read the review threads, not the summary.** Codex posts a summary comment *and* inline threads. The summary has said "Didn't find any major issues" on a commit that carried three inline P2 findings. When they disagree, the threads are the review.
+
+**A verdict belongs to one commit.** Check the SHA in the review and in the CI run against the current head. A clean pass on a head you have since pushed over says nothing about the head you have now. Every push restarts the gate.
+
+**Expect a fixed finding to open new ground.** A fix changes what the rest of the code sees, and the next review often finds something real in what you just wrote — sometimes a regression the fix introduced. That is not noise and it is not a reason to stop early. Keep going until a review of an *unchanged* head is clean.
+
+**Fix the class, not the instance.** When a finding names one place, sweep the surrounding block for the same mistake before replying. Say what you swept.
+
+**When you disagree, say so with evidence and leave it to the user.** Cite the code that supports you, do not resolve the thread yourself, and do not quietly change the code to make a finding go away when you believe it is wrong.
+
+---
+
 ## Before you tell the user you're done
 
 Mentally walk through:
@@ -235,6 +284,7 @@ Mentally walk through:
 - [ ] If you added a function, did you also add a `roxygen2` docstring and a test?
 - [ ] If anything is stochastic, is it seeded?
 - [ ] Is the diff small and focused on one thing?
+- [ ] Are CI and Codex both clean **on the current head**, with the inline threads read and not just the summary?
 
 ---
 
@@ -261,6 +311,7 @@ Closes #<issue number>
 - [ ] No Shiny app changes
 - [ ] New functions have docstrings + tests
 - [ ] Random components are seeded
+- [ ] CI green and Codex clean on the current head
 ```
 
 ---

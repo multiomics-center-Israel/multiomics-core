@@ -41,7 +41,7 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
 
     padj_vals <- as.numeric(summary_df[[padj_col]])
     pval_vals <- as.numeric(summary_df[[pval_col]])
-    lfc_vals  <- signed_fc_to_log2(as.numeric(summary_df[[fc_col]]))
+    lfc_vals  <- resolve_log2fc(summary_df, cn)
 
     # Compute stat based on configured GSEA ranking method
     ranking <- config$modes$proteomics$pathway$gsea_ranking %||% "stat"
@@ -50,8 +50,26 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
     } else if (identical(ranking, "lfc")) {
         stat_vals <- lfc_vals
     } else {
-        # Default "stat": sign(log2FC) * -log10(pvalue)
-        stat_vals <- sign(lfc_vals) * -log10(pval_vals + 1e-300)
+        # Default "stat": sign(log2FC) * -log10(pvalue).
+        # linearFC is stored via signif(x, 3), so any ratio in [0.995, 1.005)
+        # rounds to exactly 1, giving sign() == 0 and zeroing the rank whatever
+        # the p-value. Take the direction from the unrounded log2FC when it is
+        # available. Not linearRatio.imputs: the precomputed-input path writes
+        # that as 2^abs(logFC) (R/domain/proteomics/05_de_summary.R), so it is
+        # >= 1 for every feature and would rank downregulated proteins as
+        # upregulated.
+        #
+        # A feature with no direction to take does not get an invented one: NA
+        # stays NA and run_pathway_analysis() drops it from the ranking, while a
+        # genuine zero ranks neutrally. Forcing either to +1 would seat it in the
+        # upregulated tail on the strength of its p-value alone.
+        lfc_col <- paste0("log2FC.imputs.", cn)
+        dir_vals <- if (lfc_col %in% colnames(summary_df)) {
+            sign(as.numeric(summary_df[[lfc_col]]))
+        } else {
+            sign(lfc_vals)
+        }
+        stat_vals <- dir_vals * -log10(pval_vals + 1e-300)
     }
 
     de_tbl <- data.frame(
@@ -152,10 +170,14 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         return(NULL)
     }
 
-    # Build per-contrast DE tables with gene symbols
+    # Build per-contrast DE tables. When annotation is skipped (non-model runs
+    # whose custom GMT is keyed on the raw Protein.Group FeatureID), do NOT remap
+    # FeatureID to Genes symbols — the DIA-NN Genes column may hold description
+    # text rather than symbols, which would break the FeatureID<->GMT match.
+    skip_symbol_remap <- isTRUE((cfg$annotation %||% list())$skip_annotation)
     de_tables <- lapply(setNames(contrasts, contrasts), function(cn) {
         tbl <- extract_de_table_for_pathway(summary_df, cn, config)
-        map_proteins_to_gene_symbols(tbl, summary_df, config)
+        if (skip_symbol_remap) tbl else map_proteins_to_gene_symbols(tbl, summary_df, config)
     })
 
     # ------------------------------------------------------------------
@@ -241,13 +263,17 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
     # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
     # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
+    de_cfg <- cfg$de %||% list()
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
         gene_sets          = gene_sets,
         annotation         = annotation_df,
         method             = method,
         min_size           = min_size,
-        max_size           = max_size
+        max_size           = max_size,
+        seed               = config$params$seed %||% 1L,
+        p_cutoff           = de_cfg$p_cutoff %||% 0.05,
+        lfc_cutoff         = log2(de_cfg$linear_fc_cutoff %||% 1.5)
     )
 
     # Save results and plots

@@ -45,11 +45,29 @@ validate_proteomics_config <- function(cfg) {
 
         if (identical(cfg$imputation$method, "dep2")) {
             assert_scalar_chr(cfg$imputation$dep2_method, "imputation$dep2_method")
-            assert_scalar_num(cfg$imputation$dep2_random_seed, "imputation$dep2_random_seed")
         }
 
-        if (identical(cfg$imputation$method, "qrilc")) {
-            assert_scalar_num(cfg$imputation$qrilc_random_seed, "imputation$qrilc_random_seed", allow_null = TRUE)
+        # Deprecated: these seeded the RNG inside the imputation call, which
+        # overwrote the per-run seed and made every repetition identical for the
+        # stochastic methods. params.seed is now the single source for the whole
+        # proteomics imputation sequence. Warned rather than ignored, because a
+        # project that set one of these did so for reproducibility and deserves
+        # to know it no longer has any effect. Checked without asserting a type:
+        # the keys are no longer required, and a deprecated value is not worth
+        # failing a run over.
+        deprecated_seeds <- c("dep2_random_seed", "qrilc_random_seed")
+        present <- deprecated_seeds[vapply(deprecated_seeds,
+                                           function(k) !is.null(cfg$imputation[[k]]),
+                                           logical(1))]
+        if (length(present) > 0) {
+            warning(sprintf(
+                paste0("imputation$%s is deprecated and ignored. Proteomics ",
+                       "imputation reproducibility is controlled by params$seed: ",
+                       "the QC draw uses params$seed and DE run i uses ",
+                       "params$seed + i. Remove the deprecated key and set ",
+                       "params$seed instead."),
+                paste(present, collapse = " and imputation$")
+            ), call. = FALSE)
         }
     }
 
@@ -63,6 +81,32 @@ validate_proteomics_config <- function(cfg) {
         }
         if (!is.null(cfg$filtering$min_groups)) {
             assert_scalar_num(cfg$filtering$min_groups, "filtering$min_groups", allow_null = TRUE, min_val = 1)
+        }
+        # A group passes when a feature has at least min_count values in it, so
+        # a threshold of 0 passes every feature in that group, measured or not,
+        # and a feature with no value anywhere can survive filtering. Checked per
+        # value: a bare number, or a `default` plus per-group thresholds. Inf is
+        # refused too: no finite count reaches it, so every feature would go.
+        if (!is.null(cfg$filtering$min_count)) {
+            mc <- cfg$filtering$min_count
+            if (is.list(mc)) {
+                nms  <- names(mc) %||% rep("", length(mc))
+                keys <- paste0("filtering$min_count$",
+                               ifelse(nzchar(nms), nms, paste0("[[", seq_along(mc), "]]")))
+            } else {
+                mc   <- list(mc)
+                keys <- "filtering$min_count"
+            }
+            for (i in seq_along(mc)) {
+                assert_scalar_num(mc[[i]], keys[[i]])
+                if (!is.finite(mc[[i]]) || mc[[i]] < 1 || mc[[i]] != round(mc[[i]])) {
+                    stop(sprintf(paste0(
+                        "'%s' must be a whole number of at least 1 (got %s). A threshold ",
+                        "of 0 keeps features with no measured value in that group; the ",
+                        "least filtering is min_count: 1 with min_groups: 1."),
+                        keys[[i]], format(mc[[i]])), call. = FALSE)
+                }
+            }
         }
     }
 
@@ -85,8 +129,54 @@ validate_proteomics_config <- function(cfg) {
         if (!is.null(cfg$de$paired)) {
             assert_scalar_bool(cfg$de$paired, "de$paired", allow_null = TRUE)
         }
+        assert_scalar_num(cfg$de$volcano_n_label, "de$volcano_n_label",
+                          allow_null = TRUE, min_val = 0)
         if (!is.null(cfg$de$pairing_col)) {
             assert_scalar_chr(cfg$de$pairing_col, "de$pairing_col", allow_null = TRUE)
+        }
+        if (!is.null(cfg$de$block_col)) {
+            assert_scalar_chr(cfg$de$block_col, "de$block_col", allow_null = TRUE)
+            # Blocking is wired into the limma fit only; the t-test paths use
+            # de$paired/de$pairing_col instead, so silently ignoring it there
+            # would hide a design error.
+            de_method <- cfg$de$method %||% "limma"
+            if (!de_method %in% c("limma", "limma_percontrast")) {
+                stop("de$block_col is set but de$method is '", de_method,
+                     "', which does not support blocking.\n",
+                     "  Use de$method 'limma' for duplicateCorrelation blocking, ",
+                     "or de$paired/de$pairing_col for the paired t-test.")
+            }
+        }
+
+        # Pass-1 p-value choice (#258). de_uses_adjusted_p() resolves it for the
+        # summariser, the Methods text and the Excel export alike; the checks
+        # live here so they run once per config rather than once per reader.
+        # Keys are matched by name: `$` partially matches on lists, so
+        # cfg$de$use_adj would find use_adj_for_pass1.
+        de_keys <- names(cfg$de)
+        other_mode <- intersect(c("use_adj", "use_adjusted_pval"), de_keys)
+        if (length(other_mode) > 0) {
+            stop(sprintf(paste0(
+                "de$%s is not a proteomics setting (it belongs to the RNA or ",
+                "metabolomics/lipidomics config) and would be ignored here. ",
+                "Use de$use_adj_for_pass1 to choose the pass-1 p-value."),
+                other_mode[[1]]), call. = FALSE)
+        }
+        has_canon <- "use_adj_for_pass1" %in% de_keys
+        has_alias <- "use_fdr_for_pass1" %in% de_keys
+        if (has_canon) assert_scalar_bool(cfg$de[["use_adj_for_pass1"]], "de$use_adj_for_pass1")
+        if (has_alias) assert_scalar_bool(cfg$de[["use_fdr_for_pass1"]], "de$use_fdr_for_pass1")
+        if (has_canon && has_alias &&
+            !identical(cfg$de[["use_adj_for_pass1"]], cfg$de[["use_fdr_for_pass1"]])) {
+            stop(sprintf(paste0(
+                "de$use_adj_for_pass1 (%s) and the deprecated de$use_fdr_for_pass1 ",
+                "(%s) disagree. Keep only de$use_adj_for_pass1."),
+                cfg$de[["use_adj_for_pass1"]], cfg$de[["use_fdr_for_pass1"]]),
+                call. = FALSE)
+        }
+        if (has_alias && !has_canon) {
+            warning("de$use_fdr_for_pass1 is deprecated; it is read as ",
+                    "de$use_adj_for_pass1. Rename the key.", call. = FALSE)
         }
     }
 

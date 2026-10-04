@@ -1328,6 +1328,12 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
     binary_best        = NULL
   )
   
+  # Samples stay in metadata order by default, so the heatmap reads against the
+  # experimental design. clustering$cluster_samples: true clusters them instead
+  # and draws the sample dendrogram above the map, which is what you want when
+  # the question is whether samples group by condition at all.
+  cluster_samples <- isTRUE(cfg$clustering$cluster_samples)
+
   f_hm <- file.path(out_dir, "Hierarchical_DE_heatmap.png")
   p_cluster <- wrap_clustering_heatmap(
     expr_mat               = expr_mat,
@@ -1338,7 +1344,7 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
     annotation_row_builder = TRUE,
     annotation_row_context = annot_context,
     out_file               = f_hm,
-    cluster_cols           = FALSE,
+    cluster_cols           = cluster_samples,
     title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
   )
   written <- f_hm
@@ -1351,7 +1357,7 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
     annotation_col = annot_col,
     feature_ids    = de_features,
     is_zscored     = TRUE,
-    cluster_cols   = FALSE,
+    cluster_cols   = cluster_samples,
     tree_row       = hc_res$details
   )
   

@@ -13,9 +13,10 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         MIN_NO_PASSED <- 1L
     }
 
-    # whether to use adjusted p-value in final results tables and plots
-    # (if FALSE the cutoff will use the raw p-value instead)
-    use_adj_for_pass1 <- isTRUE(de_cfg$use_adj_for_pass1)
+    # Whether pass 1 reads the adjusted p-value (if FALSE, the raw p-value).
+    # Resolved by de_uses_adjusted_p(), the same call the Methods text and the
+    # Excel export make, so all three describe the rule that ran (#258).
+    use_adj_for_pass1 <- de_uses_adjusted_p(de_cfg, "proteomics")
     p_cutoff <- as.numeric(de_cfg$p_cutoff)
 
     linear_fc_cutoff <- as.numeric(de_cfg$linear_fc_cutoff)
@@ -64,14 +65,34 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         }
     }
 
+    # Every per-run block below is a features x runs matrix, and every summary
+    # after them (rowSums, rowMeans, apply over rows) needs it to stay two
+    # dimensional. sapply() does not guarantee that: when each run returns a
+    # single value -- i.e. when the dataset has exactly one feature -- it
+    # simplifies to a plain vector of length NO_REPETITIONS, and rowSums() then
+    # aborts with "'x' must be an array of at least two dimensions". One
+    # surviving feature after filtering is enough to reach it.
+    #
+    # Reshaped at construction rather than handled downstream, so the summaries
+    # never have to know about the case. matrix() reads its input column by
+    # column, and a features x runs matrix unrolls to exactly its own columns in
+    # order, so the already-correct shapes pass through untouched -- no run is
+    # reordered and no value moves. No type constraint either: mark_pass1()
+    # returns logical when a whole run is NA, which is why this is not vapply().
+    n_feat <- length(ref_ids)
+    per_run_matrix <- function(extract) {
+        matrix(sapply(seq_len(NO_REPETITIONS), extract),
+               nrow = n_feat, ncol = NO_REPETITIONS)
+    }
+
     for (cn in contrasts) {
         contrast_print <- normalize_contrast_name(cn)
 
-        logfc_mat <- sapply(seq_len(NO_REPETITIONS), function(n) runs_de_tables[[n]][[cn]][["logFC"]])
-        p_mat <- sapply(seq_len(NO_REPETITIONS), function(n) runs_de_tables[[n]][[cn]][["P.Value"]])
-        padj_mat <- sapply(seq_len(NO_REPETITIONS), function(n) runs_de_tables[[n]][[cn]][["adj.P.Val"]])
+        logfc_mat <- per_run_matrix(function(n) runs_de_tables[[n]][[cn]][["logFC"]])
+        p_mat <- per_run_matrix(function(n) runs_de_tables[[n]][[cn]][["P.Value"]])
+        padj_mat <- per_run_matrix(function(n) runs_de_tables[[n]][[cn]][["adj.P.Val"]])
 
-        pass1_mat <- sapply(seq_len(NO_REPETITIONS), function(n) {
+        pass1_mat <- per_run_matrix(function(n) {
             mark_pass1(runs_de_tables[[n]][[cn]],
                 p_cutoff    = p_cutoff,
                 lfc_cutoff  = lfc_cutoff,
@@ -99,6 +120,11 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         out[[paste0("sum.pass.", contrast_print)]] <- sum_pass
         out[[paste0("pass.imputs.", contrast_print)]] <- pass_imputs
         out[[paste0("linearRatio.imputs.", contrast_print)]] <- linearRatio_imputs
+        # log2 of the consensus linear ratio, not the mean of the per-run logFCs:
+        # this is the exact log2 counterpart of the linearFC reported below, so
+        # readers can move between the two without re-deriving anything. Left
+        # unrounded so that round trip stays exact.
+        out[[paste0("log2FC.imputs.", contrast_print)]] <- log2(linearRatio_imputs)
         out[[paste0("linearFC.imputs.", contrast_print)]] <- signif(linearFC_imputs, 3)
         out[[paste0("pvalue.imputs.", contrast_print)]] <- pvalue_imputs
         out[[paste0("padj.imputs.", contrast_print)]] <- padj_imputs
@@ -204,11 +230,72 @@ add_pass_any_contrast <- function(summary_df, pass_prefix = "^pass\\.imputs\\.",
     summary_df
 }
 
+#' Resolve the blocking factor for a limma proteomics fit
+#'
+#' Reads `de$block_col` from the proteomics config and returns it as a factor
+#' aligned to the sample order of `meta_aligned`, or NULL when no blocking was
+#' requested. Refuses degenerate blockings rather than letting
+#' [limma::duplicateCorrelation()] return a meaningless consensus.
+#'
+#' @param meta_aligned Sample metadata, already ordered to match the expression
+#'   matrix columns.
+#' @param p_cfg The `modes$proteomics` config branch.
+#' @param sample_col Name of the sample identifier column, used in messages.
+#' @return A factor with one entry per sample, or NULL if blocking is disabled.
+resolve_de_block <- function(meta_aligned, p_cfg, sample_col) {
+    block_col <- p_cfg$de$block_col
+    if (is.null(block_col) || !nzchar(block_col)) return(NULL)
+
+    if (!block_col %in% colnames(meta_aligned)) {
+        stop("de$block_col is '", block_col, "' but that column is not in the sample metadata.\n",
+             "  Available columns: ", paste(colnames(meta_aligned), collapse = ", "), "\n",
+             "  Set de$block_col to the column holding the repeated-measures unit ",
+             "(donor, line, subject), or remove it to fit without blocking.")
+    }
+
+    block <- factor(meta_aligned[[block_col]])
+    n_samples <- nrow(meta_aligned)
+
+    if (anyNA(block)) {
+        stop("de$block_col '", block_col, "' has missing values for ", sum(is.na(block)),
+             " of ", n_samples, " samples.\n",
+             "  Every sample needs a block label; fill them in or drop those samples ",
+             "via modes$proteomics$sample_filter.")
+    }
+    if (nlevels(block) < 2) {
+        stop("de$block_col '", block_col, "' has a single level, so there is nothing to block on.\n",
+             "  Remove de$block_col, or point it at a column that varies across ", sample_col, ".")
+    }
+    if (nlevels(block) >= n_samples) {
+        stop("de$block_col '", block_col, "' has ", nlevels(block), " levels for ", n_samples,
+             " samples, so no two samples share a block.\n",
+             "  duplicateCorrelation needs repeated measures within a block; this looks ",
+             "like a sample identifier rather than a blocking variable.")
+    }
+
+    block
+}
+
 #' Run limma differential analysis for proteomics with contrast support
 #'
 #' Fits a limma linear model on an imputed proteomics expression matrix and
 #' returns per-contrast result tables with feature annotations.
 #'
+#' When `de$block_col` names a metadata column, samples sharing a level of that
+#' column are treated as correlated rather than independent: the within-block
+#' correlation is estimated with [limma::duplicateCorrelation()] and passed to
+#' [limma::lmFit()]. This is the right handling for a repeated-measures design
+#' (the same donor, line or subject measured under both conditions). It is
+#' preferred over adding the blocking variable to the design matrix, which
+#' spends one residual degree of freedom per block and leaves little power in
+#' the small-n designs typical of proteomics.
+#'
+#' @param expr_imp Numeric matrix of imputed abundances, features x samples.
+#' @param meta Sample metadata; one row per column of `expr_imp`.
+#' @param contrasts_df Data frame of contrasts with Contrast_name, Factor,
+#'   Numerator and Denominator columns.
+#' @param prot_tbl Feature annotation table keyed by the protein ID column.
+#' @param cfg Full pipeline config (the `modes$proteomics` branch is used).
 #' @return A list with aligned metadata, design matrix, contrasts, fitted model and per-contrast DE tables.
 #' @export
 run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
@@ -246,7 +333,28 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     contrast_matrix <- limma::makeContrasts(contrasts = contrast_formulas, levels = design)
     colnames(contrast_matrix) <- names(contrast_formulas)
 
-    fit2 <- limma::eBayes(limma::contrasts.fit(limma::lmFit(expr_imp, design), contrast_matrix))
+    block <- resolve_de_block(meta_aligned, p_cfg, sample_col)
+    if (is.null(block)) {
+        fit <- limma::lmFit(expr_imp, design)
+        block_correlation <- NA_real_
+    } else {
+        dup_cor <- limma::duplicateCorrelation(expr_imp, design, block = block)
+        block_correlation <- dup_cor$consensus
+        if (!is.finite(block_correlation)) {
+            warning("duplicateCorrelation returned a non-finite consensus for block '",
+                    p_cfg$de$block_col, "'; fitting without blocking.")
+            fit <- limma::lmFit(expr_imp, design)
+            block_correlation <- NA_real_
+        } else {
+            message(sprintf(
+                "Blocking on '%s' (%d blocks): consensus within-block correlation = %.3f",
+                p_cfg$de$block_col, nlevels(block), block_correlation))
+            fit <- limma::lmFit(expr_imp, design, block = block,
+                                correlation = block_correlation)
+        }
+    }
+
+    fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast_matrix))
 
     # Optional fdrtool empirical null correction (matching DEP::test_diff)
     if (isTRUE(p_cfg$de$fdrtool_correction)) {
@@ -596,27 +704,79 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
     de_table_cfg <- cfg$de_table %||% list()
     id_col <- de_table_cfg$id_col %||% "FeatureID"
 
-    # Use contrast names from contrasts_df when available (must match file count)
-    if (!is.null(contrasts_df) && "Contrast_name" %in% colnames(contrasts_df) &&
-        nrow(contrasts_df) == length(de_files)) {
-        contrast_labels <- as.character(contrasts_df$Contrast_name)
+    # Which contrast each output table is for, and which file it comes from.
+    # Two input shapes are supported, and they need different pairings:
+    #
+    #   one file per contrast -- one label per file, paired by position;
+    #   one wide summary file -- our own limma_multimp_summary export, holding
+    #     every contrast in one table with the statistics suffixed by contrast
+    #     name. There the labels come from the contrasts, not from the file,
+    #     and the file is read once and split.
+    #
+    # Pairing the wide shape by position used to fall through to the filename,
+    # which then matched no contrast in the table at all.
+    req_labels <- if (!is.null(contrasts_df) &&
+                      "Contrast_name" %in% colnames(contrasts_df)) {
+        as.character(contrasts_df$Contrast_name)
+    } else {
+        character(0)
+    }
+
+    labels_from_file <- FALSE
+    if (length(req_labels) == length(de_files)) {
+        contrast_labels <- req_labels
+        file_of <- seq_along(de_files)
+    } else if (length(de_files) == 1L && length(req_labels) > 1L) {
+        contrast_labels <- req_labels
+        file_of <- rep(1L, length(req_labels))
     } else {
         contrast_labels <- vapply(de_files, function(f) {
             bn <- tools::file_path_sans_ext(basename(f))
             sub("^de_", "", bn)
         }, character(1), USE.NAMES = FALSE)
+        file_of <- seq_along(de_files)
+        labels_from_file <- TRUE
     }
 
     # Load per-contrast tables
     per_contrast <- list()
-    for (i in seq_along(de_files)) {
-        abs_path <- resolve_raw_path(config, de_files[i])
-        if (!file.exists(abs_path)) {
-            stop("Pre-computed proteomics DE table not found: ", abs_path)
+    raw <- NULL
+    abs_path <- NA_character_
+    last_fi <- NA_integer_
+    for (i in seq_along(contrast_labels)) {
+        fi <- file_of[i]
+        # Read each file once: the wide shape asks for several contrasts out of
+        # the same table.
+        if (!identical(fi, last_fi)) {
+            abs_path <- resolve_raw_path(config, de_files[fi])
+            if (!file.exists(abs_path)) {
+                stop("Pre-computed proteomics DE table not found: ", abs_path)
+            }
+            raw <- read_table_auto(abs_path)
+            last_fi <- fi
         }
 
-        raw <- read_table_auto(abs_path)
         cn <- colnames(raw)
+        label <- contrast_labels[i]
+
+        # Same contract as the RNA loader: mod_proteomics_de() returns into the
+        # pre-computed branch before its auto_generate_contrasts() fallback, so
+        # with no contrasts file nothing here can say which of a wide summary's
+        # contrasts was wanted. Both fold-change spellings are counted, since
+        # this export may carry log2FC.imputs, linearFC.imputs or both.
+        if (labels_from_file) {
+            held <- unique(.de_summary_candidates(
+                cn, c("log2FC.imputs", "logFC", "log2FC", "log2FoldChange",
+                      "linearFC.imputs", "linearFC"))$contrast)
+            if (length(held) > 1) {
+                stop("Pre-computed proteomics DE table holds several contrasts (",
+                     paste(held, collapse = ", "), "): ", abs_path,
+                     "\n  Point modes.proteomics.files.contrasts at a contrasts ",
+                     "table naming the ones to load. They cannot be inferred ",
+                     "from the file name, and this branch does not ",
+                     "auto-generate them.")
+            }
+        }
 
         # Feature IDs
         prot_id_col <- cfg$id_columns$protein_id %||% "Protein.Group"
@@ -629,19 +789,55 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
             feat_ids <- as.character(raw[[feat_col]])
         }
 
-        # logFC
-        lfc_col <- cn[cn %in% c("logFC", "log2FoldChange", "log2FC",
-                                 "log2(FC)", "log2.FC.")][1]
-        lfc_vals <- if (!is.na(lfc_col)) as.numeric(raw[[lfc_col]]) else NA_real_
+        # logFC. resolve_de_summary_col() also accepts the contrast-suffixed
+        # form our own limma_multimp_summary export uses.
+        lfc_col <- resolve_de_summary_col(
+            cn,
+            bare = c("logFC", "log2FoldChange", "log2FC", "log2(FC)", "log2.FC."),
+            # log2FC.imputs is what the wide limma_multimp_summary actually
+            # writes, and it leads: linearFC beside it is signif()-rounded, so
+            # resolving that instead would lose precision the file already has.
+            prefixes = c("log2FC.imputs", "logFC", "log2FC", "log2FoldChange"),
+            contrast_label = label
+        )
+        if (!is.na(lfc_col)) {
+            lfc_vals <- as.numeric(raw[[lfc_col]])
+        } else {
+            # The multi-imputation summary carries no logFC at all, only
+            # linearFC -- a SIGNED linear ratio, so log2() of it would turn
+            # every down-regulated protein into NaN.
+            lin_col <- resolve_de_summary_col(
+                cn,
+                bare = c("linearFC"),
+                prefixes = c("linearFC.imputs", "linearFC"),
+                contrast_label = label
+            )
+            if (is.na(lin_col)) {
+                # Carrying NA forward made a mis-pointed config look exactly
+                # like a run with no differential abundance at all.
+                stop("Pre-computed proteomics DE table has no recognisable fold-",
+                     "change column: ", abs_path, "\n  columns: ",
+                     paste(cn, collapse = ", "))
+            }
+            lfc_vals <- signed_fc_to_log2(raw[[lin_col]])
+        }
 
         # P.Value
-        pval_col <- cn[cn %in% c("P.Value", "pvalue", "PValue", "p.value",
-                                  "raw.pval")][1]
+        pval_col <- resolve_de_summary_col(
+            cn,
+            bare = c("P.Value", "pvalue", "PValue", "p.value", "raw.pval"),
+            prefixes = c("pvalue.imputs", "P.Value", "pvalue"),
+            contrast_label = label
+        )
         pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
 
         # adj.P.Val
-        padj_col_name <- cn[cn %in% c("adj.P.Val", "padj", "FDR", "q.value",
-                                       "p.adjust", "qvalue")][1]
+        padj_col_name <- resolve_de_summary_col(
+            cn,
+            bare = c("adj.P.Val", "padj", "FDR", "q.value", "p.adjust", "qvalue"),
+            prefixes = c("padj.imputs", "adj.P.Val", "padj", "FDR"),
+            contrast_label = label
+        )
         padj_vals <- if (!is.na(padj_col_name)) {
             as.numeric(raw[[padj_col_name]])
         } else {
@@ -669,7 +865,9 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
         }
 
         per_contrast[[contrast_labels[i]]] <- tbl
-        message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),
+        # de_files[fi], not de_files[i]: in the wide shape several contrasts
+        # share one file and i runs past the end of de_files.
+        message("  Loaded ", nrow(tbl), " features from ", basename(de_files[fi]),
                 " (label: ", contrast_labels[i], ")")
     }
 
@@ -703,6 +901,7 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
         out[[paste0("sum.pass.", contrast_print)]]          <- as.integer(!is.na(pass) & pass == 1)
         out[[paste0("pass.imputs.", contrast_print)]]       <- pass
         out[[paste0("linearRatio.imputs.", contrast_print)]] <- linear_ratio
+        out[[paste0("log2FC.imputs.", contrast_print)]]     <- lfc
         out[[paste0("linearFC.imputs.", contrast_print)]]   <- signif(linear_fc, 3)
         out[[paste0("pvalue.imputs.", contrast_print)]]     <- tbl$P.Value[idx]
         out[[paste0("padj.imputs.", contrast_print)]]       <- tbl$adj.P.Val[idx]

@@ -24,6 +24,9 @@ validate_config <- function(config) {
         # section — capture the return value so defaults actually persist.
         config$modes$multiomics <- validate_multiomics_config(config$modes$multiomics)
     }
+    if (!is.null(config$modes$de_integration)) {
+        config$modes$de_integration <- validate_de_integration_config(config$modes$de_integration)
+    }
 
     invisible(config)
 }
