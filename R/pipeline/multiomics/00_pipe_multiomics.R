@@ -276,7 +276,8 @@ pipe_multiomics <- function() {
                         # than from enrichment CSVs an earlier run left behind.
                         per_omics_enrichment = multiomics_cross_enrichment$per_omics,
                         # Why a layer has no result for a pathway; labels only.
-                        pathway_coverage = multiomics_cross_enrichment$pathway_coverage
+                        pathway_coverage = multiomics_cross_enrichment$pathway_coverage,
+                        enzyme_pairs = multiomics_enzyme_metabolite$pairs
                     )
                 }, error = function(e) {
                     warning("Multi-ORA failed: ", e$message)
