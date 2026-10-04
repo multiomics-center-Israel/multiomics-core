@@ -241,6 +241,19 @@ modes:
       #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
       pvalue_column: "P.Value"
 
+      # QEA (globaltest) options. QEA and ssGSEA run on the matrix the
+      # differential-abundance step tests on (log-normalized, biological samples
+      # only) instead of raw intensities. With a pre-computed DE table
+      # (files.de_table) no local DE runs, so this is the matrix the pipeline's
+      # own DE would use, not necessarily the one behind the loaded table.
+      qea:
+        # Rescale globaltest predictors before pathway testing (globaltest::gt
+        # standardize=). This changes the relative weighting of metabolites and
+        # therefore the pathway statistics, so treat it as a sensitivity-analysis
+        # setting, NOT an automatic scale correction. FALSE keeps globaltest's
+        # current default; evaluate TRUE vs FALSE on your data before relying on it.
+        standardize: false
+
       # Mummichog m/z-based pathway analysis — isolated, version-pinned engine
       # (mummichog==2.7.0 via processx). Opt-in; runs on the built-in human_mfn
       # model by default. Requires the pinned venv: `make mummichog-venv` then
