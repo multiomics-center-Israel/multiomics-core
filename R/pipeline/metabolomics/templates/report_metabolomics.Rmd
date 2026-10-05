@@ -709,20 +709,24 @@ if (!is.null(qc_res$plots)) {
         safe_print_plot(p13_lab)
       }
     }
+    # Blank line so the next tab's "####" heading starts its own block
+    # instead of joining the image paragraph.
+    cat("\n\n")
   }
 }
 ```
 
-### Interactive
+### Interactive {.tabset}
 
 ```{r qc-pca-interactive, results='asis'}
 if (!is.null(qc_res$plots) && requireNamespace("plotly", quietly = TRUE)) {
-  pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
-  pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
-  if (!is.na(pca_main)) {
+  for (sub in .pca_subsets) {
+    pca_main <- .pick_pca_key(qc_res$plots, "pca_1_2", sub$sub)
+    if (is.na(pca_main)) next
     p <- qc_res$plots[[pca_main]]
     sc <- p$data
     if ("sample" %in% colnames(sc)) {
+      cat(sprintf("\n#### %s\n\n", sub$tab))
       non_pc <- setdiff(colnames(sc), c("sample", "sample_id", grep("^PC", colnames(sc), value = TRUE)))
       color_var <- if (length(non_pc) > 0) non_pc[1] else NA
       sc$hover_text <- paste0("Sample: ", sc$sample,
@@ -732,8 +736,9 @@ if (!is.null(qc_res$plots) && requireNamespace("plotly", quietly = TRUE)) {
                             text = ~hover_text, hoverinfo = "text",
                             type = "scatter", mode = "markers",
                             marker = list(size = 10)) |>
-          plotly::layout(title = "PCA: PC1 vs PC2 — Hover for sample names")
+          plotly::layout(title = paste0("PCA: PC1 vs PC2 (", tolower(sub$tab), ") — Hover for sample names"))
       print(htmltools::tagList(pl))
+      cat("\n\n")
     }
   }
 } else {
@@ -825,10 +830,15 @@ if (!is.null(qc_res$plots)) {
 # Tabs split by sample subset when QC samples exist.
 if (!is.null(qc_res$files)) {
   fnames <- basename(qc_res$files)
+  # mod_metabolomics_qc_pre() writes sample_distance_metab_heatmap_w_qc.png (all
+  # samples) and sample_distance_metab_heatmap.png (QC samples removed); the
+  # older names are kept so reports from earlier runs still render.
   dist_with <- qc_res$files[file.exists(qc_res$files) &
-                            fnames == "sample_distance_heatmap.png"]
+                            fnames %in% c("sample_distance_metab_heatmap_w_qc.png",
+                                          "sample_distance_heatmap.png")]
   dist_no   <- qc_res$files[file.exists(qc_res$files) &
-                            fnames == "sample_distance_heatmap_noQC.png"]
+                            fnames %in% c("sample_distance_metab_heatmap.png",
+                                          "sample_distance_heatmap_noQC.png")]
 
   hm_subsets <- list()
   if (length(dist_with) > 0) {
@@ -929,6 +939,23 @@ truncate_label <- function(x, max_len = 40) {
   long <- !is.na(x) & nchar(x) > max_len
   x[long] <- paste0(substr(x[long], 1, max_len - 1), "\u2026")
   x
+}
+
+# Sample columns of `mat` that DE used: pools, QC and blanks removed by the same
+# rule as the limma fit (filter_to_biological). The sample-level views that
+# follow DE (explorer, DE heatmaps) show only these samples.
+report_bio_samples <- function(mat) {
+  sample_col_b <- metab_cfg$effects$samples %||% "sample_id"
+  if (is.null(mat) || is.null(pre$meta) ||
+      !all(c(cond_col, sample_col_b) %in% colnames(pre$meta))) {
+    return(colnames(mat))
+  }
+  meta_b <- pre$meta[as.character(pre$meta[[sample_col_b]]) %in% colnames(mat), ,
+                     drop = FALSE]
+  bio <- filter_to_biological(mat, meta_b, cond_col, sample_col_b,
+                              label = "metabolomics report",
+                              qc_flag_column = metab_cfg$qc$qc_flag_column)
+  intersect(colnames(mat), as.character(bio$meta[[sample_col_b]]))
 }
 
 # Build norm intensity y-label
@@ -1202,6 +1229,35 @@ if (!is.null(de_contrasts)) {
       cat("\n\n")
     }
 
+    # -- Pathway overlay: color one significant GSEA/QEA pathway's metabolites --
+    if (requireNamespace("plotly", quietly = TRUE) && !is.null(enrichment_res)) {
+      cat("### Pathway overlay\n\n")
+      ov_members <- enrichment_res$pathway_members$members %||% list()
+      ov_pathways <- select_overlay_pathways(
+        gsea_tbl   = enrichment_res$gsea_by_contrast[[ctr_label]]$res$table,
+        qea_tbl    = enrichment_res$qea_by_contrast[[ctr_label]]$res$table,
+        members    = ov_members,
+        fdr_cutoff = 0.05
+      )
+      ov_plot <- plot_volcano_pathway_overlay(
+        ctr_tbl, ov_pathways, ov_members,
+        feature_compound = enrichment_res$pathway_members$feature_compound,
+        p_col = pcol_de, p_cutoff = padj_cut_de, lfc_cutoff = log2_lfc_de,
+        fdr_cutoff = 0.05
+      )
+      if (!is.null(ov_plot)) {
+        print(htmltools::tagList(ov_plot))
+        figure_legend(paste0(
+          "Volcano plot for ", ctr, " with the metabolites of one enriched pathway in red. ",
+          "The selector lists GSEA pathways with FDR < 0.05, ordered by |NES| (highest first), ",
+          "then QEA pathways with FDR < 0.05, ordered by FDR. Red points are measured metabolites ",
+          "whose compound ID belongs to the pathway; for GSEA, hover shows leading-edge membership. ",
+          "When no pathway has FDR < 0.05, the selector has no pathway to choose."
+        ))
+      }
+      cat("\n\n")
+    }
+
     } # end show_de_volcano
 
     # ================================================================
@@ -1427,6 +1483,9 @@ explorer_json_str <- "{}"
 # reflect actual intensity levels rather than z-scored zeros.
 # Fall back to expr_work if expr_log is not available.
 explorer_expr <- pre$expr_log %||% pre$expr_work
+if (!is.null(explorer_expr)) {
+  explorer_expr <- explorer_expr[, report_bio_samples(explorer_expr), drop = FALSE]
+}
 
 if (!is.null(explorer_expr) && !is.null(pre$meta)) {
   # Build metabolite display names
@@ -1635,7 +1694,7 @@ function exportBoxplot(fmt) {
 
 # Top DE Heatmaps {.tabset}
 
-Heatmaps of differentially expressed metabolites (adjusted p-value < `r padj_cut_de`, z-score scaled) with hierarchical clustering.
+Heatmaps of the metabolites selected by adjusted p-value (FDR) in one tab and by raw p-value in the other (cutoff `r padj_cut_de` in any contrast; fold-change cutoff not applied), z-score scaled per metabolite, with hierarchical clustering. Pool, QC and blank samples are not shown.
 
 ```{r de-heatmaps, results='asis', fig.width=10, fig.height=8}
 if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE)) {
@@ -1652,141 +1711,145 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
   if (is.null(hm_out_dir)) hm_out_dir <- file.path(dirname(knitr::current_input(dir = TRUE)), "metabolomics", "Diagnostic_plots")
   dir.create(hm_out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  # Identify DE features for heatmaps using raw P.Value (ignoring FC cutoff).
-  # Heatmaps benefit from showing all significant metabolites; the clustering
-  # pattern reveals biology even for features with modest fold changes.
   sum_df <- de_res$summary_df
-  pval_cols <- grep("^pvalue\\.", colnames(sum_df), value = TRUE)
-  if (length(pval_cols) > 0) {
-    pval_mat <- sum_df[, pval_cols, drop = FALSE]
-    min_pval_per_feat <- apply(pval_mat, 1, function(x) min(x, na.rm = TRUE))
-    de_feats <- sum_df$feature_id[min_pval_per_feat <= padj_cut_de]
-  } else {
-    de_feats <- character(0)
-  }
 
-  # Sort by minimum raw p-value
-  if (length(de_feats) > 0) {
-    feat_pval <- min_pval_per_feat[sum_df$feature_id %in% de_feats]
-    de_feats <- de_feats[order(feat_pval)]
+  # Features for the heatmaps are selected on significance alone (fold-change
+  # cutoff not applied), because clustering can show a shared pattern among
+  # features with modest fold changes. A feature's smallest p across contrasts
+  # decides selection and order; `prefix` picks padj.<contrast> or pvalue.<contrast>.
+  select_hm_features <- function(prefix) {
+    p_cols <- grep(paste0("^", prefix, "\\."), colnames(sum_df), value = TRUE)
+    if (length(p_cols) == 0) return(character(0))
+    min_p <- suppressWarnings(apply(as.matrix(sum_df[, p_cols, drop = FALSE]), 1,
+                                    function(x) min(x, na.rm = TRUE)))
+    keep <- is.finite(min_p) & min_p <= padj_cut_de
+    as.character(sum_df$feature_id[keep][order(min_p[keep])])
   }
 
   # Use expr_log (transform-only) for heatmaps — z-scoring removes scale anyway,
   # but expr_log preserves natural variance structure better than auto-scaled data.
+  # Pools/QC/blanks are dropped: they are not part of any contrast.
   hm_expr <- pre$expr_log %||% pre$expr_work
+  if (!is.null(hm_expr)) hm_expr <- hm_expr[, report_bio_samples(hm_expr), drop = FALSE]
 
-  if (length(de_feats) >= 2 && !is.null(hm_expr)) {
-    # Build annotation
-    anno_df <- NULL
-    if (!is.null(pre$meta) && cond_col %in% colnames(pre$meta)) {
-      sample_col_hm <- metab_cfg$effects$samples %||% "sample_id"
-      anno_df <- data.frame(
-        row.names = pre$meta[[sample_col_hm]],
-        Group = pre$meta[[cond_col]],
-        stringsAsFactors = FALSE
+  # Column annotation, aligned to the retained samples
+  anno_df <- NULL
+  sample_col_hm <- metab_cfg$effects$samples %||% "sample_id"
+  if (!is.null(hm_expr) && !is.null(pre$meta) &&
+      all(c(cond_col, sample_col_hm) %in% colnames(pre$meta))) {
+    meta_hm <- pre$meta[match(colnames(hm_expr), as.character(pre$meta[[sample_col_hm]])), ,
+                        drop = FALSE]
+    anno_df <- data.frame(
+      row.names = colnames(hm_expr),
+      Group = as.character(meta_hm[[cond_col]]),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  # Display names for rows (Name when resolved, else feature_id)
+  hm_row_labels <- function(ids) {
+    vapply(ids, function(fid) {
+      nm <- if (!is.null(name_map_v)) name_map_v[fid] else NA_character_
+      if (!is.na(nm) && nzchar(nm)) nm else fid
+    }, character(1), USE.NAMES = FALSE)
+  }
+
+  # Draw one z-scored heatmap to PNG; returns the file path, or NULL on failure.
+  draw_de_heatmap <- function(ids, file_tag, main, fontsize_row, fontsize_col,
+                              show_rownames, fig_h) {
+    mat_z <- t(scale(t(hm_expr[ids, , drop = FALSE])))
+    mat_z[is.na(mat_z)] <- 0
+    # Truncated so long IUPAC names don't shift the plot
+    rownames(mat_z) <- truncate_label(hm_row_labels(rownames(mat_z)), max_len = 40)
+    hm_file <- file.path(hm_out_dir, paste0(file_tag, ".png"))
+    ok <- tryCatch({
+      p_hm <- pheatmap::pheatmap(
+        mat_z,
+        annotation_col = anno_df,
+        cluster_rows = TRUE,
+        cluster_cols = TRUE,
+        show_rownames = show_rownames,
+        show_colnames = TRUE,
+        fontsize_row = fontsize_row,
+        fontsize_col = fontsize_col,
+        main = main,
+        color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+        border_color = NA,
+        silent = TRUE
       )
-    }
+      ggplot2::ggsave(hm_file, p_hm, width = 10, height = fig_h, dpi = 150)
+      TRUE
+    }, error = function(e) { message("Heatmap ", file_tag, " failed: ", e$message); FALSE })
+    if (ok && file.exists(hm_file)) hm_file else NULL
+  }
 
-    # Build display labels (use Name if available)
-    hm_label_map <- if (!is.null(name_map_v)) name_map_v else stats::setNames(de_feats, de_feats)
+  # One tab per selection; the tab matching the DE gate (de.use_adjusted_pval) first.
+  hm_selections <- list(
+    list(tab = "By FDR", prefix = "padj", tag = "fdr", what = "adjusted p-value (FDR)"),
+    list(tab = "By raw p-value", prefix = "pvalue", tag = "rawp", what = "raw p-value")
+  )
+  if (!use_adj_de) hm_selections <- rev(hm_selections)
 
-    for (n_top in c(10, 25, 50, 100)) {
-      if (n_top > length(de_feats)) next
-      top_ids <- utils::head(de_feats, n_top)
+  if (is.null(hm_expr) || ncol(hm_expr) < 2) {
+    cat("\n*No expression matrix with at least 2 samples — heatmaps not generated.*\n\n")
+  } else {
+    for (sel in hm_selections) {
+      cat(sprintf("\n## %s {.tabset}\n\n", sel$tab))
+      de_feats <- intersect(select_hm_features(sel$prefix), rownames(hm_expr))
 
-      mat_hm <- hm_expr[top_ids, , drop = FALSE]
-      # Z-score scale rows
-      mat_z <- t(scale(t(mat_hm)))
-      mat_z[is.na(mat_z)] <- 0
-
-      # Use display names for rows (truncated so long IUPAC names don't shift the plot)
-      row_labels <- vapply(rownames(mat_z), function(fid) {
-        nm <- hm_label_map[fid]
-        if (!is.na(nm) && nzchar(nm)) nm else fid
-      }, character(1), USE.NAMES = FALSE)
-      rownames(mat_z) <- truncate_label(row_labels, max_len = 40)
-
-      cat(sprintf("\n## Top %d\n\n", n_top))
-
-      # Adjust figure height based on number of features
-      fig_h <- max(6, min(20, 4 + n_top * 0.15))
-      show_rownames <- n_top <= 60
-
-      hm_file <- file.path(hm_out_dir, sprintf("heatmap_top%d_DE.png", n_top))
-      hm_ok <- tryCatch({
-        p_hm <- pheatmap::pheatmap(
-          mat_z,
-          annotation_col = anno_df,
-          cluster_rows = TRUE,
-          cluster_cols = TRUE,
-          show_rownames = show_rownames,
-          show_colnames = TRUE,
-          fontsize_row = max(6, min(10, 160 / n_top)),
-          fontsize_col = 9,
-          main = sprintf("Top %d DE Metabolites (z-score)", n_top),
-          color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
-          border_color = NA,
-          silent = TRUE
-        )
-        ggplot2::ggsave(hm_file, p_hm, width = 10, height = fig_h, dpi = 150)
-        TRUE
-      }, error = function(e) { message("Heatmap top ", n_top, " failed: ", e$message); FALSE })
-      if (hm_ok && file.exists(hm_file)) {
-        cat(sprintf("\n![Top %d DE Heatmap](%s){width=100%%}\n\n", n_top, hm_file))
-        figure_legend(sprintf(
-          "Heatmap of the top %d differentially expressed metabolites (ranked by adjusted p-value). Values are z-score normalized per metabolite. Rows and columns are hierarchically clustered.",
-          n_top
-        ))
-        cat("\n\n")
+      if (length(de_feats) < 2) {
+        cat(sprintf(
+          "\n*Fewer than 2 metabolites with %s <= %s in any contrast — heatmap not generated.*\n\n",
+          sel$what, padj_cut_de))
+        next
       }
-    }
 
-    # All DE heatmap (if reasonable size and different from last top-N)
-    if (length(de_feats) >= 2 && length(de_feats) <= 500) {
+      for (n_top in c(10, 25, 50, 100)) {
+        if (n_top > length(de_feats)) next
+        cat(sprintf("\n### Top %d\n\n", n_top))
+        hm_file <- draw_de_heatmap(
+          utils::head(de_feats, n_top),
+          file_tag      = sprintf("heatmap_top%d_DE_%s", n_top, sel$tag),
+          main          = sprintf("Top %d metabolites by %s (z-score)", n_top, sel$what),
+          fontsize_row  = max(6, min(10, 160 / n_top)),
+          fontsize_col  = 9,
+          show_rownames = n_top <= 60,
+          fig_h         = max(6, min(20, 4 + n_top * 0.15))
+        )
+        if (!is.null(hm_file)) {
+          cat(sprintf("\n![Top %d metabolites by %s](%s){width=100%%}\n\n",
+                      n_top, sel$what, hm_file))
+          figure_legend(sprintf(
+            "Heatmap of the %d metabolites with the smallest %s across contrasts (cutoff %s; fold-change cutoff not applied). Values are z-scores per metabolite; rows and columns are hierarchically clustered. Pool, QC and blank samples are not shown.",
+            n_top, sel$what, padj_cut_de
+          ))
+          cat("\n\n")
+        }
+      }
+
       n_all <- length(de_feats)
-      mat_all <- hm_expr[de_feats, , drop = FALSE]
-      mat_z_all <- t(scale(t(mat_all)))
-      mat_z_all[is.na(mat_z_all)] <- 0
-
-      row_labels_all <- vapply(rownames(mat_z_all), function(fid) {
-        nm <- hm_label_map[fid]
-        if (!is.na(nm) && nzchar(nm)) nm else fid
-      }, character(1), USE.NAMES = FALSE)
-      rownames(mat_z_all) <- truncate_label(row_labels_all, max_len = 40)
-
-      cat(sprintf("\n## All DE (%d)\n\n", n_all))
-
-      fig_h_all <- max(8, min(30, 4 + n_all * 0.06))
-      hm_all_file <- file.path(hm_out_dir, sprintf("heatmap_all%d_DE.png", n_all))
-      hm_all_ok <- tryCatch({
-        p_hm_all <- pheatmap::pheatmap(
-          mat_z_all,
-          annotation_col = anno_df,
-          cluster_rows = TRUE,
-          cluster_cols = TRUE,
+      if (n_all <= 500) {
+        cat(sprintf("\n### All (%d)\n\n", n_all))
+        hm_all_file <- draw_de_heatmap(
+          de_feats,
+          file_tag      = sprintf("heatmap_all%d_DE_%s", n_all, sel$tag),
+          main          = sprintf("All %d metabolites by %s (z-score)", n_all, sel$what),
+          fontsize_row  = max(4, min(8, 100 / n_all)),
+          fontsize_col  = 8,
           show_rownames = n_all <= 60,
-          show_colnames = TRUE,
-          fontsize_row = max(4, min(8, 100 / n_all)),
-          fontsize_col = 8,
-          main = sprintf("All %d DE Metabolites (z-score)", n_all),
-          color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
-          border_color = NA,
-          silent = TRUE
+          fig_h         = max(8, min(30, 4 + n_all * 0.06))
         )
-        ggplot2::ggsave(hm_all_file, p_hm_all, width = 10, height = fig_h_all, dpi = 150)
-        TRUE
-      }, error = function(e) { message("Heatmap all DE failed: ", e$message); FALSE })
-      if (hm_all_ok && file.exists(hm_all_file)) {
-        cat(sprintf("\n![All DE Heatmap](%s){width=100%%}\n\n", hm_all_file))
+        if (!is.null(hm_all_file)) {
+          cat(sprintf("\n![All metabolites by %s](%s){width=100%%}\n\n",
+                      sel$what, hm_all_file))
+          figure_legend(sprintf(
+            "Heatmap of all %d metabolites with %s <= %s in any contrast (fold-change cutoff not applied). Values are z-scores per metabolite. Pool, QC and blank samples are not shown.",
+            n_all, sel$what, padj_cut_de
+          ))
+          cat("\n\n")
+        }
       }
-      figure_legend(sprintf(
-        "Heatmap of all %d differentially expressed metabolites. Values are z-score normalized per metabolite.",
-        n_all
-      ))
-      cat("\n\n")
     }
-  } else if (length(de_feats) < 2) {
-    cat("\n*Fewer than 2 DE metabolites — heatmap not generated.*\n\n")
   }
 }
 ```
@@ -1961,21 +2024,6 @@ if (!is.null(plsda_res$vip_df)) {
 
 ## QEA {.tabset}
 
-### Lollipop Plot
-
-```{r qea-lollipop, fig.width=12, fig.height=8, results='asis'}
-qeabc <- enrichment_res$qea_by_contrast
-if (is.null(qeabc) || length(qeabc) == 0) {
-  if (!is.null(enrichment_res$plots$qea_lollipop)) safe_print_plot(enrichment_res$plots$qea_lollipop)
-} else {
-  for (ct in names(qeabc)) {
-    p <- qeabc[[ct]]$plots$lollipop
-    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
-  }
-}
-figure_legend("Quantitative Enrichment Analysis (QEA) lollipop plots, one per contrast (two-group comparison each). Bar length represents statistical significance.")
-```
-
 ### Barplot
 
 ```{r qea-barplot, fig.width=12, fig.height=8, results='asis'}
@@ -1988,7 +2036,7 @@ if (is.null(qeabc) || length(qeabc) == 0) {
     if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
   }
 }
-figure_legend("QEA barplots, one per contrast, ranked by significance.")
+figure_legend("QEA barplots, one per contrast, ranked by significance. Bars show -log10(FDR); the dashed red line marks FDR = 0.05.")
 ```
 
 ### Results Table
@@ -2015,21 +2063,6 @@ if (!is.null(qea_tbl)) {
 
 ## ssGSEA {.tabset}
 
-### Lollipop Plot
-
-```{r ssgsea-lollipop, fig.width=12, fig.height=8, results='asis'}
-ssbc <- enrichment_res$ssgsea_by_contrast
-if (is.null(ssbc) || length(ssbc) == 0) {
-  if (!is.null(enrichment_res$plots$ssgsea_lollipop)) safe_print_plot(enrichment_res$plots$ssgsea_lollipop)
-} else {
-  for (ct in names(ssbc)) {
-    p <- ssbc[[ct]]$plots$lollipop
-    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
-  }
-}
-figure_legend("ssGSEA lollipop plots, one per contrast (two-group comparison each), based on single-sample GSEA scores.")
-```
-
 ### Barplot
 
 ```{r ssgsea-barplot, fig.width=12, fig.height=8, results='asis'}
@@ -2042,7 +2075,7 @@ if (is.null(ssbc) || length(ssbc) == 0) {
     if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
   }
 }
-figure_legend("ssGSEA barplots, one per contrast, ranked by significance.")
+figure_legend("ssGSEA barplots, one per contrast, ranked by significance. Bars show -log10(FDR); the dashed red line marks FDR = 0.05.")
 ```
 
 ### Boxplots (static)
@@ -2197,19 +2230,19 @@ if (!is.null(ssgsea_tbl_all)) {
 
 ## ORA {.tabset}
 
-### Lollipop Plot
+### Barplot
 
-```{r ora-lollipop, fig.width=12, fig.height=8, results='asis'}
+```{r ora-barplot, fig.width=12, fig.height=8, results='asis'}
 orabc <- enrichment_res$ora_by_contrast
 if (is.null(orabc) || length(orabc) == 0) {
-  if (!is.null(enrichment_res$plots$ora_lollipop)) safe_print_plot(enrichment_res$plots$ora_lollipop)
+  if (!is.null(enrichment_res$plots$ora_barplot)) safe_print_plot(enrichment_res$plots$ora_barplot)
 } else {
   for (ct in names(orabc)) {
-    p <- orabc[[ct]]$plots$lollipop
+    p <- orabc[[ct]]$plots$barplot
     if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
   }
 }
-figure_legend("Over-Representation Analysis (ORA) lollipop plots, one per contrast: pathways significantly enriched among DE metabolites (Fisher's exact test).")
+figure_legend("Over-Representation Analysis (ORA) barplots, one per contrast: pathways enriched among DE metabolites (Fisher's exact test). Bars show -log10(FDR); the dashed red line marks FDR = 0.05.")
 ```
 
 ### Dot Plot
@@ -2251,21 +2284,6 @@ if (!is.null(ora_tbl)) {
 
 ## GSEA {.tabset}
 
-### Lollipop Plot
-
-```{r gsea-lollipop, fig.width=12, fig.height=8, results='asis'}
-gsbc <- enrichment_res$gsea_by_contrast
-if (is.null(gsbc) || length(gsbc) == 0) {
-  if (!is.null(enrichment_res$plots$gsea_lollipop)) safe_print_plot(enrichment_res$plots$gsea_lollipop)
-} else {
-  for (ct in names(gsbc)) {
-    p <- gsbc[[ct]]$plots$lollipop
-    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
-  }
-}
-figure_legend("GSEA lollipop plots, one per contrast: pathways ranked by Normalized Enrichment Score (NES). Positive NES = up-regulation, negative = down-regulation.")
-```
-
 ### NES Barplot
 
 ```{r gsea-nes-barplot, fig.width=12, fig.height=8, results='asis'}
@@ -2278,7 +2296,7 @@ if (is.null(gsbc) || length(gsbc) == 0) {
     if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
   }
 }
-figure_legend("GSEA Normalized Enrichment Score (NES) barplots, one per contrast. Metabolites were pre-ranked by log2 fold change.")
+figure_legend("GSEA Normalized Enrichment Score (NES) barplots, one per contrast. Metabolites were pre-ranked by log2 fold change. Dashed red lines mark NES = -2 and 2; the axis spans -3 to 3, or the largest |NES| plus 0.5 when that is wider.")
 ```
 
 ### Results Table
