@@ -30,7 +30,8 @@ build_pathway_feature_members <- function(pre, config) {
     empty   <- list(members = list(), feature_compound = character(0))
     enr_cfg <- config$modes$metabolomics$enrichment %||% list()
 
-    gmt_files <- resolve_input_path(config, enr_cfg$gmt_file)
+    # as.character(): no gmt_file resolves to NULL, and file.exists(NULL) errors.
+    gmt_files <- as.character(resolve_input_path(config, enr_cfg$gmt_file))
     gmt_files <- gmt_files[!is.na(gmt_files) & nzchar(gmt_files) & file.exists(gmt_files)]
     if (length(gmt_files) == 0 || is.null(pre$row_data) || is.null(pre$expr_raw)) {
         return(empty)
