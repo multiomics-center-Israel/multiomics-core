@@ -376,7 +376,9 @@ gene_loadings_gsea <- function(values, omics_type, harmonization_res, config,
                                                    stat = unname(ranks),
                                                    stringsAsFactors = FALSE)),
             gene_sets = gene_sets, method = "fgsea",
-            min_size = min_size, max_size = max_size, seed = seed)$loadings
+            min_size = min_size, max_size = max_size, seed = seed,
+            # The loading is the ranking here, carried in `stat`.
+            ranking = "stat")$loadings
         if (length(tabs) == 0) return(NULL)
 
         out <- .rbind_fill(lapply(tabs, function(df) {
@@ -442,7 +444,9 @@ metabolite_loadings_gsea <- function(values, harmonization_res, cache_dir,
     if (is.null(cpd_pathways)) cpd_pathways <- get_kegg_compound_pathways(cache_dir)
     run_compound_gsea(de_mapped, cache_dir = cache_dir, min_gs = min_size,
                       max_gs = max_size, seed = seed,
-                      exclude_classes = exclude_classes, cpd_pathways = cpd_pathways)
+                      exclude_classes = exclude_classes, cpd_pathways = cpd_pathways,
+                      # The loading is the ranking here, carried in `statistic`.
+                      ranking = "stat")
 }
 
 

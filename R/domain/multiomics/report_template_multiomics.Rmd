@@ -970,8 +970,7 @@ figure_legend(paste(
     "ORA asks whether a pathway holds many significant metabolites; GSEA asks",
     "whether its metabolites sit high or low in the ranked list, and NES gives",
     "that direction (positive: concentrated at the top for the contrast).",
-    "Ranking: the moderated statistic where available, else sign(log2FC) x",
-    "-log10(p). Adjusted p is BH over the pathways scored here, so it is not",
+    "Ranking: log2 fold change. Adjusted p is BH over the pathways scored here, so it is not",
     "comparable with the ORA table's. The strongest 30 rows are shown; all are in",
     "metabolomics_compound_gsea.csv."))
 render_commentary("compound_gsea")

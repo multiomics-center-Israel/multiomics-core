@@ -44,13 +44,14 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
     lfc_vals  <- resolve_log2fc(summary_df, cn)
 
     # Compute stat based on configured GSEA ranking method
-    ranking <- config$modes$proteomics$pathway$gsea_ranking %||% "stat"
+    # Default "lfc": the pipeline ranks fgsea by log2 fold change.
+    ranking <- config$modes$proteomics$pathway$gsea_ranking %||% "lfc"
     if (identical(ranking, "abs_lfc")) {
         stat_vals <- abs(lfc_vals)
     } else if (identical(ranking, "lfc")) {
         stat_vals <- lfc_vals
     } else {
-        # Default "stat": sign(log2FC) * -log10(pvalue).
+        # "stat": sign(log2FC) * -log10(pvalue).
         # linearFC is stored via signif(x, 3), so any ratio in [0.995, 1.005)
         # rounds to exactly 1, giving sign() == 0 and zeroing the rank whatever
         # the p-value. Take the direction from the unrounded log2FC when it is
@@ -273,7 +274,9 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         max_size           = max_size,
         seed               = config$params$seed %||% 1L,
         p_cutoff           = de_cfg$p_cutoff %||% 0.05,
-        lfc_cutoff         = log2(de_cfg$linear_fc_cutoff %||% 1.5)
+        lfc_cutoff         = log2(de_cfg$linear_fc_cutoff %||% 1.5),
+        # `stat` already holds the value pathway$gsea_ranking chose above.
+        ranking            = "stat"
     )
 
     # Save results and plots

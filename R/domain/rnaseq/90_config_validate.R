@@ -89,6 +89,8 @@ validate_rna_config <- function(cfg) {
         if (isTRUE(p$enabled)) {
             assert_one_of(p$method, "pathway$method",
                           c("fgsea", "ora", "gsea", "both"), allow_null = TRUE)
+            assert_one_of(p$gsea_ranking, "pathway$gsea_ranking",
+                          c("lfc", "stat"), allow_null = TRUE)
             if (!is.null(p$min_size) && !is.null(p$max_size)) {
                 assert_scalar_num(p$min_size, "pathway$min_size", min_val = 1)
                 assert_scalar_num(p$max_size, "pathway$max_size", min_val = 1)

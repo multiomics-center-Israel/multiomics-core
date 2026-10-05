@@ -833,6 +833,16 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 
 #' Build the ranked gene vector fgsea scores one contrast on
 #'
+#' The pipeline ranks fgsea by log2 fold change (\code{ranking = "lfc"}, the
+#' default): \code{log2FoldChange} as it is, nothing else consulted. A feature
+#' without a finite log2FC has no rank and is dropped.
+#'
+#' \code{ranking = "stat"} is kept for callers whose table carries the value to
+#' rank in `stat` -- the DIABLO/MOFA loadings, and proteomics, which fills
+#' `stat` from its own \code{pathway$gsea_ranking} setting -- and for a project
+#' that asks for the Wald/t statistic. The rest of this note is about that
+#' branch.
+#'
 #' The ranking source is chosen for the whole table, on usable values rather
 #' than on column presence. \code{load_precomputed_rna_de()} always emits a
 #' `stat` column and fills it with NA when the source export carries no Wald or
@@ -851,12 +861,24 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #' usable numeric ranking source takes the fallback instead of erroring. No
 #' coercion is attempted: every producer in this pipeline already emits numeric.
 #'
-#' @param res One contrast's DE table. Needs `FeatureID`, and either a usable
-#'   `stat` column or `log2FoldChange` and `pvalue`.
+#' @param res One contrast's DE table. Needs `FeatureID` and `log2FoldChange`;
+#'   for \code{ranking = "stat"}, either a usable `stat` column or
+#'   `log2FoldChange` and `pvalue`.
+#' @param ranking \code{"lfc"} (default) or \code{"stat"}.
 #' @return Named numeric vector of finite ranks, sorted decreasing. Empty when
-#'   neither source yields a finite value.
+#'   the chosen source yields no finite value.
 #' @keywords internal
-.build_fgsea_ranks <- function(res) {
+.build_fgsea_ranks <- function(res, ranking = c("lfc", "stat")) {
+    ranking <- match.arg(ranking)
+
+    if (identical(ranking, "lfc")) {
+        lfc <- if ("log2FoldChange" %in% colnames(res)) res$log2FoldChange else NULL
+        if (!is.numeric(lfc)) return(setNames(numeric(0), character(0)))
+        ranks <- setNames(lfc, res$FeatureID)
+        ranks <- ranks[is.finite(ranks)]
+        return(sort(ranks, decreasing = TRUE))
+    }
+
     stat_usable <- "stat" %in% colnames(res) &&
         is.numeric(res$stat) &&
         any(is.finite(res$stat))
@@ -889,6 +911,8 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #' @param seed Integer seed for fgsea's stochastic multilevel step.
 #' @param p_cutoff Adjusted-p cutoff defining a significant feature for ORA.
 #' @param lfc_cutoff Absolute log2 fold-change cutoff for ORA.
+#' @param ranking fgsea ranking source, passed to \code{.build_fgsea_ranks()}:
+#'   \code{"lfc"} (default, log2FoldChange) or \code{"stat"} (the `stat` column).
 #' @return Named list (by contrast) of named lists (by db+method) of result data frames
 #' @export
 run_pathway_analysis <- function(de_tables,
@@ -899,7 +923,8 @@ run_pathway_analysis <- function(de_tables,
                                   max_size = 500,
                                   seed = 1L,
                                   p_cutoff = 0.05,
-                                  lfc_cutoff = log2(1.5)) {
+                                  lfc_cutoff = log2(1.5),
+                                  ranking = "lfc") {
 
     if (length(gene_sets) == 0) {
         message("No gene sets available. Skipping pathway analysis.")
@@ -925,10 +950,8 @@ run_pathway_analysis <- function(de_tables,
                 # ---- fGSEA ----
                 if (method %in% c("fgsea", "both")) {
 
-                    # Prefer the Wald statistic, fall back to sign(lfc)*-log10(p);
-                    # see .build_fgsea_ranks() for why the choice is made on
-                    # values rather than on the column being present.
-                    ranks <- .build_fgsea_ranks(res)
+                    # log2FC by default; see .build_fgsea_ranks() for "stat".
+                    ranks <- .build_fgsea_ranks(res, ranking = ranking)
 
                     # fgseaMultilevel is stochastic: without a seed, terms near
                     # the padj threshold flip between otherwise identical runs.

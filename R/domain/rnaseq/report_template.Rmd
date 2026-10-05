@@ -2752,7 +2752,7 @@ if (file.exists(anno_file)) {
 }
 ```
 
-**Method:** Fast Gene Set Enrichment Analysis (fGSEA) ranks all genes by their differential expression statistic and tests whether genes in each pathway are enriched at the top or bottom of the ranked list.
+**Method:** Fast Gene Set Enrichment Analysis (fGSEA) ranks all genes by their log2 fold change (the default; `pathway$gsea_ranking: "stat"` ranks by the Wald statistic instead) and tests whether genes in each pathway are enriched at the top or bottom of the ranked list.
 
 **Key metrics:**
 
