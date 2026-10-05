@@ -160,6 +160,19 @@ test_that("F3 the sheet carries the numbers the files actually contain", {
                  "^5 to 5")
 })
 
+test_that("F3 the significance rule follows de_uses_adjusted_p(), not use_adj", {
+    # The RNA DE step gates on padj whatever use_adj says (#274), and the sheet
+    # must describe what ran. If that contract changes, this should fail too.
+    root <- write_run(file.path(withr::local_tempdir(), "rna"), "contrast")
+    cfg <- fixture_config()
+    cfg$modes$rna$de$use_adj <- FALSE
+    s <- suppressWarnings(build_rnaseq_fact_sheet(root, cfg,
+                                                  pre = list(meta = fixture_meta()),
+                                                  inputs = list(contrasts = fixture_contrasts())))
+    expect_equal(s$value[s$claim == "significance rule"],
+                 "adjusted p <= 0.05 and |linear fold change| >= 1.5")
+})
+
 test_that("F3 PCA and correlation rows are recomputed, and say so", {
     root <- write_run(file.path(withr::local_tempdir(), "rna"), "contrast")
     s <- build_rnaseq_fact_sheet(root, fixture_config(),

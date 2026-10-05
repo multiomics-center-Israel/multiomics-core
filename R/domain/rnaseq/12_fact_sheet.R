@@ -100,8 +100,12 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
         fact("genes receiving an adjusted p-value",
              if (!is.null(final)) sum(!is.na(.fact_col(final, "padj"))) else NULL,
              "Datasets/final_results.tsv"),
+        # Which p-value gated the calls is resolved once, in de_uses_adjusted_p(),
+        # so the sheet tracks the DE step's contract instead of restating it.
         fact("significance rule",
-             sprintf("adjusted p <= %s and |linear fold change| >= %s", p_cut, fc_cut),
+             sprintf("%s <= %s and |linear fold change| >= %s",
+                     if (de_uses_adjusted_p(config$modes$rna$de, "rna")) "adjusted p" else "raw p",
+                     p_cut, fc_cut),
              "../execution_info/config_used.yaml"),
         fact("DESeq2 mode", config$modes$rna$de$deseq_mode %||% "default",
              "../execution_info/config_used.yaml")
@@ -218,8 +222,10 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
     n_genes_all <- nrow(m)
     m <- m[is.finite(rowSums(m)), , drop = FALSE]
     if (nrow(m) < 2) return(NULL)
+    # These values are computed here, not read from the file, so the source must
+    # say so either way; a bare file name would claim the file states them.
     src <- if (nrow(m) == n_genes_all) {
-        src
+        paste0(src, " (recomputed)")
     } else {
         sprintf("%s (recomputed on the %d of %d genes with no missing values)",
                 src, nrow(m), n_genes_all)
