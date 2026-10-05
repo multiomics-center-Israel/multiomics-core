@@ -1,8 +1,10 @@
 # Which statistic fgsea is handed, and what happens to ranks it cannot use.
 #
-# .build_fgsea_ranks() picks one ranking source for the whole contrast table:
-# the Wald/t statistic where the table carries usable values, otherwise
-# sign(log2FoldChange) * -log10(pvalue + 1e-300).
+# .build_fgsea_ranks() ranks by log2FoldChange by default (ranking = "lfc"),
+# the pipeline's rule for fgsea; the last tests in this file cover it. With
+# ranking = "stat" it picks one source for the whole contrast table: the
+# Wald/t statistic where the table carries usable values, otherwise
+# sign(log2FoldChange) * -log10(pvalue + 1e-300). Most tests here cover that.
 #
 # The bug this covers was silent. load_precomputed_rna_de() always emits a
 # `stat` column and fills it with NA when the source export carries no
@@ -38,7 +40,7 @@ FALLBACK_RANKS <- c(g1 = 2, g2 = -2)
 test_that("a usable statistic is the ranking source", {
     res <- rank_fixture(stat = c(3.2, -1.7))
 
-    ranks <- .build_fgsea_ranks(res)
+    ranks <- .build_fgsea_ranks(res, ranking = "stat")
 
     expect_equal(ranks, c(g1 = 3.2, g2 = -1.7))
     # Not the fallback, which this fixture would have made 2 / -2.
@@ -49,7 +51,7 @@ test_that("a stat column of all NA falls back instead of ranking on nothing", {
     # The live failure: the column is present, so a presence-only gate took it.
     res <- rank_fixture(stat = c(NA_real_, NA_real_))
 
-    ranks <- .build_fgsea_ranks(res)
+    ranks <- .build_fgsea_ranks(res, ranking = "stat")
 
     expect_equal(ranks, FALLBACK_RANKS)
 })
@@ -59,7 +61,7 @@ test_that("an all-NA stat never yields an empty ranking while the fallback is us
     # reached the log: an empty vector into fgsea, reported as no overlap.
     res <- rank_fixture(stat = rep(NA_real_, 2))
 
-    ranks <- .build_fgsea_ranks(res)
+    ranks <- .build_fgsea_ranks(res, ranking = "stat")
 
     expect_gt(length(ranks), 0)
     expect_true(all(is.finite(ranks)))
@@ -73,7 +75,7 @@ test_that("a partly usable statistic keeps the statistic branch and drops the re
                         pvalue = c(0.01, 0.01, 0.01),
                         ids = c("g1", "g2", "g3"))
 
-    ranks <- .build_fgsea_ranks(res)
+    ranks <- .build_fgsea_ranks(res, ranking = "stat")
 
     expect_equal(ranks, c(g1 = 3.2, g3 = -1.7))
     # g2 is absent rather than carrying the fallback's value for that row.
@@ -83,7 +85,7 @@ test_that("a partly usable statistic keeps the statistic branch and drops the re
 test_that("no stat column at all leaves the fallback as it was", {
     res <- rank_fixture(stat = NULL)
 
-    expect_equal(.build_fgsea_ranks(res), FALLBACK_RANKS)
+    expect_equal(.build_fgsea_ranks(res, ranking = "stat"), FALLBACK_RANKS)
 })
 
 test_that("a non-numeric stat is unusable, and is not an error", {
@@ -93,10 +95,10 @@ test_that("a non-numeric stat is unusable, and is not an error", {
     res_chr <- rank_fixture(stat = c("3.2", "-1.7"))
     res_fct <- rank_fixture(stat = factor(c("a", "b")))
 
-    expect_no_error(ranks_chr <- .build_fgsea_ranks(res_chr))
+    expect_no_error(ranks_chr <- .build_fgsea_ranks(res_chr, ranking = "stat"))
     expect_equal(ranks_chr, FALLBACK_RANKS)
 
-    expect_no_error(ranks_fct <- .build_fgsea_ranks(res_fct))
+    expect_no_error(ranks_fct <- .build_fgsea_ranks(res_fct, ranking = "stat"))
     expect_equal(ranks_fct, FALLBACK_RANKS)
 })
 
@@ -107,7 +109,7 @@ test_that("Inf, -Inf and NaN never reach fgsea", {
                         log2FC = rep(1, 5), pvalue = rep(0.01, 5),
                         ids = paste0("g", 1:5))
 
-    ranks <- .build_fgsea_ranks(res)
+    ranks <- .build_fgsea_ranks(res, ranking = "stat")
 
     expect_equal(ranks, c(g5 = 2, g2 = 1))
     expect_true(all(is.finite(ranks)))
@@ -121,7 +123,7 @@ test_that("the fallback drops its own unusable rows too", {
                         pvalue = c(0.01, 0.01, NA),
                         ids = c("g1", "g2", "g3"))
 
-    ranks <- .build_fgsea_ranks(res)
+    ranks <- .build_fgsea_ranks(res, ranking = "stat")
 
     expect_equal(ranks, c(g1 = 2))
 })
@@ -130,8 +132,37 @@ test_that("ranks come back sorted strongest-first", {
     res <- rank_fixture(stat = c(-1, 5, 2), log2FC = rep(1, 3),
                         pvalue = rep(0.01, 3), ids = c("g1", "g2", "g3"))
 
-    ranks <- .build_fgsea_ranks(res)
+    ranks <- .build_fgsea_ranks(res, ranking = "stat")
 
     expect_equal(ranks, c(g2 = 5, g3 = 2, g1 = -1))
     expect_false(is.unsorted(rev(ranks)))
+})
+
+
+# ---- default: log2FC --------------------------------------------------------
+
+test_that("the default ranks by log2FC and ignores stat and p-value", {
+    res <- rank_fixture(stat = c(3.2, -1.7), log2FC = c(0.8, -1.5),
+                        pvalue = c(1e-6, 0.4))
+
+    expect_equal(.build_fgsea_ranks(res), c(g1 = 0.8, g2 = -1.5))
+})
+
+test_that("a feature without a finite log2FC has no rank under the default", {
+    res <- rank_fixture(stat = c(3.2, 1, -1.7), log2FC = c(1, NA, Inf),
+                        pvalue = rep(0.01, 3), ids = c("g1", "g2", "g3"))
+
+    expect_equal(.build_fgsea_ranks(res), c(g1 = 1))
+})
+
+test_that("a table without log2FoldChange gives an empty ranking under the default", {
+    res <- data.frame(FeatureID = c("g1", "g2"), stat = c(1, -1))
+
+    expect_length(.build_fgsea_ranks(res), 0L)
+    # The loadings pass their values in `stat` and ask for it by name.
+    expect_equal(.build_fgsea_ranks(res, ranking = "stat"), c(g1 = 1, g2 = -1))
+})
+
+test_that("an unknown ranking is an error", {
+    expect_error(.build_fgsea_ranks(rank_fixture(), ranking = "pval"))
 })

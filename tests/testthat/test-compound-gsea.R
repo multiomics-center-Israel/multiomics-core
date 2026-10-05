@@ -100,7 +100,7 @@ test_that("a Wilcoxon DE result ranks on the signed fallback", {
     de_mapped <- std$B_vs_A
     de_mapped$KEGG_ID <- c("C00001", "C00002", "C00003")
 
-    ranks <- rank_compounds_for_gsea(de_mapped)
+    ranks <- rank_compounds_for_gsea(de_mapped, ranking = "stat")
 
     # Signed by the fold change, not ordered by W: M2 fell, so its compound must
     # rank negative even though its W is the smallest of the three.
@@ -148,7 +148,7 @@ test_that("the moderated statistic is preferred when it carries usable values", 
         stringsAsFactors = FALSE
     )
 
-    ranks <- rank_compounds_for_gsea(de)
+    ranks <- rank_compounds_for_gsea(de, ranking = "stat")
 
     expect_identical(names(ranks), c("C00001", "C00002"))
     expect_equal(unname(ranks), c(3, -3))
@@ -166,7 +166,7 @@ test_that("the fallback is used when the statistic column has no finite values",
         stringsAsFactors = FALSE
     )
 
-    ranks <- rank_compounds_for_gsea(de)
+    ranks <- rank_compounds_for_gsea(de, ranking = "stat")
 
     expect_equal(unname(ranks), c(2, -2))
 })
@@ -176,7 +176,7 @@ test_that("the fallback is used when there is no statistic column at all", {
                      log2fc = c(1, -1), pvalue = c(0.01, 0.01),
                      stringsAsFactors = FALSE)
 
-    expect_equal(unname(rank_compounds_for_gsea(de)), c(2, -2))
+    expect_equal(unname(rank_compounds_for_gsea(de, ranking = "stat")), c(2, -2))
 })
 
 test_that("a p-value that underflowed to zero ranks high rather than infinite", {
@@ -184,7 +184,7 @@ test_that("a p-value that underflowed to zero ranks high rather than infinite", 
                      log2fc = c(1, 1), pvalue = c(0, 0.01),
                      stringsAsFactors = FALSE)
 
-    ranks <- rank_compounds_for_gsea(de)
+    ranks <- rank_compounds_for_gsea(de, ranking = "stat")
 
     expect_true(all(is.finite(ranks)))
     expect_gt(ranks[["C00001"]], ranks[["C00002"]])
@@ -195,7 +195,7 @@ test_that("a zero fold change ranks neutrally instead of being dropped", {
                      log2fc = c(1, 0, -1), pvalue = c(0.01, 0.01, 0.01),
                      stringsAsFactors = FALSE)
 
-    ranks <- rank_compounds_for_gsea(de)
+    ranks <- rank_compounds_for_gsea(de, ranking = "stat")
 
     expect_length(ranks, 3)
     expect_equal(unname(ranks[["C00002"]]), 0)
@@ -209,14 +209,14 @@ test_that("non-finite ranks and unusable ids are dropped", {
         stringsAsFactors = FALSE
     )
 
-    expect_identical(names(rank_compounds_for_gsea(de)), "C00001")
+    expect_identical(names(rank_compounds_for_gsea(de, ranking = "stat")), "C00001")
 })
 
 test_that("nothing rankable gives an empty vector rather than an error", {
-    expect_length(rank_compounds_for_gsea(data.frame()), 0L)
-    expect_length(rank_compounds_for_gsea(NULL), 0L)
+    expect_length(rank_compounds_for_gsea(data.frame(), ranking = "stat"), 0L)
+    expect_length(rank_compounds_for_gsea(NULL, ranking = "stat"), 0L)
     expect_length(rank_compounds_for_gsea(
-        data.frame(log2fc = 1, pvalue = 0.01)), 0L)   # no KEGG_ID
+        data.frame(log2fc = 1, pvalue = 0.01), ranking = "stat"), 0L)   # no KEGG_ID
 })
 
 
@@ -233,7 +233,7 @@ test_that("one compound appears once, carrying its strongest rank", {
         stringsAsFactors = FALSE
     )
 
-    ranks <- rank_compounds_for_gsea(de)
+    ranks <- rank_compounds_for_gsea(de, ranking = "stat")
 
     expect_length(ranks, 2L)
     # -4.0 beats 1.5 on absolute rank, and keeps its sign.
@@ -249,8 +249,8 @@ test_that("the collapse does not depend on the row order it arrives in", {
         stringsAsFactors = FALSE
     )
 
-    forwards  <- rank_compounds_for_gsea(de)
-    backwards <- rank_compounds_for_gsea(de[rev(seq_len(nrow(de))), , drop = FALSE])
+    forwards  <- rank_compounds_for_gsea(de, ranking = "stat")
+    backwards <- rank_compounds_for_gsea(de[rev(seq_len(nrow(de))), , drop = FALSE], ranking = "stat")
 
     expect_identical(forwards, backwards)
 })
@@ -269,8 +269,8 @@ test_that("two rows of ONE compound tying on magnitude resolve the same either w
         stringsAsFactors = FALSE
     )
 
-    forwards  <- rank_compounds_for_gsea(de)
-    backwards <- rank_compounds_for_gsea(de[c(2, 1), , drop = FALSE])
+    forwards  <- rank_compounds_for_gsea(de, ranking = "stat")
+    backwards <- rank_compounds_for_gsea(de[c(2, 1), , drop = FALSE], ranking = "stat")
 
     expect_length(forwards, 1L)
     expect_identical(forwards, backwards)
@@ -285,8 +285,8 @@ test_that("compounds tying on absolute rank resolve deterministically", {
         stringsAsFactors = FALSE
     )
 
-    expect_identical(rank_compounds_for_gsea(de),
-                     rank_compounds_for_gsea(de[c(2, 1), , drop = FALSE]))
+    expect_identical(rank_compounds_for_gsea(de, ranking = "stat"),
+                     rank_compounds_for_gsea(de[c(2, 1), , drop = FALSE], ranking = "stat"))
 })
 
 
@@ -815,4 +815,32 @@ test_that("the export cleanup precedes the disabled-enrichment guard", {
     expect_gt(clear_at, 0)
     expect_gt(guard_at, 0)
     expect_lt(clear_at, guard_at)
+})
+
+
+# ---- default ranking: log2FC ------------------------------------------------
+
+test_that("compounds rank by log2FC by default, not by the statistic", {
+    de <- data.frame(KEGG_ID = c("C00001", "C00002"),
+                     statistic = c(3, -3), log2fc = c(-0.5, 1.25),
+                     pvalue = c(0.001, 0.4), stringsAsFactors = FALSE)
+
+    expect_equal(rank_compounds_for_gsea(de), c(C00002 = 1.25, C00001 = -0.5))
+})
+
+test_that("the log2FC default keeps the strongest row of a duplicated compound", {
+    de <- data.frame(KEGG_ID = c("C00001", "C00001", "C00002"),
+                     log2fc = c(0.5, -2, 1), stringsAsFactors = FALSE)
+
+    ranks <- rank_compounds_for_gsea(de)
+
+    expect_length(ranks, 2L)
+    expect_equal(unname(ranks[["C00001"]]), -2)
+})
+
+test_that("the log2FC default needs no p-value column", {
+    de <- data.frame(KEGG_ID = c("C00001", "C00002"), log2fc = c(1, -1),
+                     stringsAsFactors = FALSE)
+
+    expect_equal(unname(rank_compounds_for_gsea(de)), c(1, -1))
 })

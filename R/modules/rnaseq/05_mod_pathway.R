@@ -238,7 +238,9 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         max_size           = pw_max,
         seed               = config$params$seed %||% 1L,
         p_cutoff           = rna_de_cfg$p_cutoff %||% rna_de_cfg$padj_cutoff %||% 0.05,
-        lfc_cutoff         = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)
+        lfc_cutoff         = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5),
+        # log2FC by default; "stat" ranks by the DESeq2 Wald statistic.
+        ranking            = pw_cfg$gsea_ranking %||% "lfc"
     )
 
     # ------------------------------------------------------------------

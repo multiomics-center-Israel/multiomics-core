@@ -1364,19 +1364,21 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
 
 #' Rank mapped metabolites for compound GSEA
 #'
-#' Two statistics, in order, and no third: the moderated statistic where the DE
-#' table carries usable values, and \code{sign(log2fc) * -log10(pvalue)}
-#' otherwise.
+#' By log2 fold change (\code{ranking = "lfc"}, the default): the pipeline ranks
+#' fgsea by log2FC. A row without a finite log2FC has no rank and is dropped.
 #'
-#' The choice is made on the VALUES, not on the column. The standardised
+#' \code{ranking = "stat"} keeps the earlier rule -- two statistics, in order,
+#' and no third: the moderated statistic where the DE table carries usable
+#' values, and \code{sign(log2fc) * -log10(pvalue)} otherwise. In that branch
+#' the choice is made on the VALUES, not on the column. The standardised
 #' metabolomics DE table always carries a `statistic` column and fills it with
 #' NA where the source had none, so testing for the column would pick an all-NA
 #' vector, and fgsea would then report no gene-set overlap -- sending the reader
 #' after an ID-mapping bug that is not there.
 #'
-#' The p-value gets the same 1e-300 floor used elsewhere in this file, so a
-#' p-value that underflowed to zero ranks very high rather than infinite. A zero
-#' log2 fold change ranks at zero and is kept: no change is evidence of no
+#' In the "stat" branch the p-value gets the same 1e-300 floor used elsewhere in
+#' this file, so a p-value that underflowed to zero ranks very high rather than
+#' infinite. A zero log2 fold change ranks at zero and is kept: no change is evidence of no
 #' change, not missing evidence.
 #'
 #' Duplicates are collapsed here rather than upstream. Several metabolites can
@@ -1391,25 +1393,32 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
 #' This is GSEA's own rule -- the ORA path keeps its own upstream
 #' de-duplication, which this does not touch.
 #'
-#' @param de_mapped DE table merged with KEGG compound ids: `KEGG_ID`,
-#'   `log2fc`, `pvalue`, and optionally `statistic`.
+#' @param de_mapped DE table merged with KEGG compound ids: `KEGG_ID` and
+#'   `log2fc`; for \code{ranking = "stat"} also `pvalue` and optionally
+#'   `statistic`.
+#' @param ranking \code{"lfc"} (default) or \code{"stat"}.
 #' @return Named numeric vector of ranks, names being KEGG compound ids, sorted
 #'   decreasing and unique; \code{numeric(0)} when nothing is rankable.
 #' @examples
 #' de <- data.frame(KEGG_ID = c("C00031", "C00022"), statistic = c(3.1, -2.4),
 #'                  log2fc = c(1, -1), pvalue = c(0.01, 0.02))
-#' rank_compounds_for_gsea(de)
-rank_compounds_for_gsea <- function(de_mapped) {
+#' rank_compounds_for_gsea(de)                     # 1, -1
+#' rank_compounds_for_gsea(de, ranking = "stat")   # 3.1, -2.4
+rank_compounds_for_gsea <- function(de_mapped, ranking = c("lfc", "stat")) {
+    ranking <- match.arg(ranking)
     if (!is.data.frame(de_mapped) || nrow(de_mapped) == 0) return(numeric(0))
     if (!"KEGG_ID" %in% names(de_mapped)) return(numeric(0))
 
-    stat <- if ("statistic" %in% names(de_mapped)) {
+    stat <- if (identical(ranking, "lfc")) NULL else if ("statistic" %in% names(de_mapped)) {
         suppressWarnings(as.numeric(de_mapped$statistic))
     } else {
         NULL
     }
 
-    if (!is.null(stat) && any(is.finite(stat))) {
+    if (identical(ranking, "lfc")) {
+        if (!"log2fc" %in% names(de_mapped)) return(numeric(0))
+        ranks <- suppressWarnings(as.numeric(de_mapped$log2fc))
+    } else if (!is.null(stat) && any(is.finite(stat))) {
         ranks <- stat
     } else {
         if (!all(c("log2fc", "pvalue") %in% names(de_mapped))) return(numeric(0))
@@ -1802,7 +1811,9 @@ run_gsea_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
     # Use lenient cutoff (1.0) to retrieve all results, then filter manually
     # so we can fall back from padj to pvalue when padj is too strict
     gsea_res <- tryCatch({
-        de_mapped$rank_stat <- -log10(de_mapped$pvalue + 1e-300) * sign(de_mapped$log2fc)
+        # Ranked by log2FC, the pipeline's rule for fgsea/GSEA.
+        de_mapped$rank_stat <- de_mapped$log2fc
+        de_mapped <- de_mapped[is.finite(de_mapped$rank_stat), ]
         de_mapped <- de_mapped[order(-de_mapped$rank_stat), ]
         gene_list <- setNames(de_mapped$rank_stat, de_mapped$KEGG_ID)
 

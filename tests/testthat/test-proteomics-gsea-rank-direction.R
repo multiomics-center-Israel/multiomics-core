@@ -1,7 +1,8 @@
 # tests/testthat/test-proteomics-gsea-rank-direction.R
 #
-# The default GSEA ranking in extract_de_table_for_pathway() is
-# sign(log2FC) * -log10(pvalue). Two things have to hold at once:
+# The default GSEA ranking in extract_de_table_for_pathway() is log2FC. The
+# "stat" ranking, sign(log2FC) * -log10(pvalue), is what most of this file
+# covers; two things have to hold at once for it:
 #
 #   - the sign must survive linearFC's signif(x, 3) rounding, which collapses
 #     any ratio in [0.995, 1.005) to exactly 1 and would otherwise zero the rank
@@ -29,8 +30,10 @@ rank_summary_df <- function(lfc, pvals, contrast = "B_vs_A", with_log2fc = TRUE)
     df
 }
 
-rank_config <- function() {
-    list(modes = list(proteomics = list(de_table = list(id_col = "FeatureID"))))
+rank_config <- function(gsea_ranking = "stat") {
+    list(modes = list(proteomics = list(
+        de_table = list(id_col = "FeatureID"),
+        pathway  = list(gsea_ranking = gsea_ranking))))
 }
 
 test_that("downregulated proteins keep a negative GSEA rank", {
@@ -94,4 +97,14 @@ test_that("direction falls back to the rounded linearFC when log2FC is absent", 
     # right; only the [0.995, 1.005) window is lost without log2FC.imputs.
     expect_gt(res$stat[1], 0)
     expect_lt(res$stat[2], 0)
+})
+
+
+test_that("with no gsea_ranking set, proteins rank by their log2FC", {
+    lfc <- c(1.2, -0.7, 0)
+    cfg <- list(modes = list(proteomics = list(de_table = list(id_col = "FeatureID"))))
+    res <- extract_de_table_for_pathway(rank_summary_df(lfc, c(1e-4, 0.03, 0.5)),
+                                        "B_vs_A", cfg)
+
+    expect_equal(res$stat, lfc)
 })

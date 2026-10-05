@@ -376,7 +376,9 @@ gene_loadings_gsea <- function(values, omics_type, harmonization_res, config,
                                                    stat = unname(ranks),
                                                    stringsAsFactors = FALSE)),
             gene_sets = gene_sets, method = "fgsea",
-            min_size = min_size, max_size = max_size, seed = seed)$loadings
+            min_size = min_size, max_size = max_size, seed = seed,
+            # The loading is the ranking here, carried in `stat`.
+            ranking = "stat")$loadings
         if (length(tabs) == 0) return(NULL)
 
         out <- .rbind_fill(lapply(tabs, function(df) {
