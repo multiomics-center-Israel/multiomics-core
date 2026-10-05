@@ -444,7 +444,9 @@ metabolite_loadings_gsea <- function(values, harmonization_res, cache_dir,
     if (is.null(cpd_pathways)) cpd_pathways <- get_kegg_compound_pathways(cache_dir)
     run_compound_gsea(de_mapped, cache_dir = cache_dir, min_gs = min_size,
                       max_gs = max_size, seed = seed,
-                      exclude_classes = exclude_classes, cpd_pathways = cpd_pathways)
+                      exclude_classes = exclude_classes, cpd_pathways = cpd_pathways,
+                      # The loading is the ranking here, carried in `statistic`.
+                      ranking = "stat")
 }
 
 

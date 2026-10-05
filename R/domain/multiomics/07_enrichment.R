@@ -1477,10 +1477,13 @@ rank_compounds_for_gsea <- function(de_mapped, ranking = c("lfc", "stat")) {
 #' @param cpd_pathways Compound-pathway associations. Defaults to the cache and
 #'   never to a download; passing it explicitly lets a caller score many
 #'   contrasts from one read, and lets a test supply its own.
+#' @param ranking Passed to \code{rank_compounds_for_gsea()}: \code{"lfc"}
+#'   (default) or \code{"stat"}, for a caller whose value is in `statistic`.
 #' @return Data frame of every pathway fgsea scored, or NULL.
 run_compound_gsea <- function(de_mapped, cache_dir, min_gs, max_gs, seed = 1L,
                                exclude_classes = NULL,
-                               cpd_pathways = .cached_compound_pathways(cache_dir)) {
+                               cpd_pathways = .cached_compound_pathways(cache_dir),
+                               ranking = "lfc") {
 
     if (is.null(cpd_pathways)) {
         message("    No cached KEGG compound-pathway associations; ",
@@ -1488,7 +1491,7 @@ run_compound_gsea <- function(de_mapped, cache_dir, min_gs, max_gs, seed = 1L,
         return(NULL)
     }
 
-    ranks <- rank_compounds_for_gsea(de_mapped)
+    ranks <- rank_compounds_for_gsea(de_mapped, ranking = ranking)
     if (length(ranks) < 3) {
         message("    Too few rankable compounds for GSEA (", length(ranks), ")")
         return(NULL)
