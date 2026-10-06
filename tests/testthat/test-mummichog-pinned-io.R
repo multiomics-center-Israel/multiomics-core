@@ -415,3 +415,17 @@ test_that("mod_mummichog_pinned fails loud on a broken venv, not per-contrast qu
     "Python executable not found"
   )
 })
+
+test_that("feature ids resolve as feature_id, then Metabolite, then row names", {
+  both <- data.frame(feature_id = c("a", "b"), Metabolite = c("m1", "m2"),
+                     stringsAsFactors = FALSE)
+  expect_identical(mmc_feature_ids(both), c("a", "b"))
+
+  met <- data.frame(Metabolite = c("m1", "m2"), stringsAsFactors = FALSE)
+  rownames(met) <- c("r1", "r2")
+  expect_identical(mmc_feature_ids(met), c("m1", "m2"))
+
+  bare <- data.frame(x = 1:2)
+  rownames(bare) <- c("r1", "r2")
+  expect_identical(mmc_feature_ids(bare), c("r1", "r2"))
+})

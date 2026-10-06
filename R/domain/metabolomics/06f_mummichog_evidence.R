@@ -81,6 +81,49 @@
   out[nzchar(out)]
 }
 
+#' Split a delimited cell keeping every slot, for positional pairing
+#'
+#' Unlike `.mmc_split_cell()`, empty fields are kept (as `NA`), so element `i`
+#' still lines up with element `i` of a parallel list. mummichog 2.7.0 writes an
+#' empty name for a candidate the model has no name for
+#' (`reporting.py`: `dict_cpds_def.get(x, '')` joined with `"$"`), so `"$Glucose"`
+#' means "no name, then Glucose" — dropping the empty field would hand
+#' "Glucose" to the first candidate instead of the second.
+#'
+#' @param x   A single character scalar (may be NA).
+#' @param sep Fixed separator.
+#' @return Character vector with one element per field, `NA` for empty fields;
+#'   `character(0)` for a missing or empty cell.
+#' @noRd
+.mmc_split_positional <- function(x, sep) {
+  if (length(x) == 0 || is.na(x) || !nzchar(x)) return(character(0))
+  x   <- as.character(x)
+  out <- trimws(strsplit(x, sep, fixed = TRUE)[[1]])
+  # strsplit() drops a trailing empty field ("a$" -> "a"); one field per
+  # separator plus one restores it.
+  n_fields <- lengths(regmatches(x, gregexpr(sep, x, fixed = TRUE))) + 1L
+  length(out) <- n_fields
+  out[!is.na(out) & !nzchar(out)] <- NA_character_
+  out
+}
+
+#' Normalise HMDB accessions to the 7-digit form
+#'
+#' HMDB ids appear both as the legacy 5-digit form ("HMDB00122") and the current
+#' 7-digit form ("HMDB0000122") for the same compound; compare them only after
+#' zero-padding to 7 digits.
+#'
+#' @param x Character vector of HMDB accessions (already extracted).
+#' @return Character vector, `NA` where `x` is not an HMDB accession.
+#' @noRd
+.mmc_norm_hmdb <- function(x) {
+  x   <- toupper(trimws(as.character(x)))
+  out <- rep(NA_character_, length(x))
+  ok  <- !is.na(x) & grepl("^HMDB[0-9]+$", x)
+  out[ok] <- sprintf("HMDB%07d", as.integer(sub("^HMDB", "", x[ok])))
+  out
+}
+
 #' Normalise a metabolite name for a conservative string comparison
 #'
 #' Case, whitespace and punctuation differ freely between vendor software and
@@ -345,18 +388,20 @@ read_mummichog_ec_candidates <- function(files) {
     rep(NA_character_, nrow(raw))
 
   parts <- lapply(seq_len(nrow(raw)), function(i) {
-    ids <- .mmc_split_cell(raw[["compounds"]][i], ";")
-    if (length(ids) == 0) return(NULL)
-    nms <- .mmc_split_cell(names_col[i], "$")
-    # Positional pairing is mummichog's own contract; pad rather than recycle so
-    # a truncated name list can never mislabel a candidate.
+    # Positional pairing is mummichog's own contract, so both lists keep their
+    # empty slots until they are paired; pad rather than recycle so a truncated
+    # name list can never mislabel a candidate.
+    ids <- .mmc_split_positional(raw[["compounds"]][i], ";")
+    nms <- .mmc_split_positional(names_col[i], "$")
     if (length(nms) < length(ids)) {
       nms <- c(nms, rep(NA_character_, length(ids) - length(nms)))
     }
+    keep <- !is.na(ids)
+    if (!any(keep)) return(NULL)
     data.frame(
       EID              = as.character(raw[["EID"]][i]),
-      compound_id      = ids,
-      compound_name    = nms[seq_along(ids)],
+      compound_id      = ids[keep],
+      compound_name    = nms[seq_along(ids)][keep],
       str_row_ion      = as.character(ion_col[i]),
       massfeature_rows = as.character(rows_col[i]),
       stringsAsFactors = FALSE
@@ -469,8 +514,18 @@ read_mummichog_ec_features <- function(files) {
 #' Datasets differ: some carry MSI identification levels, some carry annotations
 #' with no level system at all, and some features are simply unannotated. Rather
 #' than hard-coding one schema (or "Level 1"), this locates whichever annotation
-#' columns `row_data` actually has and flattens them into four fields. Absent
-#' information stays `NA` — it is never inferred.
+#' columns `row_data` actually has and flattens them into one set of fields.
+#' Absent information stays `NA` — it is never inferred.
+#'
+#' Several recognised columns can hold the same field: a multi-level dataset is
+#' the union of its levels' columns, so one level may fill `Name` and another
+#' `Molecule`, each `NA` on the other's rows. Every recognised column is
+#' therefore read and the first usable value is taken row by row, in the
+#' preference order of the column lists below.
+#'
+#' Feature ids are resolved with `mmc_feature_ids()` (06c), the same rule the
+#' mummichog stage uses for the ids it sends, so the annotations join back to
+#' the features mummichog echoes.
 #'
 #' Confidence and agreement are deliberately separate concepts: confidence is
 #' what the dataset claims about its own annotation, agreement (see
@@ -484,38 +539,38 @@ read_mummichog_ec_features <- function(files) {
 #' @return A data.frame with one row per feature and columns `feature_id`,
 #'   `original_annotation_name`, `original_annotation_id`,
 #'   `original_annotation_id_type`, `original_annotation_kegg`,
-#'   `original_annotation_confidence`. Zero rows when `row_data` is unusable.
+#'   `original_annotation_hmdb`, `original_annotation_confidence`. Zero rows
+#'   when `row_data` is unusable.
 normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
   empty <- data.frame(feature_id = character(0),
                       original_annotation_name = character(0),
                       original_annotation_id = character(0),
                       original_annotation_id_type = character(0),
                       original_annotation_kegg = character(0),
+                      original_annotation_hmdb = character(0),
                       original_annotation_confidence = character(0),
                       stringsAsFactors = FALSE)
   if (is.null(row_data) || !is.data.frame(row_data) || nrow(row_data) == 0) {
     return(empty)
   }
   if (!"feature_id" %in% names(row_data)) {
-    if (is.null(rownames(row_data))) return(empty)
-    row_data$feature_id <- rownames(row_data)
+    ids <- mmc_feature_ids(row_data)
+    if (is.null(ids)) return(empty)
+    row_data$feature_id <- ids
   }
-  n <- nrow(row_data)
 
-  name_col <- .mmc_find_col(row_data, .MMC_ANNOT_NAME_COLS, .MMC_ANNOT_NAME_RX)
-  kegg_col <- .mmc_find_col(row_data, .MMC_ANNOT_KEGG_COLS, .MMC_ANNOT_KEGG_RX)
-  hmdb_col <- .mmc_find_col(row_data, .MMC_ANNOT_HMDB_COLS, .MMC_ANNOT_HMDB_RX)
-  conf_col <- .mmc_find_col(row_data, .MMC_ANNOT_CONF_COLS, .MMC_ANNOT_CONF_RX)
-
-  nm <- if (!is.null(name_col)) trimws(as.character(row_data[[name_col]])) else
-    rep(NA_character_, n)
-  nm[!is.na(nm) & (!nzchar(nm) | nm %in% c("NA", "-", "unknown", "Unknown"))] <-
-    NA_character_
-
-  kegg <- if (!is.null(kegg_col)) .mmc_extract_kegg(row_data[[kegg_col]]) else
-    rep(NA_character_, n)
-  hmdb <- if (!is.null(hmdb_col)) .mmc_extract_hmdb(row_data[[hmdb_col]]) else
-    rep(NA_character_, n)
+  clean_name <- function(x) {
+    v <- trimws(as.character(x))
+    v[!is.na(v) & (!nzchar(v) | v %in% c("NA", "-", "unknown", "Unknown"))] <-
+      NA_character_
+    v
+  }
+  nm <- .mmc_coalesce_annot(row_data, .MMC_ANNOT_NAME_COLS, .MMC_ANNOT_NAME_RX,
+                            clean_name)
+  kegg <- .mmc_coalesce_annot(row_data, .MMC_ANNOT_KEGG_COLS, .MMC_ANNOT_KEGG_RX,
+                              .mmc_extract_kegg)
+  hmdb <- .mmc_coalesce_annot(row_data, .MMC_ANNOT_HMDB_COLS, .MMC_ANNOT_HMDB_RX,
+                              .mmc_extract_hmdb)
 
   # HMDB -> KEGG through the pipeline's existing mapping reader, so an HMDB-only
   # dataset can still be compared on a stable compound id.
@@ -533,8 +588,8 @@ normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
   id_type <- ifelse(!is.na(kegg), "KEGG", ifelse(!is.na(hmdb), "HMDB",
                                                  NA_character_))
 
-  conf <- if (!is.null(conf_col)) .mmc_format_confidence(row_data[[conf_col]]) else
-    rep(NA_character_, n)
+  conf <- .mmc_coalesce_annot(row_data, .MMC_ANNOT_CONF_COLS, .MMC_ANNOT_CONF_RX,
+                              .mmc_format_confidence)
 
   data.frame(
     feature_id                     = as.character(row_data$feature_id),
@@ -542,9 +597,37 @@ normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
     original_annotation_id         = id,
     original_annotation_id_type    = id_type,
     original_annotation_kegg       = kegg,
+    original_annotation_hmdb       = hmdb,
     original_annotation_confidence = conf,
     stringsAsFactors = FALSE
   )
+}
+
+#' First usable value of one annotation field, row by row across its columns
+#'
+#' Collects every column of `df` that means the field — the exact names first,
+#' in list order, then the anchored case-insensitive regex matches — and fills
+#' each row from the first column whose transformed value is not `NA`. The
+#' feature id column is never treated as an annotation.
+#'
+#' @param df        Feature annotation table.
+#' @param exact     Character vector of exact column names, in preference order.
+#' @param rx        Anchored regex for the same field, matched case-insensitively.
+#' @param transform Function turning one raw column into a character vector,
+#'   `NA` where the cell holds nothing usable.
+#' @return Character vector with one value per row of `df`.
+#' @noRd
+.mmc_coalesce_annot <- function(df, exact, rx, transform) {
+  cols <- setdiff(names(df), "feature_id")
+  cols <- unique(c(exact[exact %in% cols],
+                   cols[grepl(rx, cols, ignore.case = TRUE)]))
+  out <- rep(NA_character_, nrow(df))
+  for (cl in cols) {
+    v    <- as.character(transform(df[[cl]]))
+    fill <- is.na(out) & !is.na(v)
+    out[fill] <- v[fill]
+  }
+  out
 }
 
 #' Render an annotation-confidence column as human-readable text
@@ -575,16 +658,19 @@ normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
 #' \describe{
 #'   \item{`"Match"`}{The original annotation and at least one pathway-matching
 #'     candidate refer to the same compound.}
-#'   \item{`"Conflict"`}{There IS a comparable original annotation, but it
-#'     represents a different metabolite.}
-#'   \item{`"Not assessed"`}{No usable original annotation to compare against
-#'     (unannotated feature, or nothing comparable on either side).}
+#'   \item{`"Conflict"`}{At least one candidate could be compared with the
+#'     original annotation, and none of them is the same metabolite.}
+#'   \item{`"Not assessed"`}{No usable original annotation, or no candidate
+#'     that can be compared with it.}
 #' }
 #'
-#' Comparison prefers stable compound ids — KEGG when both sides have one — and
-#' only falls back to a conservatively normalised name/synonym comparison when
-#' ids are unavailable. Model compound names are `";"`-separated synonym lists
-#' (mummichog's own `dict_cpds_def` convention), and every synonym counts.
+#' Each candidate is compared on its own, with stable ids taking precedence
+#' over names for that candidate: KEGG when both sides have one, else HMDB when
+#' both sides have one (5- and 7-digit forms compared after zero-padding), else
+#' a conservatively normalised name/synonym comparison. Model compound names are
+#' `";"`-separated synonym lists (mummichog's own `dict_cpds_def` convention),
+#' and every synonym counts. So a candidate whose KEGG id differs does not stop
+#' another candidate, with no KEGG id, from matching by name.
 #' Identity is NEVER inferred from m/z, molecular formula or mass.
 #'
 #' A conflict is an annotation, not a veto: nothing here removes an
@@ -596,40 +682,45 @@ normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
 #' @param candidate_kegg Character vector of those candidates' KEGG ids (NA allowed).
 #' @param candidate_names Character vector of those candidates' names (may hold
 #'   `";"`-separated synonyms).
+#' @param annot_hmdb     The feature's original HMDB id (or NA).
 #' @return One of `"Match"`, `"Conflict"`, `"Not assessed"`.
 mmc_annotation_agreement <- function(annot_kegg, annot_name,
                                      candidate_ids, candidate_kegg,
-                                     candidate_names) {
-  has_annot <- (!is.na(annot_kegg) && nzchar(annot_kegg)) ||
-    (!is.na(annot_name) && nzchar(annot_name))
-  if (!has_annot || length(candidate_ids) == 0) return("Not assessed")
+                                     candidate_names,
+                                     annot_hmdb = NA_character_) {
+  usable <- function(x) length(x) == 1 && !is.na(x) && nzchar(x)
+  a_kegg <- if (usable(annot_kegg)) annot_kegg else NA_character_
+  a_hmdb <- if (usable(annot_hmdb)) .mmc_norm_hmdb(annot_hmdb) else NA_character_
+  a_key  <- if (usable(annot_name)) .mmc_norm_name(annot_name) else ""
+  if (is.na(a_kegg) && is.na(a_hmdb) && !nzchar(a_key)) return("Not assessed")
+  if (length(candidate_ids) == 0) return("Not assessed")
 
-  # --- 1. stable compound ids (preferred) ---------------------------------
-  if (!is.na(annot_kegg) && nzchar(annot_kegg)) {
-    # A candidate's own id can itself be a KEGG accession (KEGG-based models),
-    # so consider both the declared KEGG id and the id.
-    cand_k <- unique(c(candidate_kegg, .mmc_extract_kegg(candidate_ids)))
-    cand_k <- cand_k[!is.na(cand_k) & nzchar(cand_k)]
-    if (length(cand_k) > 0) {
-      return(if (annot_kegg %in% cand_k) "Match" else "Conflict")
+  verdict_for <- function(j) {
+    id <- candidate_ids[j]
+    # --- 1. KEGG ids (a candidate's own id can itself be a KEGG accession) ---
+    ck <- c(candidate_kegg[j], .mmc_extract_kegg(id))
+    ck <- unique(ck[!is.na(ck) & nzchar(ck)])
+    if (!is.na(a_kegg) && length(ck) > 0) {
+      return(if (a_kegg %in% ck) "Match" else "Conflict")
     }
-  }
-
-  # --- 2. conservative name / synonym comparison --------------------------
-  if (!is.na(annot_name) && nzchar(annot_name)) {
-    syn <- unique(unlist(lapply(candidate_names, function(x) {
-      if (is.na(x)) character(0) else .mmc_split_cell(x, ";")
-    }), use.names = FALSE))
-    syn <- .mmc_norm_name(syn)
-    syn <- syn[nzchar(syn)]
-    if (length(syn) > 0) {
-      key <- .mmc_norm_name(annot_name)
-      if (!nzchar(key)) return("Not assessed")
-      return(if (key %in% syn) "Match" else "Conflict")
+    # --- 2. HMDB ids (custom HMDB-based models) -----------------------------
+    ch <- .mmc_norm_hmdb(.mmc_extract_hmdb(id))
+    if (!is.na(a_hmdb) && !is.na(ch)) {
+      return(if (identical(a_hmdb, ch)) "Match" else "Conflict")
     }
+    # --- 3. conservative name / synonym comparison --------------------------
+    if (nzchar(a_key)) {
+      nm  <- candidate_names[j]
+      syn <- if (is.na(nm)) character(0) else .mmc_norm_name(.mmc_split_cell(nm, ";"))
+      syn <- syn[nzchar(syn)]
+      if (length(syn) > 0) return(if (a_key %in% syn) "Match" else "Conflict")
+    }
+    "Not assessed"
   }
+  verdicts <- vapply(seq_along(candidate_ids), verdict_for, character(1))
 
-  # Nothing comparable on the candidate side (no ids, no names).
+  if (any(verdicts == "Match"))    return("Match")
+  if (any(verdicts == "Conflict")) return("Conflict")
   "Not assessed"
 }
 
@@ -663,11 +754,13 @@ mmc_annotation_agreement <- function(annot_kegg, annot_name,
 #'   empty pathway table). Otherwise a list with:
 #'   \describe{
 #'     \item{pathway_summary}{One row per pathway: overlap, detected pathway
-#'       size, enrichment ratio, empirical p-value, supporting EC/feature counts,
-#'       and the agreement breakdown at BOTH grains — `ECs Match/Conflict/Mixed/
-#'       Not assessed` counts EmpiricalCompounds by their roll-up state, while
-#'       `features Match/Conflict/Not assessed` counts measured features by
-#'       their own verdict.}
+#'       size, enrichment ratio, empirical p-value, `Supporting ECs`,
+#'       `Supporting features` (distinct measured features), `Feature-EC links`
+#'       (rows of `feature_table`; one feature can sit in several ECs), and the
+#'       agreement breakdown at both grains — `ECs Match/Conflict/Mixed/Not
+#'       assessed` counts EmpiricalCompounds by their roll-up state, while
+#'       `feature-EC links Match/Conflict/Not assessed` counts feature-EC links
+#'       by their own verdict and sums to `Feature-EC links`.}
 #'     \item{ec_table}{One row per (pathway, supporting EmpiricalCompound), with
 #'       the four-state `Agreement` roll-up and the feature-level `n_match`,
 #'       `n_conflict`, `n_not_assessed` counts behind it.}
@@ -749,17 +842,22 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
       a_name <- rep(NA_character_, nrow(ec_feat))
       a_id   <- rep(NA_character_, nrow(ec_feat))
       a_kegg <- rep(NA_character_, nrow(ec_feat))
+      a_hmdb <- rep(NA_character_, nrow(ec_feat))
       a_conf <- rep(NA_character_, nrow(ec_feat))
       ok <- !is.na(idx)
       if (any(ok)) {
         a_name[ok] <- annot$original_annotation_name[idx[ok]]
         a_id[ok]   <- annot$original_annotation_id[idx[ok]]
         a_kegg[ok] <- annot$original_annotation_kegg[idx[ok]]
+        if (!is.null(annot$original_annotation_hmdb)) {
+          a_hmdb[ok] <- annot$original_annotation_hmdb[idx[ok]]
+        }
         a_conf[ok] <- annot$original_annotation_confidence[idx[ok]]
       }
       agree <- vapply(seq_len(nrow(ec_feat)), function(k) {
         mmc_annotation_agreement(a_kegg[k], a_name[k],
-                                 cand_ids, cand_kegg, cand_nms)
+                                 cand_ids, cand_kegg, cand_nms,
+                                 annot_hmdb = a_hmdb[k])
       }, character(1))
 
       feat_acc[[length(feat_acc) + 1L]] <- data.frame(
@@ -811,10 +909,13 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
     overlap <- suppressWarnings(as.numeric(pathways$overlap_size[i]))
     pw_size <- suppressWarnings(as.numeric(pathways$pathway_size[i]))
     # Two grains, never mixed: "ECs ..." columns count EmpiricalCompounds by
-    # their roll-up state, "features ..." columns count measured features by
-    # their own per-feature verdict. Column names carry the grain so a reader
-    # cannot mistake one for the other, and neither is the pathway overlap or
-    # the candidate count.
+    # their roll-up state, "feature-EC links ..." columns count rows of the
+    # feature table by their own verdict. One measured feature can sit in
+    # several EmpiricalCompounds (mummichog writes one row per feature-EC pair),
+    # so links are not features: "Supporting features" counts distinct feature
+    # ids, and a feature's verdict can differ between its ECs. Column names
+    # carry the grain so a reader cannot mistake one for another, and none is
+    # the pathway overlap or the candidate count.
     summary_rows[[length(summary_rows) + 1L]] <- data.frame(
       check.names = FALSE, stringsAsFactors = FALSE,
       "Pathway"                 = pw_name,
@@ -824,14 +925,15 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
       "p.value"                 = if (is.null(p_col)) NA_real_ else
                                     suppressWarnings(as.numeric(pathways[[p_col]][i])),
       "Supporting ECs"          = nrow(ec_df),
-      "Supporting features"     = nrow(feat_df),
+      "Supporting features"     = length(unique(feat_df$Feature)),
+      "Feature-EC links"        = nrow(feat_df),
       "ECs Match"               = sum(ec_df$Agreement == "Match"),
       "ECs Conflict"            = sum(ec_df$Agreement == "Conflict"),
       "ECs Mixed"               = sum(ec_df$Agreement == "Mixed"),
       "ECs Not assessed"        = sum(ec_df$Agreement == "Not assessed"),
-      "features Match"          = sum(feat_df$Agreement == "Match"),
-      "features Conflict"       = sum(feat_df$Agreement == "Conflict"),
-      "features Not assessed"   = sum(feat_df$Agreement == "Not assessed")
+      "feature-EC links Match"        = sum(feat_df$Agreement == "Match"),
+      "feature-EC links Conflict"     = sum(feat_df$Agreement == "Conflict"),
+      "feature-EC links Not assessed" = sum(feat_df$Agreement == "Not assessed")
     )
   }
 

@@ -486,13 +486,14 @@ test_that("the pathway summary passes the ORA statistics through untouched", {
   expect_equal(fad[["p.value"]], 0.01)
   expect_equal(fad[["Supporting ECs"]], 2)
   expect_equal(fad[["Supporting features"]], 3)   # feat_1, feat_2, feat_4
+  expect_equal(fad[["Feature-EC links"]], 3)      # no feature in two ECs here
   # the two grains are separately reported and never conflated
   expect_equal(fad[["ECs Match"]] + fad[["ECs Conflict"]] +
                  fad[["ECs Mixed"]] + fad[["ECs Not assessed"]],
                fad[["Supporting ECs"]])
-  expect_equal(fad[["features Match"]] + fad[["features Conflict"]] +
-                 fad[["features Not assessed"]],
-               fad[["Supporting features"]])
+  expect_equal(fad[["feature-EC links Match"]] + fad[["feature-EC links Conflict"]] +
+                 fad[["feature-EC links Not assessed"]],
+               fad[["Feature-EC links"]])
   # sorted by ascending empirical p-value
   expect_equal(s[["p.value"]], sort(s[["p.value"]]))
 })
@@ -595,10 +596,11 @@ test_that("EC and feature agreement counts stay at their own grains", {
     s[["ECs Not assessed"]]
   expect_equal(ec_states, s[["Supporting ECs"]])
 
-  # feature-level counts sum to the feature count, per pathway
-  feat_states <- s[["features Match"]] + s[["features Conflict"]] +
-    s[["features Not assessed"]]
-  expect_equal(feat_states, s[["Supporting features"]])
+  # link-level counts sum to the feature-EC link count, per pathway
+  link_states <- s[["feature-EC links Match"]] + s[["feature-EC links Conflict"]] +
+    s[["feature-EC links Not assessed"]]
+  expect_equal(link_states, s[["Feature-EC links"]])
+  expect_equal(nrow(ev$feature_table), sum(s[["Feature-EC links"]]))
 
   # and neither equals the overlap / detected pathway size by construction:
   # Fatty acid degradation has 2 supporting ECs but 3 supporting features
@@ -668,4 +670,134 @@ test_that("two candidates of one EC in one pathway are kept, EC counted once", {
   # face_compound) is irrelevant and must not appear anywhere
   expect_false(any(grepl("C9", unlist(ec), fixed = TRUE)))
   expect_false(any(grepl("C9", unlist(ev$feature_table), fixed = TRUE)))
+})
+
+
+# ---------------------------------------------------------------------------
+# review fixes: positional names, shared ids, HMDB, per-candidate agreement,
+# distinct feature counts, multi-level annotation columns
+# ---------------------------------------------------------------------------
+
+test_that("candidate names keep their position when a name is empty", {
+  # mummichog writes "" for a candidate the model has no name for
+  tables <- file.path(withr::local_tempdir(), "tables")
+  dir.create(tables)
+  writeLines(c(
+    "EID\tmassfeature_rows\tstr_row_ion\tcompounds\tcompound_names",
+    "E1\trow1\trow1_M+H[1+]\tC1;C2\t$Glucose",
+    "E2\trow2\trow2_M+H[1+]\tC3;C4\tLactate$"
+  ), file.path(tables, "ListOfEmpiricalCompounds.tsv"))
+  cand <- read_mummichog_ec_candidates(file.path(tables, "ListOfEmpiricalCompounds.tsv"))
+
+  expect_true(is.na(cand$compound_name[cand$compound_id == "C1"]))
+  expect_identical(cand$compound_name[cand$compound_id == "C2"], "Glucose")
+  expect_identical(cand$compound_name[cand$compound_id == "C3"], "Lactate")
+  expect_true(is.na(cand$compound_name[cand$compound_id == "C4"]))
+})
+
+test_that("annotations are keyed by the same feature ids the stage sends", {
+  # no feature_id column: the stage (05b) sends Metabolite, so must this
+  rd <- data.frame(Metabolite = c("m_1", "m_2"), KEGG = c("C00020", NA),
+                   stringsAsFactors = FALSE)
+  rownames(rd) <- c("r1", "r2")
+  a <- normalize_metab_annotation(rd)
+  expect_identical(a$feature_id, mmc_feature_ids(rd))
+  expect_identical(a$feature_id, c("m_1", "m_2"))
+  # neither column: row names, as in the stage
+  rd2 <- data.frame(KEGG = "C00020", stringsAsFactors = FALSE)
+  rownames(rd2) <- "r1"
+  expect_identical(normalize_metab_annotation(rd2)$feature_id, "r1")
+})
+
+test_that("annotation columns are combined row by row across levels", {
+  # a multi-level row_data is the union of its levels' columns, NA elsewhere
+  rd <- data.frame(feature_id = c("a", "b", "c"),
+                   Name     = c("AMP", NA, NA),
+                   Molecule = c(NA, "D-Glucose", NA),
+                   KEGG     = c("C00020", NA, NA),
+                   kegg_id  = c(NA, "C00031", NA),
+                   stringsAsFactors = FALSE)
+  a <- normalize_metab_annotation(rd)
+  expect_identical(a$original_annotation_name, c("AMP", "D-Glucose", NA))
+  expect_identical(a$original_annotation_kegg, c("C00020", "C00031", NA))
+})
+
+test_that("an HMDB-only annotation is compared on its HMDB id", {
+  a <- normalize_metab_annotation(
+    data.frame(feature_id = "f", HMDB = "HMDB00122", stringsAsFactors = FALSE))
+  expect_identical(a$original_annotation_hmdb, "HMDB00122")
+  expect_identical(a$original_annotation_id_type, "HMDB")
+
+  # 5-digit annotation vs 7-digit candidate id: same compound
+  expect_identical(
+    mmc_annotation_agreement(NA_character_, NA_character_,
+                             candidate_ids = "HMDB0000122",
+                             candidate_kegg = NA_character_,
+                             candidate_names = NA_character_,
+                             annot_hmdb = "HMDB00122"),
+    "Match")
+  expect_identical(
+    mmc_annotation_agreement(NA_character_, NA_character_,
+                             candidate_ids = "HMDB0000190",
+                             candidate_kegg = NA_character_,
+                             candidate_names = NA_character_,
+                             annot_hmdb = "HMDB00122"),
+    "Conflict")
+})
+
+test_that("a non-matching KEGG candidate does not hide a name match on another", {
+  # candidate 1 has a different KEGG id; candidate 2 has no KEGG id but the
+  # same name -> the annotation agrees with at least one candidate
+  expect_identical(
+    mmc_annotation_agreement("C00031", "D-Glucose",
+                             candidate_ids = c("C00186", "glc"),
+                             candidate_kegg = c("C00186", NA),
+                             candidate_names = c("L-Lactate", "D-Glucose")),
+    "Match")
+  # same shape, but no candidate matches by id or name -> Conflict
+  expect_identical(
+    mmc_annotation_agreement("C00031", "D-Glucose",
+                             candidate_ids = c("C00186", "fru"),
+                             candidate_kegg = c("C00186", NA),
+                             candidate_names = c("L-Lactate", "D-Fructose")),
+    "Conflict")
+})
+
+test_that("a feature in two ECs of one pathway is counted once as a feature", {
+  # f1 sits in both Ea and Eb (mummichog writes one row per feature-EC pair)
+  root   <- withr::local_tempdir()
+  tables <- file.path(root, "mummichog_pinned", "C1", "v2", "1.run", "tables")
+  dir.create(tables, recursive = TRUE, showWarnings = FALSE)
+  writeLines(c(
+    "pathway\toverlap_size\tpathway_size\tp-value\toverlap_EmpiricalCompounds (id)\toverlap_features (id)\toverlap_features (name)",
+    "P1\t2\t3\t0.01\tEa,Eb\tC1\tone"
+  ), file.path(tables, "mcg_pathwayanalysis_C1.tsv"))
+  writeLines(c(
+    "EID\tmassfeature_rows\tstr_row_ion\tcompounds\tcompound_names",
+    "Ea\trow1\trow1_M+H[1+]\tC1\tone",
+    "Eb\trow1\trow1_M+Na[1+]\tC2\ttwo"
+  ), file.path(tables, "ListOfEmpiricalCompounds.tsv"))
+  writeLines(c(
+    "input_row\tEID\tstr_row_ion\tcompounds\tcompound_names\tinput_row\tm/z\tretention_time\tp_value\tstatistic\tCompoundID_from_user",
+    "row1\tEa\trow1_M+H[1+]\tC1\tone\trow1\t100\t1\t0.01\t2\tf1",
+    "row1\tEb\trow1_M+Na[1+]\tC2\ttwo\trow1\t100\t1\t0.01\t2\tf1"
+  ), file.path(tables, "userInput_to_EmpiricalCompounds.tsv"))
+  model_path <- file.path(root, "m.json")
+  jsonlite::write_json(list(
+    metabolic_pathways = list(
+      list(id = "p1", name = "P1", cpds = list("C1", "C2", "C3"))),
+    dict_cpds_def = list(C1 = "one", C2 = "two", C3 = "three")
+  ), model_path, auto_unbox = TRUE)
+
+  files <- list_mummichog_files(root)
+  ev <- build_mummichog_pathway_evidence(
+    read_mummichog_pathways(files), files,
+    read_mummichog_model_pathways(model_path),
+    normalize_metab_annotation(NULL))
+  s <- ev$pathway_summary
+
+  expect_equal(s[["Supporting ECs"]], 2)
+  expect_equal(s[["Supporting features"]], 1)   # f1, counted once
+  expect_equal(s[["Feature-EC links"]], 2)      # one row per EC it supports
+  expect_equal(nrow(ev$feature_table), 2L)      # both links stay visible
 })

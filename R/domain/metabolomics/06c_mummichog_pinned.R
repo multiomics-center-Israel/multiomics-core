@@ -181,6 +181,22 @@
   NULL
 }
 
+#' Resolve the feature id of every row of a metabolomics feature table
+#'
+#' One rule for every consumer of the ids the mummichog stage works with: an
+#' explicit `feature_id` column, else `Metabolite`, else the row names. The stage
+#' (05b) sends these ids to mummichog as `CompoundID_from_user`, and the evidence
+#' layer (06f) keys the dataset's annotations by the same ids to join them back,
+#' so both must resolve them the same way.
+#'
+#' @param row_data Feature annotation table (`pre$row_data`).
+#' @return Vector of feature ids, one per row of `row_data`.
+mmc_feature_ids <- function(row_data) {
+  if ("feature_id" %in% names(row_data)) return(row_data$feature_id)
+  if ("Metabolite" %in% names(row_data)) return(row_data$Metabolite)
+  rownames(row_data)
+}
+
 #' Validate a statistics table for mummichog input
 #'
 #' Coerces the requested columns to numeric and enforces mummichog's sanity
