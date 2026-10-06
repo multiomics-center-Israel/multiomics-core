@@ -99,7 +99,8 @@ has one, holds that mode's config checks and is called by `validate_config()`.
 RMarkdown report templates live next to the code (`R/domain/<omics>/report_template*.Rmd`)
 or under `R/pipeline/<omics>/templates/` (metabolomics, lipidomics).
 
-`R/domain/multiomics/README.md` is worth reading before working on integration.
+`R/domain/metabolomics/README.md` and `R/domain/multiomics/README.md` describe those
+two modes; read them before working on either.
 
 ---
 
@@ -254,5 +255,3 @@ These keep the pipeline reproducible and the layers clean.
     pipeline (for example `scripts/run_mofa.py`, `utils/build_feature_ko_map.R`,
     `tools/install_pandoc.R`). Note that `.gitignore` ignores new `scripts/*.R`
     files, although some `.R` files there are tracked.
--   `metabolomics/`: holds only a README about metabolomics preprocessing; the code is
-    in `R/*/metabolomics/`.

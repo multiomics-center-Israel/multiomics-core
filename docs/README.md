@@ -23,9 +23,8 @@ Open these when you need them; you don't have to read them up front.
 |---|---|
 | [DOCKER.md](../DOCKER.md) | Running the pipeline and the config wizard in Docker |
 | [mummichog.md](mummichog.md) | Optional mummichog pathway analysis for metabolomics: setup, models, outputs |
-| [MULTIOMICS_QUICKSTART.md](../MULTIOMICS_QUICKSTART.md) | Running the multi-omics integration mode (being revised: some target and file names are out of date) |
-| [R/domain/multiomics/README.md](../R/domain/multiomics/README.md) | Multi-omics domain layer |
-| [metabolomics/README.md](../metabolomics/README.md) | Metabolomics preprocessing (being rewritten: still describes imputation and a `normalization:` block, which the code no longer has) |
+| [R/domain/multiomics/README.md](../R/domain/multiomics/README.md) | Multi-omics integration: config, data flow, troubleshooting (some output paths and file names are out of date) |
+| [R/domain/metabolomics/README.md](../R/domain/metabolomics/README.md) | Metabolomics mode: preprocessing flow, `chosen_norm`, main targets, where the code lives |
 | [CONTRACT_rnaseq_final_results.md](CONTRACT_rnaseq_final_results.md) | Columns of the RNA-seq final results and the run artefacts |
 | [CONTRACT_metabolomics_de_and_final_results.md](CONTRACT_metabolomics_de_and_final_results.md) | Metabolomics DE column naming and the final results schema |
 | [SHINY_PAYLOAD_HANDOFF.md](SHINY_PAYLOAD_HANDOFF.md) | What the pipeline emits for the Shiny app |
