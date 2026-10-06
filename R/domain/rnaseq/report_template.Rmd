@@ -301,7 +301,7 @@ if (!is.null(tech)) {
 cat("## Downstream Analysis (multiomics-core)\n\n")
 
 norm_method <- rna_cfg$normalization$method %||% "TMM"
-prior_ct <- rna_cfg$normalization$prior.count %||% 1
+log_offset <- resolve_rna_log_offset(rna_cfg$normalization)
 de_method <- rna_cfg$de$method %||% "deseq2"
 deseq_mode <- rna_cfg$de$deseq_mode %||% "default"
 p_cut <- rna_cfg$de$p_cutoff %||% 0.05
@@ -317,12 +317,12 @@ pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
 cat(sprintf(
     paste0(
         "%s Normalization was performed using the %s method ",
-        "with log2-CPM transformation (prior count = %d). ",
+        "with log2-CPM transformation (%s). ",
         "Differential expression was tested using %s (%s test, %s mode). ",
         "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
     ),
     rna_filt$methods,
-    norm_method, prior_ct,
+    norm_method, log_offset$label,
     toupper(de_method), "Wald", deseq_mode,
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
@@ -409,11 +409,11 @@ kable(design_tbl)
 ## Pipeline Settings
 
 ```{r params-pipeline}
-prior_count <- rna_cfg$normalization$prior.count %||% 1
+log_offset <- resolve_rna_log_offset(rna_cfg$normalization)
 settings <- data.frame(
   Parameter = c(
     "Normalization Method",
-    paste0("Prior Count (added before log2 to avoid log(0): log2(CPM + ", prior_count, "))"),
+    "Log offset (added before log2 to avoid log(0))",
     "Gene Filtering (details under Filtering Strategy)",
     "DE Method", "DESeq2 Mode",
     "Adjusted p-value Cutoff", "Linear FC Cutoff",
@@ -421,7 +421,7 @@ settings <- data.frame(
   ),
   Value = c(
     rna_cfg$normalization$method %||% "N/A",
-    prior_count,
+    log_offset$label,
     rna_filt$short,
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
