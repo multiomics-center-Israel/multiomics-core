@@ -788,10 +788,15 @@ read_mummichog_user_input <- function(files) {
 #'
 #' userInput_to_EmpiricalCompounds.tsv links each empirical compound (EID, the
 #' unit mummichog reports in pathway/module tables) to the input feature and the
-#' feature id we sent (CompoundID_from_user).
+#' feature id we sent (CompoundID_from_user). It also echoes back each feature's
+#' input row, m/z, retention time, p-value and statistic, and the EC's
+#' `str_row_ion` string; those are returned too, as read, so the evidence layer
+#' (06f) can use this one reader instead of parsing the file a second time.
 #'
 #' @param files Character vector of mummichog output files.
-#' @return A tibble with columns EID, feature_id, compounds, compound_names.
+#' @return A data.frame with character columns EID, feature_id, compounds,
+#'   compound_names, input_row, mz, retention_time, p_value, statistic,
+#'   str_row_ion. Optional columns absent from the file are `NA`.
 read_mummichog_empirical_map <- function(files) {
   f <- files[basename(files) == "userInput_to_EmpiricalCompounds.tsv"]
   if (length(f) == 0) .mmc_stop("No userInput_to_EmpiricalCompounds.tsv found among mummichog outputs.")
@@ -804,11 +809,27 @@ read_mummichog_empirical_map <- function(files) {
     .mmc_stop("userInput_to_EmpiricalCompounds.tsv missing column(s): ",
               paste(miss, collapse = ", "))
   }
+  # One NA per row (not a bare NA) so a header-only file still yields a
+  # zero-row frame instead of a length mismatch.
+  opt <- function(nm) {
+    if (nm %in% names(raw)) as.character(raw[[nm]]) else rep(NA_character_, nrow(raw))
+  }
+  # mummichog writes `input_row` twice (once itself, once inside the feature's
+  # own output block); readr renames the duplicate, so take the first — the
+  # EC-side key that `str_row_ion` refers to.
+  row_col <- grep("^input_row", names(raw), value = TRUE)
   data.frame(
-    EID           = raw[["EID"]],
-    feature_id    = raw[["CompoundID_from_user"]],
-    compounds     = if ("compounds" %in% names(raw)) raw[["compounds"]] else NA_character_,
-    compound_names = if ("compound_names" %in% names(raw)) raw[["compound_names"]] else NA_character_,
+    EID            = raw[["EID"]],
+    feature_id     = raw[["CompoundID_from_user"]],
+    compounds      = opt("compounds"),
+    compound_names = opt("compound_names"),
+    input_row      = if (length(row_col) > 0) as.character(raw[[row_col[[1]]]]) else
+                       rep(NA_character_, nrow(raw)),
+    mz             = opt("m/z"),
+    retention_time = opt("retention_time"),
+    p_value        = opt("p_value"),
+    statistic      = opt("statistic"),
+    str_row_ion    = opt("str_row_ion"),
     stringsAsFactors = FALSE
   )
 }
