@@ -294,7 +294,7 @@ if (!is.null(tech)) {
 cat("## Downstream Analysis (multiomics-core)\n\n")
 
 norm_method <- rna_cfg$normalization$method %||% "TMM"
-prior_ct <- rna_cfg$normalization$prior.count %||% 1
+log_offset <- resolve_rna_log_offset(rna_cfg$normalization)
 filt_min <- rna_cfg$filtering$auto_filter$min %||% 0.5
 filt_max <- rna_cfg$filtering$auto_filter$max %||% 2.0
 de_method <- rna_cfg$de$method %||% "deseq2"
@@ -315,12 +315,12 @@ cat(sprintf(
         "(KDE on log2-CPM distribution), selecting an optimal CPM threshold within the ",
         "[%.1f\u2013%.1f] range. Genes passing the threshold in at least one complete ",
         "biological group were retained. Normalization was performed using the %s method ",
-        "with log2-CPM transformation (prior count = %d). ",
+        "with log2-CPM transformation (%s). ",
         "Differential expression was tested using %s (%s test, %s mode). ",
         "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
     ),
     filt_min, filt_max,
-    norm_method, prior_ct,
+    norm_method, log_offset$label,
     toupper(de_method), "Wald", deseq_mode,
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
@@ -406,11 +406,11 @@ kable(design_tbl)
 ## Pipeline Settings
 
 ```{r params-pipeline}
-prior_count <- rna_cfg$normalization$prior.count %||% 1
+log_offset <- resolve_rna_log_offset(rna_cfg$normalization)
 settings <- data.frame(
   Parameter = c(
     "Normalization Method",
-    paste0("Prior Count (added before log2 to avoid log(0): log2(CPM + ", prior_count, "))"),
+    "Log offset (added before log2 to avoid log(0))",
     "Filtering Group Column", "Auto-filter CPM Threshold Range",
     "DE Method", "DESeq2 Mode",
     "Adjusted p-value Cutoff", "Linear FC Cutoff",
@@ -418,7 +418,7 @@ settings <- data.frame(
   ),
   Value = c(
     rna_cfg$normalization$method %||% "N/A",
-    prior_count,
+    log_offset$label,
     rna_cfg$filtering$group_col %||% "N/A",
     paste0(rna_cfg$filtering$auto_filter$min %||% "?", " – ", rna_cfg$filtering$auto_filter$max %||% "?", " CPM (pipeline selects optimal within this range)"),
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",

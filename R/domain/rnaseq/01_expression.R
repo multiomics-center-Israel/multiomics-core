@@ -12,11 +12,18 @@
 #'   OR tximport object with 'counts', 'abundance', 'length' matrices.
 #' @param meta   data.frame of sample metadata (required for VST)
 #' @param method one of c("TMMlogCPM","VST")
-#' @param prior.count numeric added before log in logCPM (default 1)
+#' @param prior.count numeric; edgeR prior count (in reads, scaled by library
+#'   size) added before log in logCPM (default 1). Ignored when
+#'   \code{cpm_pseudocount} is given.
 #' @param sample_col Column name in meta containing sample IDs (default "SampleID")
+#' @param filter_zero_count logical; drop all-zero genes before VST.
+#' @param cpm_pseudocount numeric or NULL; when given, TMMlogCPM values are
+#'   \code{log2(TMM CPM + cpm_pseudocount)}, i.e. a fixed offset in CPM units
+#'   instead of edgeR's prior count.
 #' @return numeric matrix; attr(., "method") indicates method used
 normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST"),
-                             prior.count = 1, sample_col = "SampleID", filter_zero_count = TRUE) {
+                             prior.count = 1, sample_col = "SampleID", filter_zero_count = TRUE,
+                             cpm_pseudocount = NULL) {
     method <- match.arg(method)
    message("THE FILTER ZERO COUNT IS:  ", filter_zero_count )
     # Detect source type
@@ -39,7 +46,11 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
         counts_mat <- as.matrix(counts)
         dge <- edgeR::DGEList(counts = counts_mat)
         dge <- edgeR::calcNormFactors(dge, method = "TMM")
-        mat <- edgeR::cpm(dge, log = TRUE, prior.count = prior.count)
+        mat <- if (is.null(cpm_pseudocount)) {
+            edgeR::cpm(dge, log = TRUE, prior.count = prior.count)
+        } else {
+            log2(edgeR::cpm(dge, log = FALSE) + cpm_pseudocount)
+        }
         attr(mat, "method") <- "TMMlogCPM"
         attr(mat, "source_type") <- "matrix"
         return(mat)
@@ -100,7 +111,8 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
             # Fallback to TMMlogCPM only if source is matrix (not tximport)
             if (source_type == "matrix" && !is.null(original_counts)) {
                 message("[VST] Fallback to TMMlogCPM due to: ", conditionMessage(e1))
-                normalize_counts(original_counts, meta, "TMMlogCPM", prior.count, sample_col)
+                normalize_counts(original_counts, meta, "TMMlogCPM", prior.count, sample_col,
+                                 cpm_pseudocount = cpm_pseudocount)
             } else {
                 stop(
                     "[VST] Failed for tximport input: ", conditionMessage(e1), "\n",
@@ -114,6 +126,28 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
     if (is.null(attr(mat, "method"))) attr(mat, "method") <- "VST"
     attr(mat, "source_type") <- source_type
     mat
+}
+
+#' Resolve the log offset that TMMlogCPM normalization uses
+#'
+#' The one reading of \code{normalization$cpm_pseudocount} and
+#' \code{normalization$prior.count}, shared by preprocessing and every report
+#' that describes the transform, so they cannot disagree about what ran.
+#'
+#' @param norm_cfg The \code{modes$rna$normalization} config list (may be NULL).
+#' @return List with \code{type} ("cpm_pseudocount" or "prior_count"),
+#'   \code{value} (numeric) and \code{label} (reader-facing formula).
+resolve_rna_log_offset <- function(norm_cfg) {
+    pseudo <- norm_cfg$cpm_pseudocount
+    if (!is.null(pseudo)) {
+        pseudo <- as.numeric(pseudo)
+        return(list(type = "cpm_pseudocount", value = pseudo,
+                    label = sprintf("log2(TMM CPM + %s)", format(pseudo))))
+    }
+    prior <- as.numeric(norm_cfg$prior.count %||% 1)
+    list(type = "prior_count", value = prior,
+         label = sprintf("edgeR log2 CPM, prior count %s reads (scaled by library size)",
+                         format(prior)))
 }
 
 # compute CPM
