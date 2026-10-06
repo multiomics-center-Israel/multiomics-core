@@ -745,6 +745,40 @@ test_that("an HMDB-only annotation is compared on its HMDB id", {
     "Conflict")
 })
 
+test_that("HMDB -> KEGG mapping matches legacy and current accession forms", {
+  dir <- withr::local_tempdir()
+  map <- file.path(dir, "hmdb_kegg.tsv")
+  # mapping file in the 7-digit form, annotations in both forms
+  writeLines(c("HMDB\tKEGG", "HMDB0000122\tC00031", "HMDB00190\tC00186"), map)
+  rd <- data.frame(feature_id = c("a", "b", "c"),
+                   HMDB = c("HMDB00122", "HMDB0000190", "HMDB0000999"),
+                   stringsAsFactors = FALSE)
+  a <- normalize_metab_annotation(rd, mapping_file = map)
+  expect_identical(a$original_annotation_kegg, c("C00031", "C00186", NA))
+  expect_identical(a$original_annotation_id_type, c("KEGG", "KEGG", "HMDB"))
+  # the HMDB column itself is left as annotated
+  expect_identical(a$original_annotation_hmdb, rd$HMDB)
+})
+
+test_that("missing-name placeholders are unannotated, not a name", {
+  rd <- data.frame(feature_id = paste0("f", 1:7),
+                   Name = c("", "NA", "na", "N/A", "n/a", "-", "UNKNOWN"),
+                   stringsAsFactors = FALSE)
+  a <- normalize_metab_annotation(rd)
+  expect_true(all(is.na(a$original_annotation_name)))
+  # so a named candidate is not reported as a conflict
+  expect_identical(
+    mmc_annotation_agreement(NA_character_, a$original_annotation_name[4],
+                             candidate_ids = "C00031",
+                             candidate_kegg = "C00031",
+                             candidate_names = "D-Glucose"),
+    "Not assessed")
+  # a real name that merely contains a placeholder is kept
+  rd2 <- data.frame(feature_id = "g", Name = "NAD+", stringsAsFactors = FALSE)
+  expect_identical(normalize_metab_annotation(rd2)$original_annotation_name,
+                   "NAD+")
+})
+
 test_that("a non-matching KEGG candidate does not hide a name match on another", {
   # candidate 1 has a different KEGG id; candidate 2 has no KEGG id but the
   # same name -> the annotation agrees with at least one candidate

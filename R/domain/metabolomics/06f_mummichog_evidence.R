@@ -559,9 +559,12 @@ normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
     row_data$feature_id <- ids
   }
 
+  # Exports spell "no name" in several ways; left in, a placeholder normalises
+  # to a usable key ("na") and reads as a name conflict. Kept to a short,
+  # explicit list so no real compound name is ever discarded.
   clean_name <- function(x) {
     v <- trimws(as.character(x))
-    v[!is.na(v) & (!nzchar(v) | v %in% c("NA", "-", "unknown", "Unknown"))] <-
+    v[!is.na(v) & tolower(v) %in% c("", "na", "n/a", "-", "unknown")] <-
       NA_character_
     v
   }
@@ -578,7 +581,10 @@ normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
   if (!is.null(map_vec)) {
     need <- is.na(kegg) & !is.na(hmdb)
     if (any(need)) {
-      got <- .mmc_extract_kegg(map_vec[hmdb[need]])
+      # Key both sides on the 7-digit form: the annotation and the mapping file
+      # may spell the same accession as legacy "HMDB00122" or "HMDB0000122".
+      names(map_vec) <- .mmc_norm_hmdb(.mmc_extract_hmdb(names(map_vec)))
+      got <- .mmc_extract_kegg(unname(map_vec[.mmc_norm_hmdb(hmdb[need])]))
       kegg[need] <- got
     }
   }
