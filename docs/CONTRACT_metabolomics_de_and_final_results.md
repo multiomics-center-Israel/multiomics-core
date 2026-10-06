@@ -1,17 +1,57 @@
 # Contract: Metabolomics DE Column Naming & Final Results Schema
 
-> Status: **DESIGN ONLY** — approved for review, not yet implemented
-> Last updated: 2026-03-11
-> Depends on: Shiny audit of `config_padj_cutoff` (pending owner review)
+> Status: **IMPLEMENTED, with deviations** — the rename below is what the
+> pipeline writes today; §0 lists where the code differs from this design.
+> Designed: 2026-03-11. Checked against the code: 2026-10-06.
+
+---
+
+## 0. Implementation status
+
+The column rename (§2), the `get_contrast_cols()` branch (§3), the code
+changes in §4 and the final-results builder (§5) are in the code. Lipidomics
+uses the same `build_de_summary()` and the same `get_contrast_cols()` branch.
+
+Where the code **differs** from this design (recorded, not resolved — the code
+has not been changed to match the document, nor the document to hide the gap):
+
+- **`pass_any_contrast` and `n_pass_contrasts` depend on the DE path.** The
+  pre-computed loader calls `add_pass_any_contrast()`, so it writes
+  `pass_any_contrast` as `1`/`NA` and adds `n_pass_contrasts`, as designed.
+  The computed path, `build_de_summary()`, computes `pass_any_contrast` inline
+  as `1`/`0` and writes no `n_pass_contrasts`. The final results copy the
+  value through unchanged, so their `pass_any_contrast` is `1`/`NA` or `1`/`0`
+  depending on which path ran.
+- **The log2 fold change is round-tripped through a rounded value.**
+  `linearFC.<cn>` is stored as `signif(..., 3)`, and `extract_contrast_table()`
+  back-computes `logFC` from it for volcano/MA plots and the report. The
+  "no round-trip needed" row in §7 does not hold for those consumers.
+- **There is no `config_padj_cutoff` key.** The metabolomics Shiny payload
+  carries `padj_cutoff`, `log_fc_cutoff` and `fc_cutoff`
+  (see `SHINY_PAYLOAD_HANDOFF.md`). `padj_cutoff` there is read as
+  `de$padj_cutoff`, falling back to `de$p_cutoff`; the DE step reads
+  `de$p_cutoff` only.
+- **Additions not in the design:** `original_id` (when present in
+  `row_data`) is placed directly after `feature_id`; the builder takes
+  `cv_contrasts_df` and `config` for the CV columns; `row_data` defaults to
+  `pre$row_data`.
+- **No per-group mean columns.** Unlike RNA-seq and proteomics, the
+  metabolomics final results carry no `Mean.<group>` columns. The design never
+  promised them; this is noted so nobody assumes parity.
 
 ---
 
 ## 1. Problem Statement
 
-The metabolomics DE pipeline (`build_de_summary()` in `03_differential.R`) uses a
-column naming convention that differs from both proteomics and RNA-seq:
+*Historical: this section describes the naming before the rename. Since then
+RNA-seq's pass column has become `<cn>_pass` and its summary has gained
+`log2FC.<cn>` columns; see `CONTRACT_rnaseq_final_results.md`.*
 
-| Aspect | Proteomics | RNA-seq | Metabolomics (current) |
+Before this contract, the metabolomics DE pipeline (`build_de_summary()` in
+`03_differential.R`) used a column naming convention that differed from both
+proteomics and RNA-seq:
+
+| Aspect | Proteomics | RNA-seq | Metabolomics (before) |
 |--------|-----------|---------|----------------------|
 | Separator | `.` | `.` | `_` |
 | Infix | `.imputs.` | (none) | (none) |
@@ -42,7 +82,7 @@ proteomics vs RNA-seq; metabolomics is not yet wired in.
 | 7 | *(missing)* | `upDown.<cn>` | **Add (computed)** | `"up"` / `"down"` / `""` based on `pass == 1` + sign of `linearFC`. Required by Excel `fill_manual_cutoffs_formulas_legacy()`. |
 | 8 | *(missing)* | `manual_cutoffs.<cn>` | **Add (placeholder)** | `NA` — Excel formula column placeholder. |
 | 9 | `pass_any_contrast` | `pass_any_contrast` | **Keep** | Already shared across all modes. |
-| 10 | *(missing)* | `n_pass_contrasts` | **Add (computed)** | Integer count. Use shared `add_pass_any_contrast()` from proteomics (already parameterized with `pass_prefix`). |
+| 10 | *(missing)* | `n_pass_contrasts` | **Add (computed)** | Integer count. Use shared `add_pass_any_contrast()` from proteomics (already parameterized with `pass_prefix`). **Deviation:** only the pre-computed loader does this; see §0. |
 
 ### 2b. Detailed classification
 
@@ -140,7 +180,7 @@ Then replace the `pass_any_contrast` block at the end with a call to the shared
 
 ### 4b. Primary: `load_precomputed_metabolomics_de()` — same file
 
-Same renaming in the precomputed loader loop (lines 84-99 of `03_differential.R`).
+Same renaming in the precomputed loader loop in `03_differential.R`.
 
 ### 4c. Secondary: `extract_contrast_table()` — same file
 
@@ -199,17 +239,25 @@ Add `"metabolomics"` branch (Section 3 above).
 >
 > ⚠️ **Metabolomics comparability caveat:** the reconstruction is exact for
 > tss/pqn/eigenms normalization and approximate for median/eigenms_forced. If
-> feature scaling is enabled (`normalization.scaling != "none"`), the
+> feature scaling is enabled (`preprocessing.scaling != "none"`), the
 > back-transform is invalid and CV falls back to the **pre-normalization**
 > matrix (`expr_filt`); in that case metabolomics CV folds in technical
 > variation (drift, total-intensity) that normalization removes and is **not**
 > directly comparable to the RNA-seq/proteomics CV columns.
+>
+> *As implemented* (`build_group_cv_metabolomics()`): with scaling off, the
+> `2^x − pseudocount` inverse is used only when the workspace is known to be
+> log2 — `chosen_norm` of `tss`, `pqn`, `eigenms`, `eigenms_forced` or
+> `bio_factor`, or `median`/`none` with `transform: "log2"`. Otherwise the CV
+> columns are skipped with a warning. The exact/approximate statement above is
+> from the design and was not re-checked.
 
 ### 5b. Column specification
 
 | Group | Column(s) | Type | Source | Required |
 |-------|-----------|------|--------|----------|
 | 1. ID | `feature_id` | character | `summary_df$feature_id` | Yes |
+| 1b. Original ID | `original_id` | character | `row_data`, placed directly after `feature_id` (*added after the design*) | No (only when `row_data` has it) |
 | 2. Annotations | Configurable from `pre$row_data` (e.g., compound name, HMDB ID, m/z, RT, molecular formula) | character | `row_data` columns via `annot_cols` parameter | No (gracefully empty if no row_data) |
 | 3. Expression | One column per sample | numeric | `pre$expr_work` (normalized log2 matrix) | Yes |
 | 4a. FC | `linearFC.<cn>` | numeric (signed) | Computed from logFC in summary_df | Yes, per contrast |
@@ -217,7 +265,7 @@ Add `"metabolomics"` branch (Section 3 above).
 | 4c. Adj p-value | `padj.<cn>` | numeric [0,1] | summary_df | Yes, per contrast |
 | 4d. Direction | `upDown.<cn>` | character: `"up"` / `"down"` / `""` | Computed from pass + FC sign | Yes, per contrast |
 | 4e. Manual cutoffs | `manual_cutoffs.<cn>` | NA (Excel formula placeholder) | Static | Yes, per contrast |
-| 5. Aggregate | `pass_any_contrast` | integer: `1` / `NA` | summary_df | Yes |
+| 5. Aggregate | `pass_any_contrast` | integer: `1` / `NA` (**deviation:** `1` / `0` when DE was computed rather than pre-computed; see §0) | summary_df | Yes |
 
 ### 5c. Proteomics comparison (side-by-side)
 
@@ -225,7 +273,7 @@ Add `"metabolomics"` branch (Section 3 above).
 |-------------|-------------------------------|----------------------------------------------|-------------------|
 | ID | `FeatureID` | `feature_id` | Yes — configurable via `feature_id_col` |
 | Annotations | `Protein.Names`, `Genes`, `First.Protein.Description` | Compound name, HMDB, m/z, RT (from `row_data`) | Yes — different columns but same mechanism (`annot_cols` parameter) |
-| Expression | Sample columns from `pre$expr_filt` | Sample columns from `pre$expr_work` | Yes — both numeric matrices. Proteomics uses pre-imputation (may have NAs); metabolomics uses normalized (no NAs). |
+| Expression | Sample columns from `pre$expr_filt` | Sample columns from `pre$expr_work` | Yes — both numeric matrices. Proteomics uses pre-imputation (may have NAs); metabolomics uses normalized, which can also hold NAs (missing values are filtered, not imputed). |
 | FC | `linearFC.imputs.<cn>` | `linearFC.<cn>` | Yes — same semantics, different infix. Both signed linear FC. |
 | P-value | `pvalue.imputs.<cn>` | `pvalue.<cn>` | Yes |
 | Adj p-value | `padj.imputs.<cn>` | `padj.<cn>` | Yes |
@@ -234,6 +282,12 @@ Add `"metabolomics"` branch (Section 3 above).
 | Aggregate | `pass_any_contrast` | `pass_any_contrast` | Exact match |
 
 ### 5d. Builder function signature
+
+*The design sketch below is kept for reference. The implemented function in
+`R/domain/metabolomics/05_outputs_legacy.R` also takes `cv_contrasts_df` and
+`config` (for the CV columns), defaults `row_data` to `pre$row_data`, moves
+`original_id` directly after `feature_id`, and passes `cv_cols` to
+`build_final_results_generic()`.*
 
 ```r
 build_final_results_metabolomics <- function(
@@ -283,7 +337,13 @@ which returns column names without the `.imputs.` infix.
 
 ---
 
-## 6. Shiny Impact (blocked — awaiting owner audit)
+## 6. Shiny Impact
+
+*Pipeline side implemented: `build_de_summary_counts_metabolomics()` reads
+`pass.<cn>` and `linearFC.<cn>`, and `SHINY_PAYLOAD_HANDOFF.md` documents those
+names. Whether the app-side audit described below took place is not recorded
+in this repository. `config_padj_cutoff` does not exist; the payload key is
+`padj_cutoff` (see §0). The table below is the design-time plan.*
 
 The Shiny payload builder (`build_shiny_payload_metabolomics()` in `07_shiny_export.R`)
 passes `de_res$summary_df` directly as `payload$de_stats`. After the column rename:
@@ -294,7 +354,7 @@ passes `de_res$summary_df` directly as `payload$de_stats`. After the column rena
 | Same function | `paste0("logFC_", cn)` | `paste0("linearFC.", cn)` | Must update FC lookup |
 | `payload$config_padj_cutoff` | Key name only | Key name only | **No change to key name** — but owner must verify the Shiny app doesn't hardcode `pass_<cn>` or `logFC_<cn>` patterns |
 
-**BLOCKED:** Owner will audit the Shiny app for hardcoded references to
+**Design-time note (was BLOCKED):** Owner will audit the Shiny app for hardcoded references to
 `config_padj_cutoff`, `pass_<cn>`, `logFC_<cn>` patterns before implementation proceeds.
 
 ---
@@ -307,4 +367,4 @@ passes `de_res$summary_df` directly as `payload$de_stats`. After the column rena
 | `linearFC` values of exactly 0 | Low | `2^0 = 1` → linearFC = 1 (no change), not 0. This is correct semantics. |
 | Precomputed DE tables still use old format | Medium | `load_precomputed_metabolomics_de()` gets the same column rename. Old cached `.tsv` files will be re-read and re-mapped. |
 | `pass.` prefix collides with `pass_any_contrast` in regex | Low | Use anchored regex: `"^pass\\.[^_]"` or exclude `pass_any_contrast` explicitly (as `build_de_summary_counts_metabolomics` already does). |
-| Log2FC precision loss in round-trip | None | Per-contrast `de_tables` (narrow format) still store raw `logFC`. Only `summary_df` stores `linearFC`. No round-trip needed. |
+| Log2FC precision loss in round-trip | None (design); **does not hold as implemented** | Per-contrast `de_tables` (narrow format) still store raw `logFC`. Only `summary_df` stores `linearFC`. But `extract_contrast_table()` back-computes `logFC` from the rounded `linearFC` (`signif(..., 3)`) for plots and the report, so those consumers do see the round-trip. See §0. |
