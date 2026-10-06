@@ -65,16 +65,20 @@ Rscript run.R --wizard
 Your browser opens on the wizard (at `http://localhost:8080`, or the next free
 port up to 8099). Then:
 
-1.  Click **Load Example (Proteomics)** or **Load Example (Metabolomics)**.
+1.  Click **Load Example (Proteomics)**.
 2.  Scroll down and click **Run Pipeline**.
-3.  When the run finishes, the HTML report opens.
+3.  When the run finishes, click **Open Report** to see the HTML report.
 
 The wizard saves the config it built under `config/` and writes results under
-`outputs/` in the repo; both are git-ignored.
+`outputs/` in the repo; both are git-ignored. That is fine for the example. Real
+projects keep their data and results outside the repo (section 3).
 
-> **Don't use "Load Example (Lipidomics)" yet.** Lipidomics is in development:
-> its code exists, but it is not currently wired into the main `_targets.R`
-> plan, so that run will not build the lipidomics analysis.
+> **Use only the proteomics example for now.**
+> - **"Load Example (Metabolomics)" is not recommended:** a known wizard issue
+>   makes the config it generates fail validation, so the run stops early.
+> - **"Load Example (Lipidomics)"** won't build the lipidomics analysis either:
+>   lipidomics is in development, and its code is not currently wired into the
+>   main `_targets.R` plan.
 
 Other entry points of `run.R`: `Rscript run.R --help`.
 
@@ -108,8 +112,8 @@ fill in with `REQUIRED`. The ones every project needs:
 -   `project.name` and `project.analysis_round` (e.g. `A01`)
 -   `paths.raw` and `paths.out` — folders *relative to* `project.dir` for the
     input data and the results
--   `params.seed` — the seed for every random step, so a rerun gives the same
-    result
+-   `params.seed` — the project seed. Most random steps derive their seed from it,
+    but a few still use fixed seeds of their own
 -   `modes.<mode>.files.*` — the input files, relative to `paths.raw`
 
 ### 3.2 Point the pipeline at your config
@@ -140,9 +144,15 @@ library(targets)
 tar_make()
 ```
 
-`tar_make()` builds every mode that has a block under `modes:` in your config,
-and on later runs rebuilds only what your changes affect. To build one mode,
-filter by target prefix:
+`tar_make()` builds the modes configured under `modes:` and, on later runs,
+rebuilds only what your changes affect. Some exceptions:
+- **Lipidomics** is not built (see section 2).
+- **Multi-omics integration** runs only when at least two single-omics modes are
+  configured as well.
+- **When a `multiomics:` block is present,** the single-omics modes build only
+  what integration needs, with no QC, reports or exports.
+
+To build one mode, filter by target prefix:
 
 ``` r
 tar_make(names = starts_with("prot_"))  # proteomics
@@ -158,10 +168,19 @@ tar_progress()          # what has run, what is running
 tar_read(prot_de_res)   # load one target's value into your session
 ```
 
-The alternative is `Rscript run.R --config config/<PROJECT>_<ROUND>.yaml`.
-It runs the same pipeline, checks that the RNA-seq and proteomics input files
-exist first, and keeps a **separate `{targets}` store per project**, so two
-projects never share a cache.
+These read the **default store** (`_targets/`).
+
+The alternative is `Rscript run.R --config config/<PROJECT>_<ROUND>.yaml`. It
+runs the same pipeline, with three differences:
+- **Pre-flight check:** it checks first that the RNA-seq and proteomics input
+  files exist.
+- **Separate store per project:** it keeps a separate `{targets}` store per
+  project, so two projects never share a cache. The run prints the store's
+  path (`Targets store: _targets_…`). To inspect that run afterwards, pass it
+  explicitly, e.g. `tar_read(prot_de_res, store = "_targets_…")`.
+- **Config copy:** it copies your config to `<project.dir>/config.yaml`. When
+  `project.dir` is the repo (as in the wizard example), that copy becomes the
+  `config.yaml` fallback used whenever `MULTIOMICS_CONFIG` is unset.
 
 > **Careful:** `tar_destroy()` and `Rscript run.R --fresh` delete the cache, and
 > everything is recomputed on the next run, which can take a long time. Use them
@@ -177,10 +196,17 @@ Results are written to:
 <project.dir>/<paths.out>/Results_<project.name>_<analysis_round>/<mode>/
 ```
 
-Each run also writes `execution_info/` next to the mode folders, holding the
-config as used, its path, a timestamp, `sessionInfo()`, a copy of `_targets.R`
-and, when git is available, the commit hash. Keep it with the results: it is
-what makes the run reproducible.
+Next to the mode folders, the pipeline also writes `execution_info/`. It holds
+the config as used, its path, a timestamp, `sessionInfo()`, a copy of
+`_targets.R` and, when git is available, the commit hash. Keep it with the
+results, but treat it as a helpful record rather than proof of what ran:
+- **It can be stale.** It is a cached target, so it is rebuilt only when its
+  inputs (essentially the config) change. After a code-only change, its commit hash, timestamp and
+  session info can still describe an earlier build.
+- **It may be missing.** It is not built by every partial run, e.g.
+  `tar_make(names = starts_with("prot_"))`.
+- **A fresh run is reliable.** It is current after the first run in a new store,
+  or after `Rscript run.R --fresh`; the wizard always runs fresh.
 
 To share results, zip the relevant `Results_*` folder.
 
@@ -212,13 +238,17 @@ For anything that is a chain of targets rather than a single function, run
 
 ## 7. Reproducing a previous run
 
-1.  Check out the commit recorded in that run's `execution_info/`.
-2.  Run `renv::restore()` with that commit's `renv.lock`.
+1.  Find the commit the run used. `execution_info/git_commit.txt` records it,
+    but check its date against `timestamp.txt` and your git history: it can be
+    stale (section 5).
+2.  Check out that commit and run `renv::restore()` with its `renv.lock`.
 3.  Use the config from `execution_info/config_used.yaml`, including its
     `params.seed`.
 
-Some steps can still differ slightly between reruns. For example, mummichog
-uses unseeded permutations (see [docs/mummichog.md](mummichog.md)).
+Even then, some output can differ in small ways. For example, mummichog is
+seeded from `params.seed`, so its p-values reproduce, but the order of tied rows
+and of the IDs within an overlap cell can vary (see
+[docs/mummichog.md](mummichog.md)).
 
 ------------------------------------------------------------------------
 

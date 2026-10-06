@@ -26,9 +26,10 @@ config YAML ──► _targets.R ──► pipe_<mode>() ──► tar_target(..
 1.  **Config.** One YAML file decides what runs and with which parameters. Its path comes
     from `MULTIOMICS_CONFIG`, falling back to `config.yaml` in the repo root.
 2.  **`_targets.R`** defines four foundation targets (`config_file`, `config`, `run_dir`,
-    `execution_info_files`). It then reads the raw YAML and, for every `modes:` block it
-    finds, appends that mode's pipeline factory. It holds target definitions only, no
-    helpers.
+    `execution_info_files`). It then reads the raw YAML and appends a pipeline factory for
+    each of `rna`, `proteomics`, `metabolomics` and `de_integration` that is present,
+    and for `multiomics` when at least two single-omics modes are present too.
+    `lipidomics` is not appended. It holds target definitions only, no helpers.
 3.  **Pipeline factories** (`pipe_<mode>()` in `R/pipeline/<mode>/`) return the list of
     `tar_target()`s for one mode: the DAG.
 4.  **Modules** (`mod_*()` in `R/modules/<mode>/`) are what a target calls. Each one
@@ -49,13 +50,15 @@ prot_exports  mod_proteomics_exports(prot_pre, prot_de_res, …)        module �
 ```
 
 Metabolomics is a longer chain: `metab_inputs` → `met_raw` → `met_filtered` →
-`met_norm_<method>` → `metab_pre` → `metab_de_res` → `metab_final_results`, … .
+`met_log` / `met_norm_<method>` → `met_corrected` (the chosen normalization, scaling,
+optional drift correction) → `metab_pre` → `metab_de_res` → `metab_final_results`, … .
 Run `targets::tar_visnetwork()` to see any mode's full graph.
 
-When `modes.multiomics` is present and at least two single-omics modes are
-configured, the single-omics factories run with `skip_outputs = TRUE`: they
-build only what the integration needs (inputs, preprocessing, DE), with no QC,
-reports or exports.
+Whenever `modes.multiomics` is present, the RNA-seq, proteomics and metabolomics
+factories run with `skip_outputs = TRUE`: they build only what integration needs
+(inputs, preprocessing, DE), with no QC, reports or exports. This happens even when
+fewer than two single-omics modes are configured, in which case the integration
+pipeline itself is not added either.
 
 ---
 
@@ -140,7 +143,7 @@ Metabolomics specifics that are easy to get wrong:
 | `targets::tar_make()` | Runs the plan in `_targets.R` for the config in `MULTIOMICS_CONFIG`, in the default store `_targets/` (or whatever a local `_targets.yaml` names) |
 | `Rscript run.R --config <file>` | Same pipeline, with a pre-flight check of RNA-seq and proteomics input files and a separate store per project (`_targets_<run>_<hash>/`) |
 | `Rscript run.R --wizard` | Browser wizard: build a config, load an example dataset, run |
-| `Rscript run.R --new` / `--fresh` / `--help` | Terminal wizard / full rerun of the last config (clears that project's cache) / usage |
+| `Rscript run.R --new` / `--fresh` / `--help` | Terminal wizard / full rerun that clears that project's cache, using `MULTIOMICS_CONFIG` or else the newest `config/*.yaml` / usage |
 | `docker-run.bat`, `Dockerfile` | The wizard in Docker; see `DOCKER.md` |
 | `install.bat`, `launch_wizard.*`, `configure_wizard.*`, `create_shortcut.vbs` | Windows install and launcher helpers |
 | `make setup` | Builds the pinned mummichog venv (see `docs/mummichog.md`) |
@@ -151,8 +154,9 @@ Metabolomics specifics that are easy to get wrong:
 ## 5. Configuration
 
 -   `config/templates/*.yaml` are tracked. Copy one to start a project.
--   `config/*.yaml` (per-project configs) are git-ignored. Real configs usually live
-    in the project folder, outside the repo.
+-   `config/*.yaml` (per-project configs) are git-ignored, so a config can be kept in
+    `config/` or in the project folder. Either way it never enters git, and the
+    data and results it points to stay outside the repo.
 -   Top-level sections: `project` (`dir`, `name`, `analysis_round`, …), `paths`
     (`raw`, `out`, relative to `project.dir`), `params` (`seed`), `modes`
     (one block per mode), and the optional `commentary`.
@@ -211,8 +215,8 @@ These keep the pipeline reproducible and the layers clean.
     (e.g. `expr_work`, `meta`, `row_data` from preprocessing; `summary_df` from DE).
     Add fields rather than rename them, and give new config keys defaults. The
     documented contracts are in `docs/CONTRACT_*.md`.
-6.  **One seed.** Random steps derive their seed from `params.seed`; no ad-hoc
-    `set.seed()`.
+6.  **One seed.** New random steps should derive their seed from `params.seed`, not
+    an ad-hoc `set.seed()`. Some existing code still uses fixed seeds of its own.
 7.  **Debug with the pipeline's own functions.** Don't keep debug-only copies of logic.
 8.  **Think across modes.** Every mode has matching `domain/`, `modules/` and
     `pipeline/` folders. When a feature lands in one mode, check whether the others
@@ -229,7 +233,7 @@ These keep the pipeline reproducible and the layers clean.
     `pipe_<mode>()`, `validate_*()`.
 -   **Objects:** `meta` for sample metadata; `cfg` for `config$modes$<mode>`; `config`
     for the whole config.
--   **Docs:** every function in `R/` has a roxygen2 docstring.
+-   **Docs:** new functions in `R/` get a roxygen2 docstring; most existing ones have one.
 
 ---
 

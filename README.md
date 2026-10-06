@@ -240,22 +240,22 @@ for (layer in c("core", "services", "domain", "modules")) {
 config <- validate_config(load_config(Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")))
 
 # --- Proteomics ---
-inputs <- load_proteomics_inputs(config)
-res    <- preprocess_proteomics(inputs, config)
+prot_inputs <- load_proteomics_inputs(config)
+prot_pre    <- preprocess_proteomics(prot_inputs, config)
 
 # --- RNA-seq ---
-inputs <- load_rna_inputs(config)
-res    <- preprocess_rna(inputs, config)
+rna_inputs <- load_rna_inputs(config)
+rna_pre    <- preprocess_rna(rna_inputs, config)
 
 # --- Metabolomics ---
 # Metabolomics preprocessing is a chain of targets rather than one function;
 # after a tar_make(), read its result from the store instead:
-res <- targets::tar_read(metab_pre)
+metab_pre <- targets::tar_read(metab_pre)
 
-# Example QC: PCA
+# Example QC: PCA on the proteomics data, with the proteomics settings
 qc_pca_scatter(
-  expr_mat = res$expr_work,
-  meta     = res$meta,
+  expr_mat = prot_pre$expr_work,
+  meta     = prot_pre$meta,
   cfg      = config$modes$proteomics,
   out_file = "outputs/proteomics/qc/pca_pc1_pc2.png"
 )
@@ -268,7 +268,7 @@ qc_pca_scatter(
 -   All package versions are locked in `renv.lock`
 -   Outputs and caches are excluded from git
 -   `{targets}` provides deterministic, restartable pipelines
--   Each run writes `execution_info/` into its results folder: the config used, its path, a timestamp, `sessionInfo()`, a copy of `_targets.R`, and the git commit when git is available
+-   The pipeline writes `execution_info/` into the results folder: the config used, its path, a timestamp, `sessionInfo()`, a copy of `_targets.R`, and the git commit when git is available. It is a cached target, so after code-only changes or partial runs it can describe an earlier build. See [onboarding §5](docs/onboarding.md#5-where-the-results-are)
 
 ------------------------------------------------------------------------
 
@@ -276,7 +276,7 @@ qc_pca_scatter(
 
 All analysis outputs are written under `<project.dir>/<paths.out>/Results_<project.name>_<analysis_round>/<mode>/`, where path components come from your config YAML (defaults: `paths.out: "outputs"`).
 
--   The project directory lives outside the repository (set via `project.dir` in your config)
+-   For real projects, the project directory (`project.dir`) lives outside the repository. The wizard's example runs use the repository itself and write under its git-ignored `outputs/`
 -   Results should be shared by zipping the relevant output folder
 -   Each run is isolated by its configuration parameters
 

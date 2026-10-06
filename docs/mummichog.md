@@ -1,6 +1,6 @@
 # Mummichog pathway analysis (pinned v2, isolated venv)
 
-> Moved here from the top-level README, unchanged apart from heading levels. Back to the [docs index](README.md).
+> Moved here from the top-level README; the stochasticity caveat has since been corrected to match the code. Back to the [docs index](README.md).
 
 The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
 
@@ -106,4 +106,6 @@ To map pathways back to your feature ids, `join_features_to_results()` uses the 
 
 ## Stochasticity caveat
 
-mummichog v2 estimates null distributions by **random permutation with no seed control**, so p-values and rankings vary slightly between runs on identical input. `{targets}` only re-runs the stage when its inputs change, so this doesn't cause spurious rebuilds — but do **not** expect bit-identical reruns, and don't assert exact equality in tests.
+mummichog v2 estimates null distributions by random permutation, drawn from Python's `random` module. mummichog itself has no seed option, so the pipeline's launcher seeds `random` from `params.seed` (1 when unset) before mummichog starts. A rerun on the same input with the same seed therefore reproduces every pathway's p-value and overlap.
+
+What can still differ between runs is **order**: mummichog writes some sets in memory-address order, so the order of rows with tied p-values, and of the IDs within an overlap cell, can change. Compare those columns as sets, not as ordered lists, in tests. `{targets}` only re-runs the stage when its inputs change, so this does not cause spurious rebuilds.

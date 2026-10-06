@@ -49,7 +49,7 @@ There is no separate `normalization:` block.
 | Key | Meaning |
 |---|---|
 | `chosen_norm` | `none`, `tss`, `median`, `pqn`, `eigenms`, `eigenms_forced`, `bio_factor`, or `null` |
-| `transform`, `pseudocount` | Log transform applied before or after normalization, depending on the method |
+| `transform`, `pseudocount` | `transform` sets the log transform of `met_log`, so it affects only `median` and `none`. `tss`, `pqn`, `eigenms`, `eigenms_forced` and `bio_factor` always use `log2(x + pseudocount)` |
 | `scaling` | Optional feature scaling |
 | `drift_correction` | Optional LOESS signal-drift correction (QC samples + injection order) |
 
