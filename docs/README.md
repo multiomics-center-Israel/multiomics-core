@@ -30,7 +30,6 @@ Open these when you need them; you don't have to read them up front.
 | [CONTRACT_metabolomics_de_and_final_results.md](CONTRACT_metabolomics_de_and_final_results.md) | Metabolomics DE column naming and the final results schema |
 | [SHINY_PAYLOAD_HANDOFF.md](SHINY_PAYLOAD_HANDOFF.md) | What the pipeline emits for the Shiny app |
 | [DE_to_DA_rename_map.md](DE_to_DA_rename_map.md) | Impact survey for a possible DE → DA rename in metabolomics (nothing renamed yet) |
-| [developer_guide.md](developer_guide.md) | Older developer guide; its still-valid content is being merged into the project structure and contributing docs |
 
 ## Archive
 
