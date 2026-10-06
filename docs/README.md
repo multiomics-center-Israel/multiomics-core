@@ -22,6 +22,7 @@ Open these when you need them; you don't have to read them up front.
 | Document | What it covers |
 |---|---|
 | [DOCKER.md](../DOCKER.md) | Running the pipeline and the config wizard in Docker |
+| [mummichog.md](mummichog.md) | Optional mummichog pathway analysis for metabolomics: setup, models, outputs |
 | [MULTIOMICS_QUICKSTART.md](../MULTIOMICS_QUICKSTART.md) | Running the multi-omics integration mode (being revised: some target and file names are out of date) |
 | [R/domain/multiomics/README.md](../R/domain/multiomics/README.md) | Multi-omics domain layer |
 | [metabolomics/README.md](../metabolomics/README.md) | Metabolomics preprocessing (being rewritten: still describes imputation and a `normalization:` block, which the code no longer has) |

@@ -1,298 +1,231 @@
 # Onboarding — multiomics-core
 
-This document is intended for a new team member who wants to **run an existing analysis or start a new project** using **multiomics-core**.
+This guide takes you from a fresh clone to a finished pipeline run on the
+synthetic example data that ships with the repo, and then to a run of your own.
+It assumes you will mostly **run analyses**; if you will also change code, carry
+on to [PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md) and
+[CONTRIBUTING.md](../CONTRIBUTING.md) afterwards.
 
-The framework is **configuration-driven**, fully reproducible, and designed to be used primarily through **RStudio**.
+Read the [README](../README.md) first: its *Requirements* and *Package
+repositories* sections cover R, Rtools (Windows) and Bioconductor, and this
+guide does not repeat them.
 
 ------------------------------------------------------------------------
 
-## 1. Working with multiomics-core in RStudio
+## 0. One rule before anything else: no real data in git
 
-This project is fully compatible with **RStudio**, and new users are encouraged to work through RStudio rather than the command line.
+This repository is **public**. Input data, per-project configs and results
+never go into it:
+
+-   `data/*` is git-ignored, except the synthetic `data/example_*` sets and a
+    few reference files.
+-   `config/*.yaml` is git-ignored; only `config/templates/` is tracked.
+-   `outputs/` and `_targets*` stores are git-ignored.
+
+Keep project data and results **outside the repo**, in the folder you set as
+`project.dir` (section 3). Never paste sample IDs, values or result counts from
+a real project into commit messages, issues or pull requests.
 
 ------------------------------------------------------------------------
 
-### 1.1 Clone and open the project in RStudio
-
-**Option A — via terminal (recommended if you use git regularly):**
+## 1. Get the code and the R environment
 
 ``` bash
 git clone <REPO_URL>
 ```
 
-Then open RStudio and choose:
+Open the project in RStudio with *File → Open Project…* and pick
+`omics-core.Rproj` in the clone. Always work inside the project, so that paths
+resolve relative to the repo root.
 
--   *File → Open Project…*
--   Select `multiomics-core` (the folder containing the `.Rproj` file)
-
-**Option B — via RStudio UI:**
-
--   *File → New Project → Version Control → Git*
--   Paste the repository URL
--   Choose a local directory
-
-> Always work inside the `.Rproj`. This ensures correct relative paths and a clean R session.
-
-------------------------------------------------------------------------
-
-### 1.2 Restore the R environment (renv)
-
-Once the project is open in RStudio, run in the **Console**:
+Then, in the RStudio **Console**:
 
 ``` r
 install.packages("renv")   # once per machine
-renv::restore()
+renv::restore()            # installs the exact versions in renv.lock
+renv::status()             # should report no problems
 ```
 
-Verify that the environment is consistent:
-
-``` r
-renv::status()
-sessionInfo()
-```
+`renv::restore()` takes a while the first time. If it fails on Windows, check
+Rtools (README → *Windows users*).
 
 ------------------------------------------------------------------------
 
-## 2. Expected data structure
+## 2. First run: the bundled example data
 
-The pipeline expects input data under:
+The quickest way to see the whole pipeline work is the browser wizard, which can
+load a synthetic example dataset for you.
 
-```         
-data/<mode>/...
-```
-
-Example — proteomics:
-
-```         
-data/
-  proteomics/
-    protein_matrix.csv
-    sample_map.csv
-    meta_prot.csv
-    contrasts_prot.csv
-```
-
-> File names and paths are fully controlled via the configuration file.\
-> The repository does **not** enforce file names — only consistency with the config.
-
-------------------------------------------------------------------------
-
-## 3. Starting a new project (configuration-driven)
-
-### 3.1 Create a new config file from a template
-
-**Do not edit `config/config.yaml` manually unless you know what you are doing.**
-
-Instead, start from a template:
+From a terminal in the repo root:
 
 ``` bash
-cp config/templates/proteomics.yaml config/<PROJECT>_<ROUND>.yaml
+Rscript run.R --wizard
 ```
 
-Then point the pipeline to your new config by updating the config_file target in `_targets.R`:
+Your browser opens on the wizard (at `http://localhost:8080`, or the next free
+port up to 8099). Then:
 
-``` r
-tar_target(config_file, "config/<PROJECT>_<ROUND>.yaml", format = "file")
-```
+1.  Click **Load Example (Proteomics)** or **Load Example (Metabolomics)**.
+2.  Scroll down and click **Run Pipeline**.
+3.  When the run finishes, the HTML report opens.
 
-Example:
+The wizard saves the config it built under `config/` and writes results under
+`outputs/` in the repo; both are git-ignored.
 
-``` r
-tar_target(config_file, "config/E_Pick_A02.yaml", format = "file")
-```
+> **Don't use "Load Example (Lipidomics)" yet.** Lipidomics is in development:
+> its code exists, but it is not currently wired into the main `_targets.R`
+> plan, so that run will not build the lipidomics analysis.
+
+Other entry points of `run.R`: `Rscript run.R --help`.
 
 ------------------------------------------------------------------------
 
-### 3.2 Fields you **must** update
+## 3. Your own project: the config file
 
--   `project.name`
--   `project.analysis_round`
--   `paths.out` (if different from default)
--   `modes.proteomics.files.*` (paths to your data files)
--   `modes.proteomics.id_columns.*`
--   `params.seed`
+Everything about an analysis — where the data is, which modes run, every
+parameter — lives in **one YAML config file**. Starting a new project should
+never require changing R code.
+
+### 3.1 Start from a template
+
+| Mode | Template |
+|---|---|
+| RNA-seq | `config/templates/rna_config.yaml` |
+| Proteomics | `config/templates/proteins_config.yaml` |
+| Metabolomics | `config/templates/metabolomics_template.yaml` |
+| Multi-omics integration | `config/templates/multiomics_config.yaml` |
+| Integration of finished DE tables | `config/templates/de_integration_config.yaml` |
+| Lipidomics (in development, see above) | `config/templates/lipidomics_config.yaml` |
+
+``` bash
+cp config/templates/proteins_config.yaml config/<PROJECT>_<ROUND>.yaml
+```
+
+The RNA-seq, proteomics and metabolomics templates mark the fields you must
+fill in with `REQUIRED`. The ones every project needs:
+
+-   `project.dir` — absolute path to the project folder, **outside the repo**
+-   `project.name` and `project.analysis_round` (e.g. `A01`)
+-   `paths.raw` and `paths.out` — folders *relative to* `project.dir` for the
+    input data and the results
+-   `params.seed` — the seed for every random step, so a rerun gives the same
+    result
+-   `modes.<mode>.files.*` — the input files, relative to `paths.raw`
+
+### 3.2 Point the pipeline at your config
+
+The pipeline reads the config path from the `MULTIOMICS_CONFIG` environment
+variable. If it is not set, it uses `config.yaml` in the repo root.
+
+``` bash
+cp .Renviron.example .Renviron
+```
+
+Edit `.Renviron` so `MULTIOMICS_CONFIG` holds the **absolute** path of your
+config, then restart R (`.Renviron` is read at start-up). `.Renviron` is
+git-ignored, so everyone can point at their own config.
+
+> `.Renviron.example` ships with a placeholder path. If you copy it, set the
+> real path or delete that line, or `tar_make()` will fail looking for a file
+> that does not exist.
 
 ------------------------------------------------------------------------
 
-### 3.3 Fields you may / should update
+## 4. Running the pipeline
 
--   filtering parameters (`filtering.min_count`)
--   normalization method
--   imputation parameters (method, repetitions, thresholds)
--   de thresholds
--   QC aesthetics (`effects`)
-
-> Starting a new project should **never require modifying R code**.
-
-------------------------------------------------------------------------
-
-## 4. Running the pipeline with `{targets}`
-
-The recommended way to run analyses is via `{targets}`.
-
-From an R session in the project root:
+From R, in the repo root:
 
 ``` r
 library(targets)
 tar_make()
 ```
 
-Useful helpers:
+`tar_make()` builds every mode that has a block under `modes:` in your config,
+and on later runs rebuilds only what your changes affect. To build one mode,
+filter by target prefix:
 
 ``` r
-tar_visnetwork()    # visualize dependency graph
-tar_progress()      # execution status
-tar_read(prot_de_res)  # read DE summary results
-tar_destroy()       # clear cache (use with care)
+tar_make(names = starts_with("prot_"))  # proteomics
+tar_make(names = starts_with("rna_"))   # RNA-seq
+tar_make(names = starts_with("met"))    # metabolomics (met_* and metab_*)
 ```
 
-### Learning more about `{targets}`
+Useful while it runs, or after:
 
-This project uses `{targets}` for reproducible, dependency-aware pipeline orchestration.
+``` r
+tar_visnetwork()        # the dependency graph
+tar_progress()          # what has run, what is running
+tar_read(prot_de_res)   # load one target's value into your session
+```
 
-For a detailed introduction, tutorials, and best practices, see the official **targets** book: <https://books.ropensci.org/targets/>
+The alternative is `Rscript run.R --config config/<PROJECT>_<ROUND>.yaml`.
+It runs the same pipeline, checks that the RNA-seq and proteomics input files
+exist first, and keeps a **separate `{targets}` store per project**, so two
+projects never share a cache.
+
+> **Careful:** `tar_destroy()` and `Rscript run.R --fresh` delete the cache, and
+> everything is recomputed on the next run, which can take a long time. Use them
+> only when you mean it.
 
 ------------------------------------------------------------------------
 
-## 5. Interactive execution (for debugging & exploration)
+## 5. Where the results are
 
-For exploratory work or debugging, steps can be run interactively.
+Results are written to:
 
-``` r
-# Load all functions in dependency order
-# 1. Core utilities
-invisible(lapply(list.files("R/core", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE), source))
-# 2. Domain logic
-invisible(lapply(list.files("R/domain", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE), source))
-# 3. Pipeline modules
-invisible(lapply(list.files("R/modules", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE), source))
+```
+<project.dir>/<paths.out>/Results_<project.name>_<analysis_round>/<mode>/
 ```
 
-``` r
-config <- load_config("config/proj1_02.yaml")
-validate_config(config)
-```
+Each run also writes `execution_info/` next to the mode folders, holding the
+config as used, its path, a timestamp, `sessionInfo()`, a copy of `_targets.R`
+and, when git is available, the commit hash. Keep it with the results: it is
+what makes the run reproducible.
+
+To share results, zip the relevant `Results_*` folder.
+
+------------------------------------------------------------------------
+
+## 6. Running steps by hand (debugging)
+
+To step through part of the pipeline in your session, load the functions in the
+same order `_targets.R` does:
 
 ``` r
+for (layer in c("core", "services", "domain", "modules")) {
+  files <- sort(list.files(file.path("R", layer), pattern = "\\.R$",
+                           full.names = TRUE, recursive = TRUE))
+  invisible(lapply(files, source))
+}
+
+config <- validate_config(load_config(Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")))
+
 prot_inputs <- load_proteomics_inputs(config)
 prot_pre    <- preprocess_proteomics(prot_inputs, config)
 ```
 
-### 5.1 Multiple imputation
-
-``` r
-# 5.1 Differential Expression Builder (replaces imputation + DE steps)
-prot_de_res <- build_proteomics_de_results(
-  pre          = prot_pre,
-  inputs       = prot_inputs,
-  config       = config,
-  verbose      = TRUE
-)
-```
-
-> ⚠️ Note: `make_imputations_proteomics()` is an internal helper. Prefer `build_proteomics_de_results()` for interactive use unless debugging specific imputation steps.
-
-``` r
-# Validate results if needed
-validate_proteomics_imputations(
-  imputations = prot_de_res$imputations,
-  meta        = prot_pre$meta,
-  cfg         = config
-)
-```
+For anything that is a chain of targets rather than a single function, run
+`tar_make()` once and read the intermediate result with `tar_read()`, e.g.
+`tar_read(metab_pre)` for metabolomics preprocessing.
 
 ------------------------------------------------------------------------
 
-### 5.2 Differential expression (method-based)
+## 7. Reproducing a previous run
 
-Differential expression is executed via a **method-agnostic builder**, controlled entirely by the configuration file (`cfg$de$method`).
+1.  Check out the commit recorded in that run's `execution_info/`.
+2.  Run `renv::restore()` with that commit's `renv.lock`.
+3.  Use the config from `execution_info/config_used.yaml`, including its
+    `params.seed`.
 
-At this stage, the proteomics pipeline supports:
-
--   `method: "limma"` — limma with multiple imputations + stability filtering
-
-Additional DE methods may be added in the future without changing the pipeline interface.
-
-### Run DE interactively
-
-``` r
-prot_de_res <- build_proteomics_de_results(
-  pre          = prot_pre,
-  inputs       = prot_inputs,
-  config       = config,
-  verbose      = TRUE
-)
-```
-
-This function performs, internally:
-
-1.  generation of multiple imputed datasets (if configured)
-2.  execution of the selected DE method
-3.  summarization across imputations
-4.  validation of the resulting DE tables
-
-### Returned object
-
-`prot_de_res` is a list with the following fields:
-
--   `runs` — per-imputation DE results (method-specific)
--   `runs_de_tables` — extracted DE tables per contrast
--   `summary_df` — unified DE summary table used downstream
--   `method` — DE method used (e.g. `"limma"`)
-
-Downstream steps (clustering, QC, writing outputs) **must not assume a specific DE method**, and should rely only on the standardized fields above.
+Some steps can still differ slightly between reruns. For example, mummichog
+uses unseeded permutations (see [docs/mummichog.md](mummichog.md)).
 
 ------------------------------------------------------------------------
 
-### Configuration example
+## Where next
 
-``` yaml
-modes:
-  proteomics:
-    de:
-      method: "limma"
-      use_adj_for_pass1: true
-      p_cutoff: 0.1
-      linear_fc_cutoff: 1.5
-```
-
-Changing the DE method requires **only updating the config**, not modifying R code.
-
-------------------------------------------------------------------------
-
-### Design note (for developers)
-
--   `build_proteomics_de_results()` is the **single entry point** for DE
--   Method-specific logic lives under `R/de/`
--   No downstream code should call `run_limma_*()` directly
-
-------------------------------------------------------------------------
-
-## 6. Reproducing a previous run
-
-To reproduce an analysis exactly:
-
-1.  Use the same git commit (hash) of the repository
-2.  Run `renv::restore()` with the same `renv.lock`
-3.  Use the exact same config file and `params.seed`
-
-Each pipeline run automatically generates an **`execution_info/`** directory containing:
-
--   config snapshot
--   git commit hash
--   execution timestamp
-
-These files should be archived together with the outputs.
-
-------------------------------------------------------------------------
-
-## Working principles
-
--   **Config = analysis decisions**
--   **Code = infrastructure**
--   No copy–paste of legacy scripts
--   Every run must be reproducible
-
-------------------------------------------------------------------------
-
-For questions, contact the **multiomics-core** maintainer.
+-   **[PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md)** — how the code is
+    organised, if you want to understand what you just ran.
+-   **[CONTRIBUTING.md](../CONTRIBUTING.md)** — before you change any code.
+-   **[docs index](README.md)** — contracts, the Shiny payload, mummichog,
+    Docker.
