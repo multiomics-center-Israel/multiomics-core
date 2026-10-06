@@ -167,7 +167,7 @@ All Phase 1 validation tasks are now done. Summary of what was confirmed:
 - (Matches the §9.6 project decision: GSEA + DE-derived ORA when clustering is unavailable, not GSEA-only.)
 
 **Online regression (`annotation_dir: ""`) — validated:**
-- ✅ Empty `annotation_dir` correctly routes to the legacy **online** implementation ([05_mod_pathway.R:57](../R/modules/rnaseq/05_mod_pathway.R#L57) gate).
+- ✅ Empty `annotation_dir` correctly routes to the legacy **online** implementation ([05_mod_pathway.R:57](../../R/modules/rnaseq/05_mod_pathway.R#L57) gate).
 - ✅ The local (offline) enrichment path is correctly bypassed (local banner absent).
 - ✅ Expected legacy behavior for a **non-model organism** observed (organism auto-detect degrades/limits, as `origin/main` does) — backward compatibility preserved (online branch is byte-identical to `origin/main`).
 

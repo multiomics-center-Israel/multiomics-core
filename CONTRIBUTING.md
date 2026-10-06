@@ -4,6 +4,8 @@ A practical, command-by-command guide for our 5-person team. No theory. Every se
 
 > **Audience.** You know `git clone`, `git commit`, and `git push`. Branches, PRs, and rebase still feel a bit fuzzy. That's exactly who this is written for.
 
+> **Before your first code change,** read [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md): it shows where new code belongs and the design rules it should follow. This guide covers the Git and PR side only. Rules for AI coding agents are in `CLAUDE.md`.
+
 ---
 
 ## 1. Why we need this
@@ -117,7 +119,7 @@ After pull --rebase origin main:
   your branch:               E'──F'   (same changes, now on top of D)
 ```
 
-**If git stops and says "CONFLICT":** see Recipe 7. Don't panic — there's an undo button.
+**If git stops and says "CONFLICT":** see Recipe 8. Don't panic — there's an undo button.
 
 **Do this every morning when you sit down to work, before doing anything else.** It takes 5 seconds when there are no conflicts, and saves hours later.
 
@@ -136,7 +138,7 @@ After pull --rebase origin main:
 git status
 
 # 2. Stage the files you want in this commit
-git add R/de.R R/io.R         # specific files
+git add R/core/04_config.R tests/testthat/test-config-validation.R   # specific files
 # — or —
 git add .                      # everything that changed
 
@@ -161,7 +163,7 @@ After the first push, plain `git push` works.
 <type>(<scope>): <short summary in imperative voice>
 ```
 
-Types: `feat`, `fix`, `refactor`, `docs`, `chore`.
+Types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `chore`. (`wip:` is only for the local save points in Recipe 7.)
 Scope is the area of the code: `targets`, `qc`, `de`, `R`, etc.
 
 Good examples:
@@ -200,17 +202,26 @@ Then on GitHub:
 
 1. Open the repo. You'll see a yellow banner: **"Compare & pull request"**. Click it.
 2. **Title:** use the same format as a commit message — `feat(targets): add deseq2 target`.
-3. **Description:** fill in this template (we keep this in the repo as `.github/pull_request_template.md`):
+3. **Description:** GitHub pre-fills it from `.github/pull_request_template.md`. Fill in every section:
    ```markdown
    ## What
-   <one or two sentences: what does this PR do?>
+   <1–3 sentences: what does this PR do?>
 
    ## Why
    Closes #<issue number>
 
    ## How to test
    <commands the reviewer can paste>
+
+   ## Checklist
+   - [ ] `targets::tar_validate()` passes
+   - [ ] Self-reviewed in `git diff`
+   - [ ] No `renv.lock` changes
+   - [ ] No Shiny app changes
+   - [ ] New functions have docstrings + tests
+   - [ ] Random components are seeded
    ```
+   Tick a box only if you actually did that check.
 4. **If it's not ready for review yet:** click the dropdown next to "Create pull request" and choose **Create draft pull request**. Drafts let you push commits and run CI without bothering reviewers.
 5. **When ready:** click "Ready for review" and request review from Michal.
 
@@ -265,7 +276,7 @@ git reset --hard HEAD          # also discard staged changes
 
 **Step 2 — Tell Claude what to read first.** Don't just say *"add a target that runs DESeq2."* Say:
 
-> *"Read `R/io.R` and `R/stats.R` first. Notice the helper pattern. Then add a target that runs DESeq2, following the same pattern, in the right file."*
+> *"Read `PROJECT_STRUCTURE.md`, then `R/pipeline/rnaseq/00_pipe_rnaseq.R` and the files it calls in `R/modules/rnaseq/` and `R/domain/rnaseq/`. Notice the pattern. Then add the new step following the same pattern, in the right layer."*
 
 **Step 3 — Make Claude search before writing.** Before adding new code, ask:
 

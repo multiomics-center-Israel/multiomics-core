@@ -17,10 +17,12 @@ For in-depth documentation and tutorials, see the official targets book: <https:
 ## What this repository provides
 
 -   Standardized data loading and validation
--   Omics-specific preprocessing (filtering, normalization, imputation)
+-   Omics-specific preprocessing (filtering and normalization; imputation in proteomics only)
 -   Proteomics differential expression via **limma** with multiple imputations and stability filtering
 -   RNA-seq differential expression via **DESeq2**
--   Metabolomics preprocessing (missingness classification, MNAR/MAR imputation, TSS/Median/PQN normalization, LOESS drift correction) and DE
+-   Metabolomics preprocessing (missingness filtering — no imputation — then sample normalization: none/TSS/median/PQN/EigenMS/bio-factor; optional LOESS drift correction) and differential abundance
+-   Multi-omics integration, and integration of finished DE tables (`de_integration`)
+-   Lipidomics — **in development**: the code exists under `R/*/lipidomics/`, but it is not currently wired into the main `_targets.R` plan, so `tar_make()` does not run it
 -   Pathway enrichment analysis (fGSEA, ORA, QEA, ssGSEA)
 -   Unified QC utilities (PCA, heatmaps, sample distance)
 -   A central YAML configuration file controlling all parameters
@@ -30,17 +32,14 @@ For in-depth documentation and tutorials, see the official targets book: <https:
 
 ## Getting started (new users)
 
-If you are new to **multiomics-core**, start here:
+Read these in order:
 
--   📘 **Onboarding guide:** `docs/onboarding.md`
--   📘 **Developer guide:** `docs/developer_guide.md`
+1.  **This README** — what the pipeline does and how to install it.
+2.  📘 **[Onboarding](docs/onboarding.md)** — from a fresh clone to a first run on the bundled example data.
+3.  📘 **[Project structure](PROJECT_STRUCTURE.md)** — the architecture: layers, pipelines, config layout.
+4.  📘 **[Contributing](CONTRIBUTING.md)** — only if you are going to change code.
 
-The onboarding guide explains:
-
--   How to open the project in RStudio
--   How to restore the R environment with `renv`
--   How to run analyses interactively or via `{targets}`
--   How to reproduce previous runs
+Everything else (contracts, the Shiny payload, mummichog, Docker) is listed in the **[docs index](docs/README.md)**.
 
 ------------------------------------------------------------------------
 
@@ -54,12 +53,12 @@ R/
 ├── pipeline/     # {targets} pipeline orchestration
 ├── services/     # External integrations (AI commentary)
 config/
-├── templates/   # Analysis config templates (rna, proteins, metabolomics, multiomics)
-data/            # Example datasets and reference files
-docs/            # Onboarding, developer guide, ADRs, migration notes
+├── templates/   # Config templates (rna, proteins, metabolomics, lipidomics, multiomics, de_integration)
+data/            # Synthetic example datasets (data/example_*) and reference files
+docs/            # Documentation index, onboarding, contracts; archive/ holds historical plans
 tests/           # testthat tests
 _targets.R       # {targets} pipeline definition
-run.R            # CLI entrypoint / wizard launcher
+run.R            # CLI entrypoint and browser wizard (Rscript run.R --help)
 renv.lock        # Locked dependency versions
 ```
 
@@ -173,7 +172,7 @@ The configuration controls:
 
 -   input and output file paths
 -   omics-specific parameters
--   filtering, normalization, and imputation settings
+-   filtering and normalization settings (and imputation, for proteomics)
 -   differential expression thresholds
 -   QC aesthetics (color, shape, sample ID columns)
 
@@ -200,6 +199,10 @@ tar_make(names = starts_with("rna_"))   # RNA-seq only
 tar_make(names = starts_with("met"))    # metabolomics only (matches met_* and metab_*)
 ```
 
+Targets are named by mode prefix: `prot_`, `rna_`, `met_`/`metab_`, `multiomics_`, `dei_` (DE-table integration) and `lipid_`. The `lipid_` targets exist in the code but are not currently added to the plan by `_targets.R`.
+
+Alternatively, `Rscript run.R --config path/to/config.yaml` runs the same pipeline with a pre-flight check for missing RNA-seq and proteomics input files, and a separate `{targets}` store per `project.name` + `analysis_round` (two projects sharing both share a store; see [onboarding §4](docs/onboarding.md#4-running-the-pipeline)). See `Rscript run.R --help`.
+
 `{targets}` ensures that only steps affected by changes are recomputed.
 
 ### Learning more about `{targets}`
@@ -210,113 +213,13 @@ For a detailed introduction, tutorials, and best practices, see the official **t
 
 ------------------------------------------------------------------------
 
-## Mummichog pathway analysis (pinned v2, isolated venv)
+## Mummichog pathway analysis (metabolomics, optional)
 
-The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
+The metabolomics mode can run [mummichog](http://mummichog.org) 2.7.0 for m/z-based pathway enrichment, in a pinned Python venv that is kept out of git. It is **off by default**; turn it on with `enabled: true` under `modes.metabolomics.enrichment.mummichog`. When it is off, the venv is never needed.
 
-### One-time setup
+One-time setup is `make setup`, which builds the venv and prints the `MUMMICHOG_PYTHON=...` line to add to your `.Renviron`.
 
-The pinned engine calls Python in a dedicated venv, kept out of git (`envs/` is `.gitignore`d). Once per machine (or checkout):
-
-``` bash
-make setup
-```
-
-That builds the venv (`envs/mummichog`) and **prints the exact `MUMMICHOG_PYTHON=<path>` line for this checkout**. Add just that line to your `.Renviron` (create the file in the project root if you don't have one — it's `.gitignore`d):
-
-``` bash
-# append the line make setup printed, e.g.:
-echo 'MUMMICHOG_PYTHON=/abs/path/to/envs/mummichog/bin/python' >> .Renviron
-```
-
-> If you'd rather start from the tracked template with `cp .Renviron.example .Renviron`, also **set or remove its `MULTIOMICS_CONFIG=/path/to/your/config.yaml` placeholder** — an active dummy value there overrides the `config.yaml` default and makes `tar_make()` fail before it reaches mummichog.
-
-After that, R reads `.Renviron` on start and `targets::tar_make()` just works — no manual `export` each session. **`.Renviron` is machine-specific and `.gitignore`d — never commit it** (that's why `make setup` prints the line for you to add rather than writing the file itself). A relative path works if you always start R from the project root, but the absolute path `make setup` prints is more robust.
-
-<details>
-<summary>Manual / advanced use</summary>
-
-``` bash
-make mummichog-venv                 # creates envs/mummichog, writes requirements-mummichog.lock
-# or, to reproduce the exact committed tree:
-make mummichog-lock                 # installs from requirements-mummichog.lock (USE_LOCK=1)
-
-# instead of .Renviron, you can export the interpreter path per shell:
-export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"
-```
-
-On Windows the venv interpreter is at `envs\mummichog\Scripts\python.exe` instead (both `make setup` and the pipeline pick the right path per platform). Both `requirements-mummichog.txt` (the top-level pin) and `requirements-mummichog.lock` (the fully-resolved tree) are committed.
-
-If the venv/interpreter is missing when the stage runs, the pipeline fails loudly and names the fix (`run make setup`) — it never silently builds a venv mid-run.
-</details>
-
-### How to run
-
-It's wired into the metabolomics DAG (as `metab_mummichog_pinned_*` targets) and is **opt-in via config** — set `enabled: true` under `modes.metabolomics.enrichment.mummichog`. When disabled or omitted, the targets aren't added to the graph and the Python venv is never needed.
-
-``` yaml
-modes:
-  metabolomics:
-    enrichment:
-      mummichog:
-        enabled: true
-        p_cutoff: 0.05
-        n_permutations: 100
-        tolerance_ppm: 10
-        ionization_mode: pos_default   # pos_default | positive | negative
-        force_primary_ion: true        # require a primary ion; false allows non-primary adducts
-```
-
-`force_primary_ion` maps to mummichog's `-z`. mummichog 2.7.0 **requires a primary ion** (`M+H[+]` for positive, `M-H[-]` for negative) to be present before accepting a metabolite prediction — this filters out noise from irrelevant adducts and is the engine's **default**. Set `force_primary_ion: false` to relax that (emits `-z False`, keeping adduct-only predictions); omit the key to keep the default. It maps to MetaboAnalyst's `force_primary_ion` option.
-
-Then run as usual:
-
-``` r
-library(targets)
-tar_make(names = tidyselect::starts_with("met"))
-```
-
-> **Per-contrast:** mummichog runs **independently for each differential-abundance contrast** (each contrast's own p-values define its significant set against all features, sharing one model + params). Every contrast with a result renders as its own tab in the HTML report's mummichog section and gets its own files on disk (see below).
->
-> **Organism:** the built-in model is **human only**. A non-human `modes.metabolomics.organism` with no custom model is rejected with a clear error rather than silently run against the human network — supply an organism-specific model (see below).
-
-### Choosing a metabolic model
-
-The `-n` model is selected from the `mummichog` config block with this precedence:
-
-1.  **`model_ref`** — a published model fetched by URL and verified against its `sha256`, then cached under `envs/mummichog-models/<sha256>.json` (a gitignored dir). This is the preferred way to run organism-specific models without committing large JSON into the repo: the file is downloaded once, checked, and reused on later runs as long as its content still matches the digest. A sha256 mismatch is a hard error — an unverified model is never used.
-2.  **`model_json`** — a path to a local model JSON on the machine running the pipeline.
-3.  **built-in `human_mfn`** — mummichog's bundled human model (the default).
-
-``` yaml
-modes:
-  metabolomics:
-    organism: "Caenorhabditis elegans"     # non-human -> a custom model is required
-    enrichment:
-      mummichog:
-        enabled: true
-        model_ref:
-          url: https://github.com/multiomics-center-Israel/multiomics-annotation-prep/releases/download/cre_kegg_20260711/cre_kegg_20260711.json
-          sha256: c403c96fbec8df9ae34b828fec01270c8ea3940acc36e4e5ff770868dc8b912b
-```
-
-Supplying any custom model (`model_ref` or `model_json`) also satisfies the human-only guard, so a non-human organism runs against its own network.
-
-### Where outputs land
-
-Under `<metab_out_dir>/mummichog_pinned/`, one subdirectory per contrast (`<contrast>/`, the contrast name sanitised to `A-Za-z0-9_`):
-
--   `<contrast>/input.tsv` and `<contrast>/input.tsv.idmap.tsv` — the exact table sent to mummichog for that contrast (m/z, retention time, p-value, statistic, **feature\_id as the 5th column**) plus a provenance id-map.
--   `<contrast>/v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
--   `<contrast>/v2/mummichog_manifest.tsv` and `<contrast>/v2/runner.log`.
-
-Plus, directly under `mummichog_pinned/`, the report's presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
-
-To map pathways back to your feature ids, `join_features_to_results()` uses the feature id mummichog echoes into its own tables (via the 5th input column) — not the fragile post-de-duplication row numbers.
-
-### Stochasticity caveat
-
-mummichog v2 estimates null distributions by **random permutation with no seed control**, so p-values and rankings vary slightly between runs on identical input. `{targets}` only re-runs the stage when its inputs change, so this doesn't cause spurious rebuilds — but do **not** expect bit-identical reruns, and don't assert exact equality in tests.
+Setup, model selection (`model_ref` / `model_json` / built-in human model), output layout and the stochasticity caveat are in **[docs/mummichog.md](docs/mummichog.md)**.
 
 ------------------------------------------------------------------------
 
@@ -325,35 +228,34 @@ mummichog v2 estimates null distributions by **random permutation with no seed c
 For exploratory work or debugging:
 
 ``` r
-# Load functions in dependency order
-# 1. Core utilities
-invisible(lapply(list.files("R/core", full.names = TRUE, recursive = TRUE), source))
-# 2. Services
-invisible(lapply(list.files("R/services", full.names = TRUE, recursive = TRUE), source))
-# 3. Domain logic
-invisible(lapply(list.files("R/domain", full.names = TRUE, recursive = TRUE), source))
-# 4. Modules
-invisible(lapply(list.files("R/modules", full.names = TRUE, recursive = TRUE), source))
+# Load functions in the same order as _targets.R (core -> services -> domain -> modules).
+# The .R pattern matters: R/domain also holds README.md and .Rmd report templates.
+for (layer in c("core", "services", "domain", "modules")) {
+  files <- sort(list.files(file.path("R", layer), pattern = "\\.R$",
+                           full.names = TRUE, recursive = TRUE))
+  invisible(lapply(files, source))
+}
 
-# Load config
-config <- load_config("config/config.yaml")
+# Load config (the same file the pipeline uses)
+config <- validate_config(load_config(Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")))
 
 # --- Proteomics ---
-inputs <- load_proteomics_inputs(config)
-res    <- preprocess_proteomics(inputs, config)
+prot_inputs <- load_proteomics_inputs(config)
+prot_pre    <- preprocess_proteomics(prot_inputs, config)
 
 # --- RNA-seq ---
-inputs <- load_rna_inputs(config)
-res    <- preprocess_rna(inputs, config)
+rna_inputs <- load_rna_inputs(config)
+rna_pre    <- preprocess_rna(rna_inputs, config)
 
 # --- Metabolomics ---
-inputs <- load_metabolomics_inputs(config)
-res    <- preprocess_metabolomics(inputs, config)
+# Metabolomics preprocessing is a chain of targets rather than one function;
+# after a tar_make(), read its result from the store instead:
+metab_pre <- targets::tar_read(metab_pre)
 
-# Example QC: PCA
+# Example QC: PCA on the proteomics data, with the proteomics settings
 qc_pca_scatter(
-  expr_mat = res$expr_work,
-  meta     = res$meta,
+  expr_mat = prot_pre$expr_work,
+  meta     = prot_pre$meta,
   cfg      = config$modes$proteomics,
   out_file = "outputs/proteomics/qc/pca_pc1_pc2.png"
 )
@@ -366,7 +268,7 @@ qc_pca_scatter(
 -   All package versions are locked in `renv.lock`
 -   Outputs and caches are excluded from git
 -   `{targets}` provides deterministic, restartable pipelines
--   Each run records execution metadata (config snapshot, git commit, session info)
+-   The pipeline writes `execution_info/` into the results folder: the config used, its path, a timestamp, `sessionInfo()`, a copy of `_targets.R`, and the git commit when git is available. It is a cached target, so after code-only changes or partial runs it can describe an earlier build. See [onboarding §5](docs/onboarding.md#5-where-the-results-are)
 
 ------------------------------------------------------------------------
 
@@ -374,7 +276,7 @@ qc_pca_scatter(
 
 All analysis outputs are written under `<project.dir>/<paths.out>/Results_<project.name>_<analysis_round>/<mode>/`, where path components come from your config YAML (defaults: `paths.out: "outputs"`).
 
--   The project directory lives outside the repository (set via `project.dir` in your config)
+-   For real projects, the project directory (`project.dir`) lives outside the repository. The wizard's example runs use the repository itself and write under its git-ignored `outputs/`
 -   Results should be shared by zipping the relevant output folder
 -   Each run is isolated by its configuration parameters
 
@@ -382,9 +284,7 @@ All analysis outputs are written under `<project.dir>/<paths.out>/Results_<proje
 
 ## Developer notes
 
-If you want to extend, modify, or maintain **multiomics-core**, see:
-
--   📘 **Developer guide:** `docs/developer_guide.md`
+If you want to extend, modify, or maintain **multiomics-core**, read [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) and then [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ------------------------------------------------------------------------
 
@@ -424,7 +324,7 @@ If the configured backend's prerequisite is missing at runtime (`claude` CLI not
 
 -   **Proteomics**: Preprocessing, Multi-imputation DE (Limma), Clustering (Hierarchical, k-means/PAM, Binary patterns), Pathway enrichment, PPI networks, Advanced statistics
 -   **RNA-seq**: Full pipeline (DESeq2), Pathway enrichment (fGSEA/ORA)
--   **Metabolomics**: Missingness classification (MNAR/MAR), Imputation (KNN + min/2), Normalization (TSS/Median/PQN with comparison), DE (limma/t-test/Wilcoxon), Feature selection (Random Forest, PLS-DA), Pathway enrichment (QEA, ssGSEA, ORA, GSEA), LOESS drift correction, QC suite, Report generation
+-   **Metabolomics**: Missingness filtering (no imputation), Normalization (none/TSS/Median/PQN/EigenMS/bio-factor, with comparison), DE (limma/t-test/Wilcoxon), Feature selection (Random Forest, PLS-DA), Pathway enrichment (QEA, ssGSEA, ORA, GSEA), LOESS drift correction, QC suite, Report generation
 -   **Multi-omics**: Integration (DIABLO, MOFA, SNF), Concordance analysis, RNA-protein correlation, Cross-omics enrichment (multiGSEA, multi-ORA), Loadings-based enrichment, Foundational analysis (correlations, WGCNA), Mechanistic inference (COSMOS, TF activity, mediation), Consensus across methods, Stability analysis (bootstrap, k-fold, cluster stability), Integrated reporting, AI commentary
 -   **QC**: PCA (2D/3D, multi-resolution), UMAP, Sample distance/correlation, Density plots, Outlier detection
 -   **Plots**: Volcano, MA, Heatmaps, Profile plots (3-color Up/Down/NS scheme)

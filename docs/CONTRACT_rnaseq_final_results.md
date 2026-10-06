@@ -2,8 +2,9 @@
 
 > Status: **IMPLEMENTED** — describes what the pipeline writes today
 > Last updated: 2026-08-18
-> Companion to `CONTRACT_metabolomics_de_and_final_results.md`, which covers a
-> proposed renaming and is design-only. This document is descriptive, not a plan.
+> Companion to `CONTRACT_metabolomics_de_and_final_results.md`, which covers the
+> metabolomics column renaming, now implemented with the deviations listed in
+> its §0. This document is descriptive, not a plan.
 
 Written because a reader computed a fold change from the per-sample columns of
 `Final_results_ALL_*.xlsx`, got `-0.35` in log2, and could not reconcile it with
