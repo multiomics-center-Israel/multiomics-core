@@ -525,7 +525,8 @@ read_mummichog_ec_features <- function(files) {
 #'
 #' Feature ids are resolved with `mmc_feature_ids()` (06c), the same rule the
 #' mummichog stage uses for the ids it sends, so the annotations join back to
-#' the features mummichog echoes.
+#' the features mummichog echoes. When the ids come from a column (e.g.
+#' `Metabolite`), that column is not read as an annotation as well.
 #'
 #' Confidence and agreement are deliberately separate concepts: confidence is
 #' what the dataset claims about its own annotation, agreement (see
@@ -556,6 +557,13 @@ normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
   if (!"feature_id" %in% names(row_data)) {
     ids <- mmc_feature_ids(row_data)
     if (is.null(ids)) return(empty)
+    # A column that supplied the ids is the feature's identity, not an
+    # annotation of it: left in, opaque ids would be compared as names and read
+    # as conflicts. Found from the resolver's result so its precedence stays in
+    # one place.
+    id_src <- names(row_data)[vapply(row_data, function(col)
+      identical(as.character(col), as.character(ids)), logical(1))]
+    row_data <- row_data[, setdiff(names(row_data), id_src), drop = FALSE]
     row_data$feature_id <- ids
   }
 

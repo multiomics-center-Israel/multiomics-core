@@ -709,6 +709,30 @@ test_that("annotations are keyed by the same feature ids the stage sends", {
   expect_identical(normalize_metab_annotation(rd2)$feature_id, "r1")
 })
 
+test_that("a column used as the feature id is not also read as a name", {
+  # no feature_id: Metabolite supplies the ids, and here holds opaque ids
+  rd <- data.frame(Metabolite = c("m_1", "m_2"), stringsAsFactors = FALSE)
+  a <- normalize_metab_annotation(rd)
+  expect_identical(a$feature_id, c("m_1", "m_2"))
+  expect_true(all(is.na(a$original_annotation_name)))
+  expect_identical(
+    mmc_annotation_agreement(a$original_annotation_kegg[1],
+                             a$original_annotation_name[1],
+                             candidate_ids = "C00031",
+                             candidate_kegg = "C00031",
+                             candidate_names = "D-Glucose"),
+    "Not assessed")
+})
+
+test_that("Metabolite is still a name when a separate feature_id exists", {
+  rd <- data.frame(feature_id = c("f1", "f2"),
+                   Metabolite = c("D-Glucose", "AMP"),
+                   stringsAsFactors = FALSE)
+  a <- normalize_metab_annotation(rd)
+  expect_identical(a$feature_id, c("f1", "f2"))
+  expect_identical(a$original_annotation_name, c("D-Glucose", "AMP"))
+})
+
 test_that("annotation columns are combined row by row across levels", {
   # a multi-level row_data is the union of its levels' columns, NA elsewhere
   rd <- data.frame(feature_id = c("a", "b", "c"),
