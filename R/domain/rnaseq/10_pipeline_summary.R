@@ -192,7 +192,7 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
                        down = n_pathways_down),
         methods = list(
             normalization = rna_cfg$normalization$method %||% "TMM",
-            prior_count   = rna_cfg$normalization$prior.count %||% 1,
+            log_offset    = resolve_rna_log_offset(rna_cfg$normalization)$label,
             filtering_mode = rna_cfg$filtering$mode %||% "adaptive",
             de_method = rna_cfg$de$method %||% "deseq2",
             de_mode   = rna_cfg$de$deseq_mode %||% "default",
@@ -637,10 +637,10 @@ generate_summary_body_r <- function(stats) {
     # Normalization
     nm <- stats$methods$normalization
     norm_desc <- switch(nm,
-        "TMMlogCPM" = sprintf("TMM scaling factors (edgeR) correct library composition, then log2 CPM (prior count = %s) for stabilized values.", stats$methods$prior_count),
+        "TMMlogCPM" = sprintf("TMM scaling factors (edgeR) correct library composition, then log2 CPM for stabilized values: %s.", stats$methods$log_offset),
         "VST" = "Variance Stabilizing Transformation (DESeq2) stabilizes variance across expression range.",
         sprintf("Normalization via %s.", nm))
-    norm_tags <- if (nm == "TMMlogCPM") c("TMM scaling", "log2 CPM", sprintf("prior.count = %s", stats$methods$prior_count))
+    norm_tags <- if (nm == "TMMlogCPM") c("TMM scaling", "log2 CPM", stats$methods$log_offset)
                  else if (nm == "VST") c("VST", "DESeq2") else nm
     step6 <- build_step_html(6, "\u2696", "Normalization", "phase-norm", "downstream", norm_desc, norm_tags)
 
