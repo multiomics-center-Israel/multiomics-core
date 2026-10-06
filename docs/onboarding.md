@@ -97,7 +97,7 @@ never require changing R code.
 | RNA-seq | `config/templates/rna_config.yaml` |
 | Proteomics | `config/templates/proteins_config.yaml` |
 | Metabolomics | `config/templates/metabolomics_template.yaml` |
-| Multi-omics integration | `config/templates/multiomics_config.yaml` |
+| Multi-omics integration | `config/templates/multiomics_config.yaml` (RNA-seq + proteomics) is a **reference, not runnable as shipped**: config validation fails on its proteomics block, which has no `multi_imputation` key, so the validator then requires `no_repetitions` and `min_no_passed`, which are also absent. Copy the `imputation` keys from `proteins_config.yaml` (or set `multi_imputation: false`) before running; this is the known gap, not necessarily the only one. If you add a metabolomics block, give it a concrete `chosen_norm` |
 | Integration of finished DE tables | `config/templates/de_integration_config.yaml` |
 | Lipidomics (in development, see above) | `config/templates/lipidomics_config.yaml` |
 
@@ -148,9 +148,11 @@ tar_make()
 rebuilds only what your changes affect. Some exceptions:
 - **Lipidomics** is not built (see section 2).
 - **Multi-omics integration** runs only when at least two single-omics modes are
-  configured as well.
-- **When a `multiomics:` block is present,** the single-omics modes build only
-  what integration needs, with no QC, reports or exports.
+  configured as well. Metabolomics counts as an available layer only with a
+  concrete `preprocessing.chosen_norm`: with `chosen_norm: null` (QC-review mode,
+  the template default) it builds no preprocessed data or DE for integration.
+- **When a `multiomics:` block is present,** the single-omics modes skip their QC,
+  reports and exports. They still build inputs, preprocessing, DE and some enrichment: RNA-seq and proteomics pathway enrichment, and metabolomics feature selection, enrichment and, when enabled, mummichog.
 
 To build one mode, filter by target prefix:
 
@@ -175,8 +177,13 @@ runs the same pipeline, with three differences:
 - **Pre-flight check:** it checks first that the RNA-seq and proteomics input
   files exist.
 - **Separate store per project:** it keeps a separate `{targets}` store per
-  project, so two projects never share a cache. The run prints the store's
-  path (`Targets store: _targets_…`). To inspect that run afterwards, pass it
+  project, named from `project.name` and `project.analysis_round` only. Two
+  projects with the same name and round, even in different `project.dir`s,
+  therefore resolve to the **same store**, and `--fresh` on one would clear the
+  other's cache. Until that is fixed, give such projects a unique
+  `project.targets_store` (a folder name starting with `_targets`, e.g.
+  `_targets_myproject_a01_site2`). The run prints the store's path
+  (`Targets store: _targets_…`). To inspect that run afterwards, pass it
   explicitly, e.g. `tar_read(prot_de_res, store = "_targets_…")`.
 - **Config copy:** it copies your config to `<project.dir>/config.yaml`. When
   `project.dir` is the repo (as in the wizard example), that copy becomes the

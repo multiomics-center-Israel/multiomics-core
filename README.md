@@ -201,7 +201,7 @@ tar_make(names = starts_with("met"))    # metabolomics only (matches met_* and m
 
 Targets are named by mode prefix: `prot_`, `rna_`, `met_`/`metab_`, `multiomics_`, `dei_` (DE-table integration) and `lipid_`. The `lipid_` targets exist in the code but are not currently added to the plan by `_targets.R`.
 
-Alternatively, `Rscript run.R --config path/to/config.yaml` runs the same pipeline with a pre-flight check for missing RNA-seq and proteomics input files, and a separate `{targets}` store per project (see `Rscript run.R --help`).
+Alternatively, `Rscript run.R --config path/to/config.yaml` runs the same pipeline with a pre-flight check for missing RNA-seq and proteomics input files, and a separate `{targets}` store per `project.name` + `analysis_round` (two projects sharing both share a store; see [onboarding §4](docs/onboarding.md#4-running-the-pipeline)). See `Rscript run.R --help`.
 
 `{targets}` ensures that only steps affected by changes are recomputed.
 

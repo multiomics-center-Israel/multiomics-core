@@ -20,7 +20,7 @@ selection, and a display-only fill in the Shiny payload's `expr_norm`. DE runs
 on the matrix with its missing values.
 
 Inputs are set by `modes.metabolomics.input.format`: `cd_raw` (default),
-`processed_wide`, `long` or `multi_level`. Alternatively, DE can be loaded from
+`processed_wide` or `multi_level`. Alternatively, DE can be loaded from
 pre-computed per-contrast tables (`files.de_table`) instead of being computed.
 
 ## Preprocessing flow
@@ -38,7 +38,7 @@ metab_inputs ─► met_raw ─► met_filtered ─► met_log ─────�
 
 `met_missingness_stats` records missingness on the filtered matrix, and
 `met_norm_comparison` writes a side-by-side of the normalizations.
-`metab_pre` is the adapter that every downstream step reads; its working
+`metab_pre` is the adapter that the downstream steps read, directly or through `metab_de_res`; its working
 matrix is `expr_work`.
 
 ## Normalization: `preprocessing` and `chosen_norm`
@@ -53,10 +53,14 @@ There is no separate `normalization:` block.
 | `scaling` | Optional feature scaling |
 | `drift_correction` | Optional LOESS signal-drift correction (QC samples + injection order) |
 
--   **`chosen_norm: null` is QC-review mode.** The pipeline builds every normalization,
-    a QC suite per normalization (`met_*_qc`), `met_qc_comparison` and a QC summary
-    report, and stops there: no DE and no downstream analysis. Use it to choose a
-    method, then set `chosen_norm` and rerun.
+-   **`chosen_norm: null` is QC-review mode.** The pipeline builds the normalizations,
+    a QC suite for the log matrix and for `tss`, `median`, `pqn`, `eigenms` and
+    `eigenms_forced` (`met_*_qc`), `met_qc_comparison` and a QC summary report. It
+    stops there: no DE and no downstream analysis. **`bio_factor` is not part of the
+    review-mode QC or the comparison**, even when it is configured. Use review mode
+    to choose a method, then set `chosen_norm` and rerun.
+-   **Review mode supplies no layer to multi-omics integration.** Metabolomics takes
+    part in integration only with a concrete `chosen_norm`.
 -   **`chosen_norm: none`** skips sample normalization, for tables normalized upstream.
     `transform` and `scaling` still apply, so set `transform: "none"` as well if the
     table is also already log-scaled.

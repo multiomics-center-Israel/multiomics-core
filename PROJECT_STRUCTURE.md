@@ -28,7 +28,9 @@ config YAML ──► _targets.R ──► pipe_<mode>() ──► tar_target(..
 2.  **`_targets.R`** defines four foundation targets (`config_file`, `config`, `run_dir`,
     `execution_info_files`). It then reads the raw YAML and appends a pipeline factory for
     each of `rna`, `proteomics`, `metabolomics` and `de_integration` that is present,
-    and for `multiomics` when at least two single-omics modes are present too.
+    and for `multiomics` when at least two single-omics modes are present too (a
+    metabolomics block with `chosen_norm: null` is present but supplies no layer to
+    integrate).
     `lipidomics` is not appended. It holds target definitions only, no helpers.
 3.  **Pipeline factories** (`pipe_<mode>()` in `R/pipeline/<mode>/`) return the list of
     `tar_target()`s for one mode: the DAG.
@@ -55,8 +57,9 @@ optional drift correction) → `metab_pre` → `metab_de_res` → `metab_final_r
 Run `targets::tar_visnetwork()` to see any mode's full graph.
 
 Whenever `modes.multiomics` is present, the RNA-seq, proteomics and metabolomics
-factories run with `skip_outputs = TRUE`: they build only what integration needs
-(inputs, preprocessing, DE), with no QC, reports or exports. This happens even when
+factories run with `skip_outputs = TRUE`: they skip QC, reports and exports, but still
+build inputs, preprocessing, DE and some enrichment: RNA-seq and proteomics pathway enrichment, and metabolomics feature selection, enrichment and, when enabled, mummichog. So a multi-omics run can still need the mummichog
+venv and the enrichment runtime. This happens even when
 fewer than two single-omics modes are configured, in which case the integration
 pipeline itself is not added either.
 
@@ -85,7 +88,7 @@ in the lowest layer that fits its meaning; don't move omics-specific logic into
 |---|---|
 | `00_paths.R`, `01_io.R` | Path resolution (`project.dir`, `paths.raw`, `paths.out`), loading tables, shared contrast-name helpers |
 | `02_validation.R`, `03_alignment.R`, `04_config.R` | Input validation, sample/metadata alignment, `load_config()` / `validate_config()`, execution metadata |
-| `05_export_excel.R` | Final-results tables and Excel export, shared by all omics (`build_final_results_generic()`, `get_contrast_cols()`) |
+| `05_export_excel.R` | Final-results tables and Excel export, shared by the omics modes (`build_final_results_generic()`, `get_contrast_cols()`) |
 | `06_plots.R`, `08_qc.R`, `17_cutoff_panel.R` | Generic plots (volcano, MA, heatmaps), QC (PCA, distances, outliers) |
 | `07_shiny_contract.R` | The Shiny payload contract (see §7) |
 | `09_clustering.R`, `09_enrichment.R`, `13_gmt_utils.R` | Clustering, generic enrichment (fGSEA/ORA), GMT files |
@@ -114,7 +117,7 @@ two modes; read them before working on either.
 | RNA-seq | `modes.rna` | `rna_config.yaml` | `R/{domain,modules,pipeline}/rnaseq/` | `rna_` | runs via `tar_make()` |
 | Proteomics | `modes.proteomics` | `proteins_config.yaml` | `…/proteomics/` | `prot_` | runs via `tar_make()` |
 | Metabolomics | `modes.metabolomics` | `metabolomics_template.yaml` | `…/metabolomics/` | `met_`, `metab_` | runs via `tar_make()` |
-| Multi-omics integration | `modes.multiomics` | `multiomics_config.yaml` | `…/multiomics/` | `multiomics_` | runs when ≥2 single-omics modes are configured too |
+| Multi-omics integration | `modes.multiomics` | `multiomics_config.yaml` | `…/multiomics/` | `multiomics_` | runs when ≥2 single-omics modes are configured too; metabolomics counts only with a concrete `chosen_norm`. `multiomics_config.yaml` does not pass validation as shipped (see onboarding §3.1) |
 | DE-table integration | `modes.de_integration` | `de_integration_config.yaml` | `…/de_integration/` | `dei_` | runs on finished DE tables; no single-omics mode needed. In progress: so far it loads and standardises the layers and resolves the contrasts |
 | Lipidomics | `modes.lipidomics` | `lipidomics_config.yaml` | `…/lipidomics/` | `lipid_` | **in development: `pipe_lipidomics()` exists but `_targets.R` does not call it** |
 
@@ -141,7 +144,7 @@ Metabolomics specifics that are easy to get wrong:
 | Entry point | What it does |
 |---|---|
 | `targets::tar_make()` | Runs the plan in `_targets.R` for the config in `MULTIOMICS_CONFIG`, in the default store `_targets/` (or whatever a local `_targets.yaml` names) |
-| `Rscript run.R --config <file>` | Same pipeline, with a pre-flight check of RNA-seq and proteomics input files and a separate store per project (`_targets_<run>_<hash>/`) |
+| `Rscript run.R --config <file>` | Same pipeline, with a pre-flight check of RNA-seq and proteomics input files and its own store (`_targets_<name>_<round>_<hash>/`). The store is keyed on `project.name` + `analysis_round` only, so projects sharing both share a store; set a unique `project.targets_store` to avoid that |
 | `Rscript run.R --wizard` | Browser wizard: build a config, load an example dataset, run |
 | `Rscript run.R --new` / `--fresh` / `--help` | Terminal wizard / full rerun that clears that project's cache, using `MULTIOMICS_CONFIG` or else the newest `config/*.yaml` / usage |
 | `docker-run.bat`, `Dockerfile` | The wizard in Docker; see `DOCKER.md` |
@@ -163,7 +166,7 @@ Metabolomics specifics that are easy to get wrong:
 
 Each mode's `90_config_validate.R` (where present), together with
 `validate_config()`, is the contract a config must satisfy. The templates show
-every key with its default.
+the main keys with their defaults (not necessarily every key the code reads).
 
 ---
 
