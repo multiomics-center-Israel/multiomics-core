@@ -221,13 +221,15 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
       annotate_source_type(counts_filt, "matrix")
     }
     
+    log_offset <- resolve_rna_log_offset(cfg$normalization)
     expr_work <- normalize_counts(
       counts            = norm_input,
       meta              = meta2,
       method            = cfg$normalization$method %||% "TMMlogCPM",
-      prior.count       = as.numeric(cfg$normalization$prior.count %||% 1),
+      prior.count       = if (log_offset$type == "prior_count") log_offset$value else 1,
       sample_col        = sample_col,
-      filter_zero_count = cfg$de$filter_zero_count
+      filter_zero_count = cfg$de$filter_zero_count,
+      cpm_pseudocount   = if (log_offset$type == "cpm_pseudocount") log_offset$value else NULL
     )
   }
   
