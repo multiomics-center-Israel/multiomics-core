@@ -724,6 +724,24 @@ test_that("a column used as the feature id is not also read as a name", {
     "Not assessed")
 })
 
+test_that("only the id source column is dropped, not look-alike columns", {
+  # Metabolite supplies the ids; a Name column with the same values is a real
+  # annotation and is kept
+  rd <- data.frame(Metabolite = c("D-Glucose", "AMP"),
+                   Name       = c("D-Glucose", "AMP"),
+                   stringsAsFactors = FALSE)
+  a <- normalize_metab_annotation(rd)
+  expect_identical(a$feature_id, c("D-Glucose", "AMP"))
+  expect_identical(a$original_annotation_name, c("D-Glucose", "AMP"))
+
+  # row-name ids: no column supplied them, so a Name equal to them is kept
+  rd2 <- data.frame(Name = c("D-Glucose", "AMP"), stringsAsFactors = FALSE)
+  rownames(rd2) <- c("D-Glucose", "AMP")
+  a2 <- normalize_metab_annotation(rd2)
+  expect_identical(a2$feature_id, c("D-Glucose", "AMP"))
+  expect_identical(a2$original_annotation_name, c("D-Glucose", "AMP"))
+})
+
 test_that("Metabolite is still a name when a separate feature_id exists", {
   rd <- data.frame(feature_id = c("f1", "f2"),
                    Metabolite = c("D-Glucose", "AMP"),

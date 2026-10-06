@@ -429,3 +429,17 @@ test_that("feature ids resolve as feature_id, then Metabolite, then row names", 
   rownames(bare) <- c("r1", "r2")
   expect_identical(mmc_feature_ids(bare), c("r1", "r2"))
 })
+
+test_that("the feature-id source names the column the ids came from", {
+  both <- data.frame(feature_id = c("a", "b"), Metabolite = c("m1", "m2"),
+                     stringsAsFactors = FALSE)
+  expect_identical(mmc_feature_id_source(both), "feature_id")
+
+  met <- data.frame(Metabolite = c("m1", "m2"), stringsAsFactors = FALSE)
+  expect_identical(mmc_feature_id_source(met), "Metabolite")
+
+  # row-name ids come from no column
+  bare <- data.frame(x = 1:2)
+  rownames(bare) <- c("r1", "r2")
+  expect_identical(mmc_feature_id_source(bare), NA_character_)
+})

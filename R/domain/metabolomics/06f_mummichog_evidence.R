@@ -557,13 +557,13 @@ normalize_metab_annotation <- function(row_data, mapping_file = NULL) {
   if (!"feature_id" %in% names(row_data)) {
     ids <- mmc_feature_ids(row_data)
     if (is.null(ids)) return(empty)
-    # A column that supplied the ids is the feature's identity, not an
+    # The column that supplied the ids is the feature's identity, not an
     # annotation of it: left in, opaque ids would be compared as names and read
-    # as conflicts. Found from the resolver's result so its precedence stays in
-    # one place.
-    id_src <- names(row_data)[vapply(row_data, function(col)
-      identical(as.character(col), as.character(ids)), logical(1))]
-    row_data <- row_data[, setdiff(names(row_data), id_src), drop = FALSE]
+    # as conflicts. Row-name ids come from no column, so nothing is dropped.
+    id_src <- mmc_feature_id_source(row_data)
+    if (!is.na(id_src)) {
+      row_data <- row_data[, setdiff(names(row_data), id_src), drop = FALSE]
+    }
     row_data$feature_id <- ids
   }
 

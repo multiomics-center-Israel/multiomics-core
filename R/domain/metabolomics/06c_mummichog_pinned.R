@@ -192,9 +192,25 @@
 #' @param row_data Feature annotation table (`pre$row_data`).
 #' @return Vector of feature ids, one per row of `row_data`.
 mmc_feature_ids <- function(row_data) {
-  if ("feature_id" %in% names(row_data)) return(row_data$feature_id)
-  if ("Metabolite" %in% names(row_data)) return(row_data$Metabolite)
-  rownames(row_data)
+  src <- mmc_feature_id_source(row_data)
+  if (is.na(src)) rownames(row_data) else row_data[[src]]
+}
+
+#' Name the column the mummichog feature ids come from
+#'
+#' The single place the id precedence of `mmc_feature_ids()` is written down:
+#' `feature_id`, else `Metabolite`, else the row names. Consumers that must
+#' know *where* the ids came from (e.g. to avoid reading the id column back as
+#' an annotation) ask this instead of re-deriving the order.
+#'
+#' @param row_data Feature annotation table (`pre$row_data`).
+#' @return `"feature_id"` or `"Metabolite"`, or `NA_character_` when the ids
+#'   are the row names.
+mmc_feature_id_source <- function(row_data) {
+  for (cl in c("feature_id", "Metabolite")) {
+    if (cl %in% names(row_data)) return(cl)
+  }
+  NA_character_
 }
 
 #' Validate a statistics table for mummichog input
