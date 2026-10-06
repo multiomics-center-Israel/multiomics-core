@@ -87,6 +87,41 @@ test_that("empirical map reader tolerates the duplicated input_row column", {
   expect_setequal(emap$feature_id, c("feat_1", "feat_2", "feat_3"))
 })
 
+test_that("empirical map reader also returns the per-feature values mummichog echoes", {
+  root  <- build_fake_tree()
+  files <- list_mummichog_files(root)
+  emap  <- read_mummichog_empirical_map(files)
+
+  for (col in c("input_row", "mz", "retention_time", "p_value", "statistic",
+                "str_row_ion")) {
+    expect_true(col %in% names(emap), info = paste("missing column:", col))
+  }
+  r2 <- emap[emap$feature_id == "feat_2", ]
+  # the first of the duplicated input_row columns (the EC-side key)
+  expect_identical(r2$input_row, "row2")
+  # values are returned as read; numeric conversion is the caller's job
+  expect_identical(r2$mz, "200")
+  expect_identical(r2$p_value, "0.02")
+  expect_identical(r2$statistic, "-1")
+  expect_identical(r2$str_row_ion, "row2_M+H[1+]")
+})
+
+test_that("empirical map reader returns zero rows for a header-only file", {
+  root   <- withr::local_tempdir()
+  tables <- file.path(root, "tables")
+  dir.create(tables)
+  writeLines("input_row\tEID\tstr_row_ion\tCompoundID_from_user",
+             file.path(tables, "userInput_to_EmpiricalCompounds.tsv"))
+  emap <- read_mummichog_empirical_map(file.path(tables, "userInput_to_EmpiricalCompounds.tsv"))
+  expect_equal(nrow(emap), 0L)
+  expect_true(all(c("EID", "feature_id", "compounds", "p_value") %in% names(emap)))
+})
+
+test_that("empirical map reader still stops when the file is missing", {
+  expect_error(read_mummichog_empirical_map(character(0)),
+               "No userInput_to_EmpiricalCompounds.tsv")
+})
+
 test_that("join maps pathways back to feature ids via carried ids (not rowN)", {
   root  <- build_fake_tree()
   files <- list_mummichog_files(root)
@@ -379,4 +414,32 @@ test_that("mod_mummichog_pinned fails loud on a broken venv, not per-contrast qu
                          python  = "/nonexistent/bin/python"),
     "Python executable not found"
   )
+})
+
+test_that("feature ids resolve as feature_id, then Metabolite, then row names", {
+  both <- data.frame(feature_id = c("a", "b"), Metabolite = c("m1", "m2"),
+                     stringsAsFactors = FALSE)
+  expect_identical(mmc_feature_ids(both), c("a", "b"))
+
+  met <- data.frame(Metabolite = c("m1", "m2"), stringsAsFactors = FALSE)
+  rownames(met) <- c("r1", "r2")
+  expect_identical(mmc_feature_ids(met), c("m1", "m2"))
+
+  bare <- data.frame(x = 1:2)
+  rownames(bare) <- c("r1", "r2")
+  expect_identical(mmc_feature_ids(bare), c("r1", "r2"))
+})
+
+test_that("the feature-id source names the column the ids came from", {
+  both <- data.frame(feature_id = c("a", "b"), Metabolite = c("m1", "m2"),
+                     stringsAsFactors = FALSE)
+  expect_identical(mmc_feature_id_source(both), "feature_id")
+
+  met <- data.frame(Metabolite = c("m1", "m2"), stringsAsFactors = FALSE)
+  expect_identical(mmc_feature_id_source(met), "Metabolite")
+
+  # row-name ids come from no column
+  bare <- data.frame(x = 1:2)
+  rownames(bare) <- c("r1", "r2")
+  expect_identical(mmc_feature_id_source(bare), NA_character_)
 })
