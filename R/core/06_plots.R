@@ -189,6 +189,15 @@ plot_sample_correlation_heatmap <- function(expr_mat,
 }
 
 #' Core wrapper for pheatmap
+#'
+#' @param expr_mat Numeric matrix (features x samples).
+#' @param annotation_col Optional data.frame of column annotations.
+#' @param title Optional plot title.
+#' @param scale_rows Logical; z-score rows before drawing.
+#' @param cluster_cols,cluster_rows Logical; cluster samples / features.
+#' @param max_rows Optional cap on rows; when exceeded, the \code{max_rows}
+#'   most variable rows are kept, in their input order.
+#' @param ... Extra arguments passed to \code{pheatmap::pheatmap()}.
 #' @return A pheatmap object
 plot_heatmap_core <- function(expr_mat,
                               annotation_col = NULL,
@@ -222,11 +231,15 @@ plot_heatmap_core <- function(expr_mat,
     }
   }
   
-  # 1. Subsampling if too large (Optimization)
+  # 1. Keep the most variable rows when there are too many. A random subset
+  # is mostly flat, low-variance features that row-scaling inflates into
+  # noise, which blurs the sample clustering the reports describe as based
+  # on the top variable features. Ties keep their input order.
   if (!is.null(max_rows) && nrow(expr_mat) > max_rows) {
-    message(sprintf("Subsampling heatmap from %d to %d rows", nrow(expr_mat), max_rows))
-    set.seed(42)
-    expr_mat <- expr_mat[sample(seq_len(nrow(expr_mat)), max_rows), , drop = FALSE]
+    message(sprintf("Keeping the %d most variable of %d heatmap rows", max_rows, nrow(expr_mat)))
+    row_vars <- apply(expr_mat, 1, stats::var, na.rm = TRUE)
+    top <- order(row_vars, decreasing = TRUE, na.last = TRUE)[seq_len(max_rows)]
+    expr_mat <- expr_mat[sort(top), , drop = FALSE]
   }
   
   # 2. Title default
