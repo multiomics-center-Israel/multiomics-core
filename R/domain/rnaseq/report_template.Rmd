@@ -822,62 +822,47 @@ render_commentary("density_plot")
 
 ## Principal Component Analysis (PCA) {.tabset}
 
-PCA was performed on normalized log-CPM values to assess overall sample
-grouping and detect potential outliers or batch effects.
+PCA was performed to assess overall sample grouping and detect potential
+outliers or batch effects. The share of variance a PC explains depends on the
+log transform, mostly through how much weight it gives to low-count genes, so
+each gene set is shown under two transforms side by side.
 
 ### By Top Variable Genes
 
-Select the number of top variable genes used for PCA calculation:
+Select the genes used for the PCA. The left panel uses the normalized matrix
+the rest of this report uses; the right panel uses a DESeq2 variance-stabilizing
+transform computed blind to the design.
 
 ```{r pca-var-genes-setup, echo=FALSE}
-# Find all PCA files with top N variable genes pattern
-pca_files <- list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$", full.names = TRUE)
-
-# Build a map of n_top -> image data URI
-pca_data_map <- list()
-available_n_top <- c()
-
-if (length(pca_files) > 0) {
-    for (f in pca_files) {
-        n_val <- as.numeric(sub(".*PCA_top([0-9]+)\\.png$", "\\1", basename(f)))
-        if (file.exists(f)) {
-            pca_data_map[[as.character(n_val)]] <- knitr::image_uri(f)
-            available_n_top <- c(available_n_top, n_val)
-        }
-    }
-}
-
-# Sort available options
-if (length(available_n_top) > 0) {
-    available_n_top <- sort(unique(available_n_top))
-    default_n_top <- available_n_top[1]
-    default_img_uri <- pca_data_map[[as.character(default_n_top)]]
+# list_rna_pca_panels() in R/domain/rnaseq/08_report.R pairs the two
+# transforms per gene set and sets the dropdown order.
+pca_panels <- list_rna_pca_panels(diag_dir)
+# Name the left panel from the matrix that was written, not the config alone:
+# preprocessed input and a VST fallback do not produce TMMlogCPM.
+pca_work_label <- if (file.exists(file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv"))) {
+    log_offset$label
+} else if (file.exists(file.path(datasets_dir, "rna_norm_VST.tsv"))) {
+    "DESeq2 VST (blind)"
 } else {
-    # Fallback: use standard PCA plot
-    default_pca_path <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
-    if (file.exists(default_pca_path)) {
-        default_n_top <- 0
-        default_img_uri <- knitr::image_uri(default_pca_path)
-        pca_data_map[["0"]] <- default_img_uri
-        available_n_top <- 0
-    } else {
-        default_n_top <- NULL
-        default_img_uri <- NULL
-    }
+    "Normalized expression"
+}
+to_uri <- function(path) if (is.na(path)) "" else knitr::image_uri(path)
+pca_data_map <- list()
+for (i in seq_len(nrow(pca_panels))) {
+    pca_data_map[[pca_panels$key[i]]] <- list(cpm = to_uri(pca_panels$cpm_path[i]),
+                                              vst = to_uri(pca_panels$vst_path[i]))
 }
 ```
 
 <div style="margin-bottom: 20px;">
-<label for="pca_selector"><strong>Number of top variable genes:</strong></label>
+<label for="pca_selector"><strong>Genes used:</strong></label>
 <select id="pca_selector" onchange="updatePCAPlot(this.value)" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">
 ```{r pca-dropdown, echo=FALSE, results='asis'}
-if (length(available_n_top) > 0 && available_n_top[1] != 0) {
-    for (n_val in available_n_top) {
-        selected <- if (n_val == default_n_top) " selected" else ""
-        cat(sprintf('<option value="%d"%s>%s genes</option>\n', n_val, selected, format(n_val, big.mark = ",")))
+if (nrow(pca_panels) > 0) {
+    for (i in seq_len(nrow(pca_panels))) {
+        selected <- if (i == 1) " selected" else ""
+        cat(sprintf('<option value="%s"%s>%s</option>\n', pca_panels$key[i], selected, pca_panels$label[i]))
     }
-} else if (!is.null(default_img_uri)) {
-    cat('<option value="0" selected>All genes (default)</option>\n')
 } else {
     cat('<option disabled>No PCA plots found</option>\n')
 }
@@ -885,26 +870,43 @@ if (length(available_n_top) > 0 && available_n_top[1] != 0) {
 </select>
 </div>
 
-<div id="pca_plot_container" style="text-align: center;">
 ```{r pca-render, echo=FALSE, results='asis'}
-if (!is.null(default_img_uri)) {
-    cat(sprintf('<img id="pca_main_image" src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA Plot" />', default_img_uri))
+pca_panel_html <- function(id, title, uri) {
+    body <- if (nzchar(uri)) {
+        sprintf('<img id="%s" src="%s" style="width:100%%; height:auto;" alt="PCA, %s" />', id, uri, title)
+    } else {
+        sprintf('<p id="%s_missing"><em>Not available for this run.</em></p>', id)
+    }
+    sprintf('<div style="flex: 1 1 380px; max-width: 560px; text-align: center;"><p><strong>%s</strong></p>%s</div>',
+            title, body)
+}
+if (nrow(pca_panels) > 0) {
+    first <- pca_data_map[[pca_panels$key[1]]]
+    cat('<div id="pca_plot_container" style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;">')
+    cat(pca_panel_html("pca_img_cpm", htmltools::htmlEscape(pca_work_label), first$cpm))
+    cat(pca_panel_html("pca_img_vst", "DESeq2 VST (blind)", first$vst))
+    cat('</div>')
 } else {
     cat('<p><em>PCA plot not available.</em></p>')
 }
 ```
-</div>
 
 <script>
 var embeddedPcaImages = `r if (length(pca_data_map) > 0) jsonlite::toJSON(pca_data_map, auto_unbox = TRUE) else "{}"`;
 
-function updatePCAPlot(n_top) {
-    var img = document.getElementById("pca_main_image");
-    if (embeddedPcaImages && embeddedPcaImages[n_top]) {
-        img.src = embeddedPcaImages[n_top];
-    }
+function updatePCAPlot(key) {
+    var entry = embeddedPcaImages[key];
+    if (!entry) return;
+    ["cpm", "vst"].forEach(function (k) {
+        var img = document.getElementById("pca_img_" + k);
+        if (img && entry[k]) img.src = entry[k];
+    });
 }
 </script>
+
+```{r legend-pca-panels, results='asis', echo=FALSE}
+figure_legend("PCA of the same samples and genes under two transforms. The variance shares on the axes differ between them because a small log offset lets low-count genes add spread that is mostly counting noise; the grouping of samples is what to compare.")
+```
 
 ### PC1 vs PC2
 
