@@ -786,9 +786,7 @@ plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
   df <- df[order(df$.direction), ]
   
   ggplot2::ggplot(df, ggplot2::aes(x = .A, y = .logFC)) +
-    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction, shape = .capped),
-                        size = 1.2, na.rm = TRUE) +
-    ggplot2::scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 17), guide = "none") +
+    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
     ggplot2::scale_color_manual(
       name = "Regulation",
       values = c("NS" = "grey60", "Down" = "blue", "Up" = "red"),
