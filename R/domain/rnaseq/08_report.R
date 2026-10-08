@@ -100,3 +100,37 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 
     out_html
 }
+
+#' PCA panels for the RNA-seq report's gene-set dropdown
+#'
+#' Pairs the PCA on the working matrix (log2 TMM CPM by default) with the blind
+#' VST PCA for each gene set, in the order the dropdown shows them: all genes,
+#' then the top-variable sets from largest to smallest. Kept out of the
+#' template so the pairing and order are tested against the code the report
+#' runs. "All genes" on the working matrix is the main PC1-vs-PC2 plot, the
+#' same call on the same matrix, so it is not written twice.
+#'
+#' @param diag_dir Directory holding the RNA-seq diagnostic plots.
+#' @return Data frame with columns \code{key}, \code{label}, \code{cpm_path}
+#'   and \code{vst_path} (NA where that image does not exist), one row per gene
+#'   set with at least one image; zero rows if there are none.
+list_rna_pca_panels <- function(diag_dir) {
+    existing <- function(path) if (file.exists(path)) path else NA_character_
+
+    top_files <- list.files(diag_dir, pattern = "^PCA_(vst_)?top[0-9]+\\.png$")
+    n_top <- sort(unique(as.numeric(sub("^PCA_(vst_)?top([0-9]+)\\.png$", "\\2", top_files))),
+                  decreasing = TRUE)
+
+    panels <- data.frame(
+        key = c("all", sprintf("top%d", n_top)),
+        label = c("All genes", sprintf("Top %s variable genes", format(n_top, big.mark = ",", trim = TRUE))),
+        cpm_path = c(existing(file.path(diag_dir, "PCA_PC1.vs.PC2.png")),
+                     vapply(n_top, function(n) existing(file.path(diag_dir, sprintf("PCA_top%d.png", n))),
+                            character(1))),
+        vst_path = c(existing(file.path(diag_dir, "PCA_vst_all.png")),
+                     vapply(n_top, function(n) existing(file.path(diag_dir, sprintf("PCA_vst_top%d.png", n))),
+                            character(1))),
+        stringsAsFactors = FALSE
+    )
+    panels[!is.na(panels$cpm_path) | !is.na(panels$vst_path), , drop = FALSE]
+}

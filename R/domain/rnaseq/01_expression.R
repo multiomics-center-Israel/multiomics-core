@@ -134,20 +134,52 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
 #' \code{normalization$prior.count}, shared by preprocessing and every report
 #' that describes the transform, so they cannot disagree about what ran.
 #'
+#' With neither key set the default is \code{log2(TMM CPM + 1)}. edgeR's prior
+#' count is in reads, so at typical depths it adds well under 1 CPM; genes with
+#' a handful of reads then swing by several log2 units between replicates and
+#' that counting noise takes over the spread the QC PCA and heatmaps show.
+#' Setting \code{prior.count} explicitly keeps the edgeR transform.
+#'
 #' @param norm_cfg The \code{modes$rna$normalization} config list (may be NULL).
 #' @return List with \code{type} ("cpm_pseudocount" or "prior_count"),
 #'   \code{value} (numeric) and \code{label} (reader-facing formula).
 resolve_rna_log_offset <- function(norm_cfg) {
-    pseudo <- norm_cfg$cpm_pseudocount
-    if (!is.null(pseudo)) {
-        pseudo <- as.numeric(pseudo)
+    prior <- norm_cfg$prior.count
+    if (is.null(prior)) {
+        pseudo <- as.numeric(norm_cfg$cpm_pseudocount %||% 1)
         return(list(type = "cpm_pseudocount", value = pseudo,
                     label = sprintf("log2(TMM CPM + %s)", format(pseudo))))
     }
-    prior <- as.numeric(norm_cfg$prior.count %||% 1)
+    prior <- as.numeric(prior)
     list(type = "prior_count", value = prior,
          label = sprintf("edgeR log2 CPM, prior count %s reads (scaled by library size)",
                          format(prior)))
+}
+
+#' Blind DESeq2 VST of the filtered RNA counts, for the QC PCA
+#'
+#' The report shows this PCA next to the one on \code{expr_work}, so a reader
+#' can see that the sample structure does not hinge on the log offset. It is
+#' blind to the design, as DESeq2 recommends for QC, and uses the same filtered
+#' genes as \code{expr_work}. Nothing downstream reads it.
+#'
+#' @param pre List returned by \code{preprocess_rna()}.
+#' @param sample_col Metadata column holding the sample IDs.
+#' @return VST matrix (genes x samples), or NULL when there is nothing to add:
+#'   preprocessed (non-count) input, \code{expr_work} that is already a VST, or
+#'   a VST that failed and fell back to TMMlogCPM.
+compute_rna_qc_vst <- function(pre, sample_col = "SampleID") {
+    source_type <- pre$info$source_type %||% attr(pre, "source_type")
+    if (identical(source_type, "preprocessed")) return(NULL)
+    if (identical(attr(pre$expr_work, "method"), "VST")) return(NULL)
+
+    vst <- normalize_counts(pre$de_input, meta = pre$meta, method = "VST",
+                            sample_col = sample_col, filter_zero_count = TRUE)
+    if (!identical(attr(vst, "method"), "VST")) {
+        message("[QC] VST failed and fell back to TMMlogCPM; skipping the VST PCA panels")
+        return(NULL)
+    }
+    vst
 }
 
 # compute CPM

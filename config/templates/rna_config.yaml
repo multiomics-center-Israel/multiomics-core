@@ -54,12 +54,13 @@ modes:
     # --------------------------------------------------------
     normalization:
       method: "TMMlogCPM"   # "TMMlogCPM" | "VST"
-      # TMMlogCPM log offset -- set ONE of these two:
-      #   prior.count:     edgeR prior, in reads scaled by library size (~0.05-0.1 CPM at 10-20M reads)
+      # TMMlogCPM log offset -- set at most ONE of these two (default: log2(TMM CPM + 1)):
       #   cpm_pseudocount: fixed offset in CPM units, giving log2(TMM CPM + x); 1 = the common log2(CPM + 1)
+      #   prior.count:     edgeR prior, in reads scaled by library size (~0.05-0.1 CPM at 10-20M reads)
       # A small prior.count lets low-count noise spread variance over many PCs in the QC plots.
-      prior.count: 1
+      # The report also shows a DESeq2 VST (blind) PCA next to this one, whatever is set here.
       # cpm_pseudocount: 1
+      # prior.count: 1
 
     # Feature filtering
     filtering:

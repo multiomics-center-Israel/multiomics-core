@@ -58,10 +58,12 @@ test_that("resolve_rna_log_offset reads one key and labels it", {
     expect_identical(pr$value, 3)
     expect_match(pr$label, "prior count 3 reads")
 
-    # No normalization block at all: the edgeR default of prior.count = 1.
+    # Neither key set: log2(TMM CPM + 1), not edgeR's prior count.
     def <- resolve_rna_log_offset(NULL)
-    expect_identical(def$type, "prior_count")
+    expect_identical(def$type, "cpm_pseudocount")
     expect_identical(def$value, 1)
+    expect_match(def$label, "log2(TMM CPM + 1)", fixed = TRUE)
+    expect_identical(resolve_rna_log_offset(list(method = "TMMlogCPM"))$type, "cpm_pseudocount")
 })
 
 rna_cfg_with_norm <- function(norm) {
