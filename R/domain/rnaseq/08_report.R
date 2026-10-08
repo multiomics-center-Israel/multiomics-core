@@ -114,12 +114,14 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 #' @param padj_cut Adjusted p-value cutoff.
 #' @param lfc_cut Absolute log2 fold-change cutoff.
 #' @param direction \code{"all"}, \code{"up"} or \code{"down"}.
+#' @param gene_col Column holding the gene identifier to return. NULL uses
+#'   \code{GeneName} when present, else the first column.
 #' @return Named list of gene vectors, one per contrast with both columns
 #'   present; names have underscores replaced by spaces.
 collect_de_gene_sets <- function(de_data, contrast_names, padj_cut, lfc_cut,
-                                 direction = c("all", "up", "down")) {
+                                 direction = c("all", "up", "down"), gene_col = NULL) {
     direction <- match.arg(direction)
-    gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
+    gene_col <- gene_col %||% (if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1])
     sets <- list()
     for (cn in contrast_names) {
         padj_col <- grep(paste0("^padj\\.", cn, "$"), names(de_data), value = TRUE)[1]
@@ -165,7 +167,7 @@ draw_de_overlap <- function(gene_sets, title, fill_high = "steelblue", max_venn 
         p <- ggVennDiagram::ggVennDiagram(gene_sets, label_alpha = 0, label = "both",
                                           label_percent_digit = 1, set_size = 3.5) +
             ggplot2::scale_fill_gradient(low = "white", high = fill_high) +
-            ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = 0.25)) +
+            ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = 0.5)) +
             ggplot2::labs(title = title, subtitle = paste0("Total unique genes: ", total)) +
             ggplot2::theme(legend.position = "none",
                            plot.title = ggplot2::element_text(hjust = 0),
@@ -197,4 +199,144 @@ draw_de_overlap <- function(gene_sets, title, fill_high = "steelblue", max_venn 
     # Left padding so long contrast names are not clipped at the device edge.
     ComplexHeatmap::draw(ht, padding = grid::unit(c(2, 8, 2, 2), "mm"))
     invisible("upset")
+}
+
+#' Write a pheatmap object to a PNG for embedding in the report
+#'
+#' Printing a pheatmap inside a report chunk draws on whatever device is
+#' current. In the pipeline's R session that was not knitr's device, so the
+#' Top DE heatmaps went to a stray Rplots.pdf and the report showed nothing.
+#' Drawing onto a PNG device opened and closed here does not depend on that
+#' state; the chunk then embeds the file with \code{knitr::include_graphics()}.
+#'
+#' @param ph A pheatmap object (\code{pheatmap(..., silent = TRUE)}).
+#' @param file PNG path to write; a temporary file by default.
+#' @param width,height Size in inches.
+#' @param res Resolution in pixels per inch.
+#' @return The PNG path, invisibly.
+write_pheatmap_png <- function(ph, file = tempfile(fileext = ".png"),
+                               width = 10, height = 8, res = 100) {
+    grDevices::png(file, width = width, height = height, units = "in", res = res)
+    on.exit(grDevices::dev.off(), add = TRUE)
+    grid::grid.newpage()
+    grid::grid.draw(ph$gtable)
+    invisible(file)
+}
+
+#' Contrast pairs the report compares in Venn diagrams
+#'
+#' Reads \code{report_sections$de_overlap_groups}: a list of groups, each with
+#' a \code{name} and two or three \code{contrasts}. A group naming a contrast
+#' the run does not have, or with fewer than two or more than three contrasts,
+#' is dropped with a message rather than failing the report.
+#'
+#' @param groups The configured list (may be NULL).
+#' @param contrast_names Contrasts present in the run.
+#' @return List of groups, each \code{list(name, contrasts)}; empty when none
+#'   is configured or valid.
+resolve_de_overlap_groups <- function(groups, contrast_names) {
+    out <- list()
+    for (i in seq_along(groups)) {
+        g <- groups[[i]]
+        cn <- as.character(unlist(g$contrasts))
+        name <- g$name %||% paste(cn, collapse = " / ")
+        missing <- setdiff(cn, contrast_names)
+        if (length(missing) > 0) {
+            message(sprintf("[report] de_overlap_groups '%s' skipped: unknown contrast(s) %s",
+                            name, paste(missing, collapse = ", ")))
+            next
+        }
+        if (length(cn) < 2 || length(cn) > 3) {
+            message(sprintf("[report] de_overlap_groups '%s' skipped: needs 2 or 3 contrasts, has %d",
+                            name, length(cn)))
+            next
+        }
+        out[[length(out) + 1]] <- list(name = name, contrasts = cn)
+    }
+    out
+}
+
+#' Which of two or three gene sets each gene belongs to
+#'
+#' @param gene_sets Named list of gene vectors.
+#' @return Named character vector over the union of the sets: the names of
+#'   the sets containing the gene, joined by " & ", with " only" appended
+#'   when it is in just one.
+overlap_membership <- function(gene_sets) {
+    genes <- unique(unlist(gene_sets, use.names = FALSE))
+    lab <- vapply(genes, function(g) {
+        hit <- names(gene_sets)[vapply(gene_sets, function(s) g %in% s, logical(1))]
+        if (length(hit) == 1) paste(hit, "only") else paste(hit, collapse = " & ")
+    }, character(1))
+    stats::setNames(lab, genes)
+}
+
+#' Clustered z-score heatmap of a set of DE genes
+#'
+#' Rows are genes (z-scored across samples and capped at +/-3 so a few extreme
+#' genes do not wash out the colour scale), columns are samples; both are
+#' clustered. With \code{membership}, a row annotation shows which contrasts
+#' each gene is DE in.
+#'
+#' @param expr Normalized expression matrix or data frame (genes x samples).
+#' @param genes Gene IDs to plot; IDs absent from \code{expr} are ignored.
+#' @param annot_col Sample annotation data frame (rownames = sample IDs), or NULL.
+#' @param membership Named character vector from \code{overlap_membership()}, or NULL.
+#' @param title Plot title.
+#' @return A pheatmap object, or NULL when fewer than two genes are found.
+de_cluster_heatmap <- function(expr, genes, annot_col = NULL, membership = NULL, title = NULL) {
+    clean <- function(x) sub("^Gene:", "", x)
+    rn <- clean(rownames(expr))
+    idx <- which(rn %in% clean(genes))
+    if (length(idx) < 2) return(NULL)
+    m <- as.matrix(expr[idx, , drop = FALSE])
+    rownames(m) <- rn[idx]
+    z <- t(scale(t(m)))
+    z[is.na(z)] <- 0
+    z <- pmin(pmax(z, -3), 3)
+    if (!is.null(annot_col)) {
+        keep <- intersect(colnames(z), rownames(annot_col))
+        z <- z[, keep, drop = FALSE]
+        annot_col <- annot_col[keep, , drop = FALSE]
+    }
+    annot_row <- NULL
+    if (!is.null(membership)) {
+        names(membership) <- clean(names(membership))
+        annot_row <- data.frame(DE_in = unname(membership[rownames(z)]), row.names = rownames(z))
+    }
+    pheatmap::pheatmap(
+        z,
+        annotation_col = annot_col,
+        annotation_row = annot_row,
+        breaks = seq(-3, 3, length.out = 101),
+        cluster_rows = TRUE, cluster_cols = TRUE,
+        show_rownames = nrow(z) <= 60,
+        show_colnames = ncol(z) <= 40,
+        main = sprintf("%s (%s genes, z-score)", title %||% "DE genes",
+                       format(nrow(z), big.mark = ",")),
+        silent = TRUE
+    )
+}
+
+#' Draw a DE overlap plot onto its own PNG
+#'
+#' Wraps \code{draw_de_overlap()} in a dedicated PNG device for the same reason
+#' as \code{write_pheatmap_png()}: the report must not depend on which device
+#' is current.
+#'
+#' @inheritParams draw_de_overlap
+#' @param file PNG path; a temporary file by default.
+#' @param width,height Size in inches.
+#' @param ... Passed to \code{draw_de_overlap()}.
+#' @return The PNG path, or NULL when there was nothing to draw.
+write_de_overlap_png <- function(gene_sets, title, file = tempfile(fileext = ".png"),
+                                 width = 10, height = 6, ...) {
+    grDevices::png(file, width = width, height = height, units = "in", res = 100)
+    kind <- tryCatch(draw_de_overlap(gene_sets, title, ...),
+                     finally = grDevices::dev.off())
+    if (identical(kind, "none")) {
+        unlink(file)
+        return(NULL)
+    }
+    file
 }
