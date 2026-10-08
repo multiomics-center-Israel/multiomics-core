@@ -100,3 +100,25 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 
     out_html
 }
+
+#' Write a pheatmap object to a PNG for embedding in the report
+#'
+#' Printing a pheatmap inside a report chunk draws on whatever device is
+#' current. In the pipeline's R session that was not knitr's device, so the
+#' Top DE heatmaps went to a stray Rplots.pdf and the report showed nothing.
+#' Drawing onto a PNG device opened and closed here does not depend on that
+#' state; the chunk then embeds the file with \code{knitr::include_graphics()}.
+#'
+#' @param ph A pheatmap object (\code{pheatmap(..., silent = TRUE)}).
+#' @param file PNG path to write; a temporary file by default.
+#' @param width,height Size in inches.
+#' @param res Resolution in pixels per inch.
+#' @return The PNG path, invisibly.
+write_pheatmap_png <- function(ph, file = tempfile(fileext = ".png"),
+                               width = 10, height = 8, res = 100) {
+    grDevices::png(file, width = width, height = height, units = "in", res = res)
+    on.exit(grDevices::dev.off(), add = TRUE)
+    grid::grid.newpage()
+    grid::grid.draw(ph$gtable)
+    invisible(file)
+}
