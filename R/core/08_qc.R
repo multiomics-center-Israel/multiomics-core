@@ -570,16 +570,36 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   invisible(p)
 }
 
+#' QC expression heatmap of the top variable features
+#'
+#' @param expr_mat Expression matrix (features x samples).
+#' @param meta Sample metadata.
+#' @param cfg Mode config with \code{effects} (samples, color, shape).
+#' @param stage Label used in the title, e.g. \code{"rna"}.
+#' @param out_file Optional PNG path.
+#' @param cluster_cols,cluster_rows Passed to \code{plot_heatmap_core()}.
+#' @param annot_cols Metadata columns for the sample annotation bars. NULL
+#'   (default) keeps the color column plus the shape column, as before.
+#' @return The pheatmap object.
 wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
-                            cluster_cols = TRUE, cluster_rows = TRUE) {
+                            cluster_cols = TRUE, cluster_rows = TRUE,
+                            annot_cols = NULL) {
   # 1. Prepare Data
   d <- prepare_qc_data(expr_mat, meta, cfg)
-  
-  # Rename column to match config
-  col_name <- d$color_col
-  annot <- d$annot
-  if ("Condition" %in% names(annot)) {
-    colnames(annot)[which(names(annot) == "Condition")] <- col_name
+
+  if (!is.null(annot_cols)) {
+    # Same columns as the sibling QC heatmaps, so the clustered and unclustered
+    # views carry the same annotation bars.
+    # d$meta is already aligned 1:1 with the matrix columns.
+    annot <- as.data.frame(d$meta)[, annot_cols, drop = FALSE]
+    rownames(annot) <- d$sample_ids
+  } else {
+    # Rename column to match config
+    col_name <- d$color_col
+    annot <- d$annot
+    if ("Condition" %in% names(annot)) {
+      colnames(annot)[which(names(annot) == "Condition")] <- col_name
+    }
   }
   
   ph <- plot_heatmap_core(
