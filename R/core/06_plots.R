@@ -619,7 +619,14 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pva
 
   # Handle NAs (important for DESeq2)
   plot_df$.p_plot <- ifelse(is.na(plot_df$.p), 1, plot_df$.p)
-  plot_df$.neglog10p <- -log10(pmax(plot_df$.p_plot, 1e-300))
+  # P-values below the double-precision range (DESeq2 reports many as exactly
+  # 0) have no place on a log axis. They sit at the cap and are drawn as
+  # triangles, so the flat row at the top reads as "at least this significant"
+  # rather than as measured values.
+  p_floor <- 1e-300
+  plot_df$.capped <- plot_df$.p_plot < p_floor
+  plot_df$.neglog10p <- -log10(pmax(plot_df$.p_plot, p_floor))
+  n_capped <- sum(plot_df$.capped)
 
 
   # 4. Define Significance & Direction (against the selected p column)
@@ -638,7 +645,9 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pva
 
   # 7. Plotting
   p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
-    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
+    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction, shape = .capped),
+                        size = 1.2, na.rm = TRUE) +
+    ggplot2::scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 17), guide = "none") +
     ggplot2::scale_color_manual(
       values = c("NS" = "grey80", "Down" = "#377eb8", "Up" = "#e41a1c"),
       drop = FALSE # Keep all levels in legend even if 0 counts
@@ -650,7 +659,13 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pva
       title = title %||% "Volcano Plot",
       subtitle = paste("Using:", p_col, "and", lfc_col),
       x = "log2 Fold Change",
-      y = paste0("-log10(", p_col, ")")
+      y = paste0("-log10(", p_col, ")", if (n_capped > 0) ", capped at 300" else ""),
+      caption = if (n_capped > 0) {
+        sprintf("%d features with %s below 1e-300 (some reported as 0) are drawn at the cap as triangles.",
+                n_capped, p_col)
+      } else {
+        NULL
+      }
     ) +
     ggplot2::theme_minimal()
 
