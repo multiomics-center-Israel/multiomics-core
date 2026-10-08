@@ -143,3 +143,11 @@ test_that("a volcano with no capped p-value has no cap note", {
     expect_false(grepl("capped", p$labels$y))
     expect_null(p$labels$caption)
 })
+
+test_that("plot_ma still builds (it shares the point layer's look, not the cap)", {
+    de <- make_de_tbl()
+    de$AveExpr <- c(5, 6, 7, 8)
+    de$adj.P.Val[1] <- 0
+    p <- plot_ma(de, volcano_cfg, title = "x")
+    expect_s3_class(ggplot2::ggplot_build(p), "ggplot_built")
+})
