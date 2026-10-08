@@ -123,3 +123,23 @@ test_that("pvalue_type='pval' errors on an all-NA P.Value column (RNA fallback)"
         "entirely NA"
     )
 })
+
+test_that("p-values below 1e-300 sit at the cap as triangles and are named in the caption", {
+    de <- make_de_tbl()
+    de$adj.P.Val[1:2] <- c(0, 1e-320)
+    p <- plot_volcano(de, volcano_cfg, title = "x", pvalue_type = "padj")
+    built <- ggplot2::ggplot_build(p)$data[[1]]
+
+    expect_equal(max(built$y), 300)
+    expect_equal(sum(built$y == 300), 2)
+    expect_setequal(built$shape[built$y == 300], 17)
+    expect_setequal(built$shape[built$y < 300], 16)
+    expect_match(p$labels$y, "capped at 300")
+    expect_match(p$labels$caption, "^2 features")
+})
+
+test_that("a volcano with no capped p-value has no cap note", {
+    p <- plot_volcano(make_de_tbl(), volcano_cfg, title = "x", pvalue_type = "padj")
+    expect_false(grepl("capped", p$labels$y))
+    expect_null(p$labels$caption)
+})
