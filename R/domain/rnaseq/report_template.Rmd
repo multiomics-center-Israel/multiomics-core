@@ -1357,6 +1357,10 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     list(widget = widget, plot_df = reg_df)
 }
 
+# The setup chunk read contrast_names from the final results columns, which
+# follow the contrasts file; keep that order rather than the files' alphabetical one.
+contrast_order <- contrast_names
+
 # Discover contrasts from the canonical _padj variant (new dual-volcano scheme).
 # Fall back to legacy single-file scheme if the pipeline has not regenerated yet.
 volcano_padj_files <- list.files(qc_post_dir, pattern = "^volcano_.*_padj\\.png$",
@@ -1369,6 +1373,9 @@ if (length(volcano_padj_files) > 0) {
                                   full.names = TRUE)
     contrast_names <- gsub("^volcano_|\\.png$", "", basename(volcano_files))
 }
+volcano_order  <- order(match(contrast_names, contrast_order), contrast_names)
+contrast_names <- contrast_names[volcano_order]
+volcano_files  <- volcano_files[volcano_order]
 ```
 
 ### Static {.tabset}
