@@ -124,29 +124,54 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
                         n_samples, min_samples_pca3d))
     }
 
-    # ---------- PCA with top variable genes (for report dropdown) ----------
+    # ---------- PCA by gene set, two transforms (for report dropdown) ----------
+    # The working matrix (log2 TMM CPM by default) and a blind DESeq2 VST, each
+    # on all genes and on the top-variable genes, so the report can show that
+    # the sample structure does not hinge on the log transform. "All genes" on
+    # the working matrix is PCA_PC1.vs.PC2.png above; list_rna_pca_panels()
+    # pairs the files for the report.
     n_top_values <- c(500, 1000, 2000, 5000)
-    n_features <- nrow(mat)
     cfg_temp <- cfg
     cfg_temp$effects$color <- primary_color
 
-    for (n_top in n_top_values) {
-        if (n_top <= n_features) {
-            # Select top N most variable genes
-            gene_vars <- apply(mat, 1, var, na.rm = TRUE)
-            top_idx <- order(gene_vars, decreasing = TRUE)[1:n_top]
-            mat_top <- mat[top_idx, , drop = FALSE]
+    work_label <- rna_qc_transform_label(mat, cfg)
+    top_work <- write_rna_pca_top_panels(mat, meta, cfg_temp, out_qc, prefix = "PCA_",
+                                         transform_label = work_label,
+                                         n_top_values = n_top_values)
+    files <- c(files, top_work$files)
+    plots <- c(plots, top_work$plots)
 
-            f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
-            tryCatch({
-                p_top <- qc_pca_scatter(mat_top, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top)
-                files <- c(files, f_pca_top)
-                plots[[sprintf("pca_top%d", n_top)]] <- p_top
-                message(sprintf("  Generated PCA with top %d variable genes", n_top))
-            }, error = function(e) {
-                message(sprintf("  Could not generate PCA with top %d genes: %s", n_top, e$message))
-            })
+    # Stale VST panels from an earlier run would be paired with this run's
+    # plots by name, so clear them before (maybe) writing new ones.
+    stale_vst <- list.files(out_qc, pattern = "^PCA_vst_(all|top[0-9]+)\\.png$", full.names = TRUE)
+    if (length(stale_vst) > 0) file.remove(stale_vst)
+
+    sample_col <- cfg$id_columns$sample_col %||% "SampleID"
+    mat_vst <- tryCatch(
+        compute_rna_qc_vst(pre, sample_col = sample_col),
+        error = function(e) {
+            message("  Could not compute the VST for the QC PCA: ", conditionMessage(e))
+            NULL
         }
+    )
+    if (!is.null(mat_vst)) {
+        vst_label <- "DESeq2 VST (blind)"
+        f_vst_all <- file.path(out_qc, "PCA_vst_all.png")
+        tryCatch({
+            p_vst_all <- qc_pca_scatter(mat_vst, meta, cfg_temp, pcs = c(1, 2), out_file = NULL) +
+                ggplot2::labs(subtitle = sprintf("%s, all genes", vst_label))
+            ggplot2::ggsave(f_vst_all, plot = p_vst_all, width = 6, height = 5)
+            files <- c(files, f_vst_all)
+            plots$pca_vst_all <- p_vst_all
+        }, error = function(e) {
+            message("  Could not generate the VST PCA on all genes: ", conditionMessage(e))
+        })
+
+        top_vst <- write_rna_pca_top_panels(mat_vst, meta, cfg_temp, out_qc, prefix = "PCA_vst_",
+                                            transform_label = vst_label,
+                                            n_top_values = n_top_values)
+        files <- c(files, top_vst$files)
+        plots <- c(plots, top_vst$plots)
     }
 
     # ---------- Density (primary color only) ----------
@@ -315,6 +340,53 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         norm_log_counts_pca = pca_obj,
         pca_scores = assert_pca_scores(scores, context = "rnaseq QC")
     )
+}
+
+#' PCA plots on the top-variable genes, one PNG per gene-set size
+#'
+#' @param mat Expression matrix (genes x samples) on a log-like scale.
+#' @param meta Sample metadata.
+#' @param cfg RNA mode config with \code{effects$color} set to one column.
+#' @param out_qc Directory the PNGs are written to.
+#' @param prefix File-name prefix: \code{"PCA_"} gives \code{PCA_top500.png}.
+#' @param transform_label Transform named in the plot subtitle.
+#' @param n_top_values Gene-set sizes; sizes above \code{nrow(mat)} are skipped.
+#' @return List with \code{files} (paths written) and \code{plots} (named list
+#'   of ggplot objects, \code{<prefix>top<N>} in lower case).
+write_rna_pca_top_panels <- function(mat, meta, cfg, out_qc, prefix, transform_label,
+                                     n_top_values = c(500, 1000, 2000, 5000)) {
+    files <- character(0)
+    plots <- list()
+    gene_vars <- apply(mat, 1, var, na.rm = TRUE)
+    for (n_top in n_top_values[n_top_values <= nrow(mat)]) {
+        mat_top <- mat[order(gene_vars, decreasing = TRUE)[seq_len(n_top)], , drop = FALSE]
+        f_pca_top <- file.path(out_qc, sprintf("%stop%d.png", prefix, n_top))
+        tryCatch({
+            p_top <- qc_pca_scatter(mat_top, meta, cfg, pcs = c(1, 2), out_file = NULL) +
+                ggplot2::labs(subtitle = sprintf("%s, top %s variable genes", transform_label,
+                                                 format(n_top, big.mark = ",")))
+            ggplot2::ggsave(f_pca_top, plot = p_top, width = 6, height = 5)
+            files <- c(files, f_pca_top)
+            plots[[tolower(sprintf("%stop%d", prefix, n_top))]] <- p_top
+            message(sprintf("  Generated PCA (%s) with top %d variable genes", transform_label, n_top))
+        }, error = function(e) {
+            message(sprintf("  Could not generate PCA (%s) with top %d genes: %s",
+                            transform_label, n_top, e$message))
+        })
+    }
+    list(files = files, plots = plots)
+}
+
+#' Reader-facing name of the transform behind the RNA working matrix
+#'
+#' @param mat The working matrix (\code{pre$expr_work}).
+#' @param cfg RNA mode config.
+#' @return Character label, e.g. \code{"log2(TMM CPM + 1)"}.
+rna_qc_transform_label <- function(mat, cfg) {
+    method <- attr(mat, "method") %||% "normalized"
+    if (identical(method, "TMMlogCPM")) return(resolve_rna_log_offset(cfg$normalization)$label)
+    if (identical(method, "VST")) return("DESeq2 VST (blind)")
+    method
 }
 
 #' Validate effects configuration for color/shape conflicts
