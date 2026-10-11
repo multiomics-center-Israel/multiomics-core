@@ -8,6 +8,11 @@
 # New code should use build_shiny_payload_metabolomics().
 # ============================================================
 
+# The per-contrast keys the app's mummichog contract names. The HTML report's
+# section builder returns a superset; `payload$mummichog` carries only these, so
+# a new report tab never changes what the app receives.
+.METAB_SHINY_MUMMICHOG_KEYS <- c("title", "subtitle", "plot", "table", "slug")
+
 
 # ============================================================
 # CANONICAL BUILDER (v2.0)
@@ -374,7 +379,16 @@ build_shiny_payload_metabolomics <- function(
     # report's own ggplot and table (plus title, subtitle and slug) for each
     # contrast instead of rebuilding them. NULL when mummichog did not run or no
     # contrast has a result; list-style assignment keeps the key present then.
-    mummichog_sections <- build_mummichog_report_sections(mummichog_pathways, config)
+    # The report builder also returns the GSEA and supporting-evidence fields it
+    # needs for the HTML tabs. Those are an HTML-report concern and arrive empty
+    # here anyway (this call supplies neither the mummichog result files nor the
+    # DE tables they are built from), so the payload is narrowed to the keys the
+    # app's contract names. Widening it is the Shiny owner's call, not a
+    # side effect of adding a report section.
+    mummichog_sections <- lapply(
+        build_mummichog_report_sections(mummichog_pathways, config),
+        function(sec) sec[intersect(.METAB_SHINY_MUMMICHOG_KEYS, names(sec))]
+    )
     payload["mummichog"] <- list(
         if (length(mummichog_sections) > 0) mummichog_sections else NULL
     )
