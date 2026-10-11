@@ -102,3 +102,19 @@ test_that("write_de_overlap_png writes a PNG, or nothing when no gene is DE", {
     utils::capture.output(out <- write_de_overlap_png(list(a = character(0), b = character(0)), title = "t"))
     expect_null(out)
 })
+
+test_that("the overlap PNG and heatmap helpers leave the current device alone", {
+    skip_if_not_installed("pheatmap")
+    skip_if_not_installed("ComplexHeatmap")
+    grDevices::pdf(NULL); first <- grDevices::dev.cur()
+    grDevices::pdf(NULL); second <- grDevices::dev.cur()
+    on.exit({ grDevices::dev.off(second); grDevices::dev.off(first) }, add = TRUE)
+
+    write_de_overlap_png(list(a = c("x", "y"), b = "y", c = "z", d = "x"), title = "t")
+    expect_identical(grDevices::dev.cur(), second)
+
+    withr::with_seed(2, expr <- matrix(rnorm(40), nrow = 10,
+                                       dimnames = list(paste0("g", 1:10), paste0("S", 1:4))))
+    de_cluster_heatmap(expr, paste0("g", 1:5))
+    expect_identical(grDevices::dev.cur(), second)
+})
