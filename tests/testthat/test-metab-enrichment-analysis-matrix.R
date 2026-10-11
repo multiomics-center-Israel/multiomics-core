@@ -443,6 +443,47 @@ test_that(".metab_ssgsea_conditions refuses a third group instead of nulling it"
                  "not among the condition values")
 })
 
+test_that(".metab_ssgsea_conditions refuses samples with no group label", {
+    # The same hazard as a third group, but invisible to both checks: `present`
+    # is built from the non-NA values, so an unlabelled sample is neither
+    # missing nor surplus. factor() then leaves it NA and the Wilcoxon drops it
+    # alone, after GSVA has already normalised across it.
+    v <- c(rep(c("B", "A"), each = 3), NA)
+
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")),
+                 "carry no value in the contrast's grouping column")
+    # The message counts them, so a reader knows the scale of the mismatch.
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")), "1 of 7")
+    # Both routes in produce NA and so are both caught: a column holding NA,
+    # and a scored sample whose id did not match the metadata (match() -> NA).
+    expect_error(.metab_ssgsea_conditions(c("A", "B", NA, NA), c("B", "A")),
+                 "2 of 4")
+
+    # The two diagnoses stay distinct: an unlabelled sample is not reported as
+    # a surplus group, and vice versa.
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")), "no value", fixed = TRUE)
+    expect_error(.metab_ssgsea_conditions(c("A", "B", "C"), c("B", "A")),
+                 "also carry group\\(s\\)")
+})
+
+test_that("the global ssGSEA path still tolerates unlabelled samples", {
+    # No contrast is named, so nothing is being asserted about direction and
+    # this path must behave exactly as it did before: NA stays out of the
+    # levels, which is what lets the caller's two-group guard see the real
+    # number of groups.
+    v <- c(rep(c("B", "A"), each = 3), NA)
+
+    expect_silent(cond <- .metab_ssgsea_conditions(v, NULL))
+    expect_identical(levels(cond), c("A", "B"))
+    expect_true(is.na(cond[length(cond)]))
+    expect_length(cond, length(v))
+
+    # Three real groups plus an unlabelled sample still read as three levels,
+    # so the "requires exactly 2 conditions" guard fires as it always has.
+    expect_identical(levels(.metab_ssgsea_conditions(c("A", "B", "C", NA), NULL)),
+                     c("A", "B", "C"))
+})
+
 test_that("a contrast whose groups are absent yields no ssGSEA result, not a signed one", {
     skip_if_not_installed("GSVA")
     skip_if_not_installed("withr")

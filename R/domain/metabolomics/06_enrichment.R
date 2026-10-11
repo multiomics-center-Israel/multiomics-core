@@ -631,7 +631,7 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
 #'   run, where the order falls back to alphabetical and the sign therefore
 #'   carries no contrast direction. Supplying groups that are not both present
 #'   in the scored samples is an error, not a fallback, as is supplying a
-#'   `pre` that still holds a third group.
+#'   `pre` that still holds a third group or a sample with no group label.
 #' @param contrast_column The metadata column those groups live in, as
 #'   `.resolve_contrast_groups()$group_col` returns it — the contrast's own
 #'   `Factor` when it has one. It overrides the configured
@@ -853,6 +853,23 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL,
              ".resolve_contrast_groups() returns them; got ",
              length(contrast_groups), " value(s) of class ",
              class(contrast_groups)[1], ".", call. = FALSE)
+    }
+    # A missing label is the third-group hazard made invisible. `present` is
+    # built from the non-NA values, so an unlabelled sample registers as
+    # neither missing nor surplus and slips through both checks below; factor()
+    # then leaves it NA and `which(conditions == ...)` drops it from the
+    # Wilcoxon alone — after GSVA has already normalised across it. Two ways in:
+    # the column genuinely holds NA, or a scored sample's id did not match the
+    # metadata's sample column, which makes the match() lookup return NA.
+    n_na <- sum(is.na(values))
+    if (n_na > 0) {
+        stop("metabolomics ssGSEA: ", n_na, " of ", length(values),
+             " scored sample(s) carry no value in the contrast's grouping ",
+             "column. Either the column holds NA for them, or their ids did ",
+             "not match the metadata's sample column. GSVA has already ",
+             "normalised across those samples, so excluding them from the ",
+             "Wilcoxon step alone would not be the same comparison: fix the ",
+             "metadata, or subset `pre` before scoring.", call. = FALSE)
     }
     # Missing first: it is the more specific diagnosis. A group the samples do
     # not carry also makes every real group look "extra", so checking extras
