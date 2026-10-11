@@ -189,6 +189,19 @@ test_that("the metab shiny payload target passes only arguments the builder take
                  character(0))
 })
 
+test_that("the report's mummichog file list tracks content, not just paths", {
+    # metab_mummichog_report_files only re-exposes the pinned stage's tracked
+    # paths. As an ordinary target it would hash that character vector, so a
+    # rerun rewriting an EmpiricalCompound table in place would leave its hash
+    # unchanged and metab_report up to date on last run's evidence. format =
+    # "file" makes {targets} hash the files themselves, as it does upstream.
+    result <- pipe_metabolomics("pqn")
+    by_name <- setNames(result, get_target_names(result))
+
+    expect_identical(by_name$metab_mummichog_pinned_files$settings$format, "file")
+    expect_identical(by_name$metab_mummichog_report_files$settings$format, "file")
+})
+
 
 # =============================================================================
 # Tests: pipe_multiomics() — removed
