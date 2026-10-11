@@ -2898,6 +2898,11 @@ if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
 cat("\n## Pathway Dotplots {.tabset}\n\n")
 ```
 
+Offline GSEA dotplots get one tab per contrast and collection, with each
+ranking inside. Otherwise there is one tab per contrast (in contrasts-file
+order), with one sub-tab per pathway collection and method, and GSEA dotplots
+mark NES -2 and 2 with red dashed lines.
+
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
 if (length(offline_dotplots) > 0) {
     # Show one tab per contrast/database, with all available rankings inside.
@@ -2917,12 +2922,21 @@ if (length(offline_dotplots) > 0) {
         }
     }
 } else if (length(legacy_dotplots) > 0) {
-    for (pp in legacy_dotplots) {
-        label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
-        label <- gsub("_", " ", label_raw)
-        cat(sprintf("\n### %s\n\n", label))
-        cat(sprintf("![%s](%s)\n\n", label, pp))
-        render_commentary(paste0("pathway_", label_raw))
+    # Contrast order from the final results columns (= contrasts file); the
+    # volcano section may have reordered contrast_names.
+    pw_contrasts <- if (!is.null(de_data)) sub("^padj\\.", "", grep("^padj\\.", names(de_data), value = TRUE)) else contrast_names
+    dotplots <- list_pathway_dotplots(enrich_plot_dir, pw_contrasts)
+    if (nrow(dotplots) > 0) {
+        dotplots$tab <- ifelse(is.na(dotplots$contrast), "Other", gsub("_", " ", dotplots$contrast))
+        for (tab in unique(dotplots$tab)) {
+            cat(sprintf("\n### %s {.tabset}\n\n", tab))
+            for (i in which(dotplots$tab == tab)) {
+                label_raw <- sub("^pathway_|\\.png$", "", basename(dotplots$path[i]))
+                cat(sprintf("\n#### %s\n\n", dotplots$label[i]))
+                cat(sprintf("![%s](%s)\n\n", dotplots$label[i], dotplots$path[i]))
+                render_commentary(paste0("pathway_", label_raw))
+            }
+        }
     }
 }
 ```

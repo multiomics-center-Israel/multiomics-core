@@ -426,3 +426,51 @@ write_de_overlap_png <- function(gene_sets, title, file = tempfile(fileext = ".p
     }
     file
 }
+
+#' Pathway dotplots grouped by contrast, for the report's nested tabs
+#'
+#' Splits each \code{pathway_<contrast>_<analysis>.png} file name into its
+#' contrast and analysis by matching the run's contrast names (longest first,
+#' cleaned the way \code{generate_pathway_plots()} cleans them), so a contrast
+#' whose name is a prefix of another is not mistaken for it. Contrasts keep
+#' the order given; within a contrast, plots are ordered by collection and then
+#' GSEA, ORA up, ORA down.
+#'
+#' @param plot_dir Directory holding the pathway dotplot PNGs.
+#' @param contrast_names Contrast names, in display order.
+#' @return Data frame with columns \code{contrast} (NA when no contrast
+#'   matched), \code{analysis}, \code{label} and \code{path}, one row per PNG,
+#'   in display order; zero rows if there are none.
+list_pathway_dotplots <- function(plot_dir, contrast_names) {
+    paths <- list.files(plot_dir, pattern = "^pathway_.+\\.png$", full.names = TRUE)
+    stems <- sub("^pathway_(.+)\\.png$", "\\1", basename(paths))
+    clean <- gsub("[^a-zA-Z0-9_-]", "_", contrast_names)
+    by_length <- order(nchar(clean), decreasing = TRUE)
+
+    contrast <- rep(NA_character_, length(stems))
+    analysis <- stems
+    for (i in seq_along(stems)) {
+        for (j in by_length) {
+            prefix <- paste0(clean[j], "_")
+            if (startsWith(stems[i], prefix)) {
+                contrast[i] <- contrast_names[j]
+                analysis[i] <- substring(stems[i], nchar(prefix) + 1)
+                break
+            }
+        }
+    }
+
+    method_rank <- ifelse(grepl("_fgsea$", analysis), 1,
+                   ifelse(grepl("_ora_up$", analysis), 2,
+                   ifelse(grepl("_ora_down$", analysis), 3, 4)))
+    collection <- sub("_(fgsea|ora_up|ora_down)$", "", analysis)
+    contrast_rank <- match(contrast, contrast_names)
+    contrast_rank[is.na(contrast_rank)] <- length(contrast_names) + 1
+
+    out <- data.frame(contrast = contrast, analysis = analysis,
+                      label = gsub("_", " ", analysis), path = paths,
+                      stringsAsFactors = FALSE)
+    out <- out[order(contrast_rank, collection, method_rank, analysis), , drop = FALSE]
+    rownames(out) <- NULL
+    out
+}
