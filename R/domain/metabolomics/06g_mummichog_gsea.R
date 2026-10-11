@@ -219,43 +219,48 @@
 #' reference by passing 1 (which would make our ES differ from MetaboAnalyst's
 #' for the same input), the engine runs only where the two agree.
 #'
-#' Require a whole-number count, and return it as one
+#' Validate this engine's whole-number settings
 #'
-#' `n_perm` and `seed` are whole numbers everywhere they are used: the batch
-#' split needs an integer count, and `withr::with_seed()` coerces to integer.
-#' Accepting `100.5` or `123.9` and quietly truncating would put the engine back
-#' in the position these checks exist to prevent — running one value while
-#' reporting another, and in `seed`'s case announcing a departure from a default
-#' it had in fact used. Refusing is the honest answer: there is no reading of a
-#' fractional permutation count or seed that the caller could have meant.
+#' `n_perm`, `seed`, `min_size` and `max_size` are all used as whole numbers --
+#' the batch split needs an integer count, `withr::with_seed()` coerces to
+#' integer, and the size filter compares against integer set sizes. They share
+#' one validator, `.mmc_as_seed()` from the pinned mummichog stage, which
+#' already enforces exactly the right rule and says why in its own docstring:
+#' checked BEFORE any coercion, because `as.integer()` turns 1.5 into 1 and
+#' "7" into 7 without a word, and the run would then claim a value it was never
+#' given. It also bounds the range at `.Machine$integer.max`, past which
+#' `as.integer()` yields `NA` and the failure surfaces later under an unrelated
+#' message.
 #'
-#' @param x    The supplied value.
-#' @param name Argument name, for the message.
-#' @param min  Smallest acceptable value.
-#' @return `x` as an integer, or an error.
+#' Only `max_size` needs anything more, because `Inf` is its reference default
+#' and a legitimate value. Hence this one wrapper rather than a second
+#' validator: everything else calls `.mmc_as_seed()` directly.
+#'
+#' @param x The supplied upper bound.
+#' @return `Inf`, or `x` as an integer; an error otherwise.
 #' @noRd
-.mmc_gsea_check_count <- function(x, name, min = 1L) {
-  ok <- length(x) == 1L && is.numeric(x) && is.finite(x) &&
-    isTRUE(all.equal(as.numeric(x), round(as.numeric(x)))) && x >= min
-  if (!ok) {
-    .mmc_stop(
-      name, " must be a single whole number >= ", min, "; got ",
-      paste(format(x), collapse = ", "), ". It is used as an integer ",
-      "throughout (the permutation batch split, and withr::with_seed()), so a ",
-      "fractional value would run as one number while being reported as ",
-      "another."
-    )
+.mmc_gsea_check_max_size <- function(x) {
+  if (length(x) == 1L && is.numeric(x) && !is.na(x) && is.infinite(x) && x > 0) {
+    return(Inf)
   }
-  as.integer(round(as.numeric(x)))
+  .mmc_as_seed(x, "max_size")
 }
 
 #' @param gsea_param The requested exponent.
 #' @return `invisible(TRUE)`, or an error.
 #' @noRd
 .mmc_gsea_check_param <- function(gsea_param) {
-  if (!identical(as.numeric(gsea_param), 1)) {
+  # Type first, value second. Comparing as.numeric(gsea_param) would admit the
+  # quoted "1" and logical TRUE: the first then fails inside `abs(stats)^"1"`,
+  # where run_mummichog_gsea()'s tryCatch turns a caller error into "GSEA not
+  # applicable", and the second runs as 1 but is stored as TRUE in params.
+  ok <- length(gsea_param) == 1L && is.numeric(gsea_param) &&
+    !is.na(gsea_param) && is.finite(gsea_param) && gsea_param == 1
+  if (!ok) {
     .mmc_stop(
-      "gsea_param must be 1; got ", format(gsea_param), ". The pinned ",
+      "gsea_param must be the number 1; got ",
+      paste(format(gsea_param), collapse = ", "),
+      " (", class(gsea_param)[1], "). The pinned ",
       "MetaboAnalystR engine (", .MMC_GSEA_REF_REPO, "@",
       substr(.MMC_GSEA_REF_COMMIT, 1, 10), ") applies the exponent twice to ",
       "the observed enrichment score while hardcoding 1 in every permutation ",
@@ -649,8 +654,15 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
   # property of the inputs, and must not be masked by an empty-input return or
   # by a missing package.
   .mmc_gsea_check_param(gsea_param)
-  n_perm <- .mmc_gsea_check_count(n_perm, "n_perm")
-  seed   <- .mmc_gsea_check_count(seed, "seed", min = 0L)
+  # Validated, not coerced, and before anything uses them. An invalid size
+  # bound is the worst of these: NA on either side makes the filter predicate
+  # all-NA, which() returns nothing, and the run reports "no pathway passed"
+  # -- a valid experiment vanishing as a plausible empty result.
+  n_perm   <- .mmc_as_seed(n_perm, "n_perm")
+  seed     <- .mmc_as_seed(seed, "seed")
+  min_size <- .mmc_as_seed(min_size, "min_size")
+  max_size <- .mmc_gsea_check_max_size(max_size)
+  if (n_perm < 1L) .mmc_stop("n_perm must be at least 1; got ", n_perm, ".")
 
   # Every column the populated result carries, including the two diagnostics:
   # a caller that rbinds runs together, or reads the documented schema, must
@@ -686,7 +698,7 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
     batch_seeds <- sample.int(10^9, length(perm_per_proc))
   })
 
-  min_size <- max(min_size, 1)
+  min_size <- max(min_size, 1L)
   # abs() BEFORE any sorting: this is the step that turns the ranking into a
   # |score| ranking and is why NES sign is not a biological direction.
   stats <- abs(stats)^gsea_param
@@ -774,22 +786,30 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
                   leZeroSum = 0, geZeroSum = 0)
       withr::with_seed(batch_seeds[i], {
         for (k in seq_len(n1)) {
-          draw <- sample.int(length(stats), K)
-          # A pathway covering the whole ranking makes every draw the whole
-          # ranking too, and calcGseaStat refuses that set. Unguarded, the first
-          # permutation aborted the engine and the contrast came back as "GSEA
-          # not applicable" -- losing the ES-defaulted row the observed score
-          # had already, correctly, produced. A refusal calcGseaStat recognises
-          # scores 0, consistent with that row; anything else is a real failure
-          # and is re-raised rather than absorbed into the null distribution.
-          rand_es <- tryCatch(
-            fgsea::calcGseaStat(stats = stats, selectedStats = draw,
-                                gseaParam = 1),
-            error = function(e) {
-              reason <- .mmc_gsea_fallback_reason(draw, conditionMessage(e))
-              if (startsWith(reason, .MMC_GSEA_FALLBACK_UNEXPECTED)) stop(e)
-              0
-            })
+          # No permutation exists once the pathway is as large as the ranking.
+          # Two routes get there, and both are recognised rather than caught:
+          # a pathway covering every position (K == length(stats)), and tied
+          # ECs collapsing the ranking below the pathway's expanded size
+          # (K > length(stats), since tie-group indices are not de-duplicated).
+          # The observed score has already taken the ES = 0 fallback for the
+          # same reason, so the null mirrors it. Checked here because the
+          # second route fails inside sample.int(), before any catch below.
+          if (K >= length(stats)) {
+            rand_es <- 0
+          } else {
+            draw <- sample.int(length(stats), K)
+            # Anything calcGseaStat still refuses on a proper sub-sample scores
+            # 0 only if it is a cause we recognise; a real failure is re-raised
+            # rather than absorbed into the null distribution.
+            rand_es <- tryCatch(
+              fgsea::calcGseaStat(stats = stats, selectedStats = draw,
+                                  gseaParam = 1),
+              error = function(e) {
+                reason <- .mmc_gsea_fallback_reason(draw, conditionMessage(e))
+                if (startsWith(reason, .MMC_GSEA_FALLBACK_UNEXPECTED)) stop(e)
+                0
+              })
+          }
           acc$leEs      <- acc$leEs + (rand_es <= pathway_scores)
           acc$geEs      <- acc$geEs + (rand_es >= pathway_scores)
           acc$leZero    <- acc$leZero + (rand_es <= 0)
@@ -1023,14 +1043,15 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   # First, before the "cannot run here" branches below: an invalid parameter is
   # a caller error and must not be reported as "GSEA was not applicable".
   .mmc_gsea_check_param(gsea_param)
-  n_perm <- .mmc_gsea_check_count(n_perm, "n_perm")
-  seed   <- .mmc_gsea_check_count(seed, "seed", min = 0L)
-
-  # Normalise once, here, so the value that runs is the value reported: the
-  # engine clamps defensively for direct callers, and a result that said
-  # min_size = 0 while 1 was applied could not be reproduced from its own
-  # provenance.
-  min_size <- max(as.numeric(min_size), 1)
+  # Validated and normalised once, here, so the value that runs is the value
+  # reported: a result that said min_size = 0 while 1 was applied could not be
+  # reproduced from its own provenance, and an NA bound would make a valid
+  # experiment look like an empty one. The engine re-checks for direct callers.
+  n_perm   <- .mmc_as_seed(n_perm, "n_perm")
+  seed     <- .mmc_as_seed(seed, "seed")
+  min_size <- max(.mmc_as_seed(min_size, "min_size"), 1L)
+  max_size <- .mmc_gsea_check_max_size(max_size)
+  if (n_perm < 1L) .mmc_stop("n_perm must be at least 1; got ", n_perm, ".")
   # Same reason, and match.arg() accepts abbreviations: resolved here, once, so
   # the computation, the deviation check and the provenance all see the name
   # that actually ran rather than whatever shorthand the caller typed.

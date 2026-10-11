@@ -208,6 +208,14 @@ test_that("the engine refuses any gsea_param but the reference value", {
   # The message has to say why, not just refuse.
   expect_error(mmc_gsea_metaboanalyst(pw, st, rk, gsea_param = 2),
                "permutation")
+
+  # Type before value. "1" would pass a numeric comparison and then fail inside
+  # abs(stats)^"1", where run_mummichog_gsea()'s tryCatch turns a caller error
+  # into "GSEA not applicable"; TRUE would run as 1 but be stored as TRUE.
+  for (bad in list("1", TRUE, NA, c(1, 1), NULL)) {
+    expect_error(mmc_gsea_metaboanalyst(pw, st, rk, gsea_param = bad),
+                 "gsea_param must be the number 1")
+  }
 })
 
 test_that("run_mummichog_gsea rejects gsea_param early, before any work", {
@@ -455,37 +463,57 @@ test_that("the m/z merge weights a feature by its EC multiplicity (as built)", {
   expect_true(all(diff(unname(got)) <= 0))   # returned in decreasing order
 })
 
-test_that("fractional n_perm and seed are refused, not truncated", {
+test_that("the engine's whole-number settings are validated, not coerced", {
   pw <- list(PW = c("E1", "E2"))
   st <- stats::setNames(c(2, 1, -1), c("E1", "E2", "E3"))
   rk <- stats::setNames(c(1, 2, 3), c("E1", "E2", "E3"))
-
-  # Truncating would put the engine back where min_size and rank_metric were:
-  # running 100 permutations while reporting 100.5, or running the default
-  # seed 123 while announcing a departure from it.
-  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = 100.5),
-               "n_perm must be a single whole number")
-  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, seed = 123.9),
-               "seed must be a single whole number")
-  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = 0), "n_perm")
-  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = c(10, 20)), "n_perm")
-  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = NA), "n_perm")
-
-  # The entry point refuses before any work, so the caller gets the error
-  # rather than "GSEA skipped".
-  de <- data.frame(feature_id = "f", logFC = 1, stringsAsFactors = FALSE)
+  de    <- data.frame(feature_id = "f", logFC = 1, stringsAsFactors = FALSE)
   model <- list(pathways = list(P = "C1"))
-  expect_error(run_mummichog_gsea(character(0), de, model, de_method = "limma",
-                                  n_perm = 100.5),
-               "n_perm must be a single whole number")
-  expect_error(run_mummichog_gsea(character(0), de, model, de_method = "limma",
-                                  seed = 123.9),
-               "seed must be a single whole number")
 
-  # Whole numbers in either storage mode are fine, and 0 is a legal seed.
-  expect_identical(.mmc_gsea_check_count(100, "n_perm"), 100L)
-  expect_identical(.mmc_gsea_check_count(100L, "n_perm"), 100L)
-  expect_identical(.mmc_gsea_check_count(0, "seed", min = 0L), 0L)
+  # All four go through .mmc_as_seed(), the pinned stage's existing validator:
+  # type and range before coercion, because as.integer() turns 1.5 into 1 and
+  # "7" into 7 without a word, and a value past .Machine$integer.max into NA.
+  for (bad in list(100.5, "100", TRUE, NA, c(10, 20), Inf,
+                   .Machine$integer.max + 1)) {
+    expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = bad), "n_perm")
+  }
+  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, seed = 123.9), "seed")
+  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, seed = .Machine$integer.max + 1),
+               "seed")
+  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = 0),
+               "n_perm must be at least 1")
+
+  # Both entry points refuse before any work, so the caller gets the error
+  # rather than "GSEA skipped".
+  expect_error(run_mummichog_gsea(character(0), de, model, de_method = "limma",
+                                  n_perm = 100.5), "n_perm")
+  expect_error(run_mummichog_gsea(character(0), de, model, de_method = "limma",
+                                  seed = 123.9), "seed")
+})
+
+test_that("an invalid size bound errors instead of emptying the result", {
+  pw <- list(PW = c("E1", "E2"))
+  st <- stats::setNames(c(2, 1, -1), c("E1", "E2", "E3"))
+  rk <- stats::setNames(c(1, 2, 3), c("E1", "E2", "E3"))
+  de    <- data.frame(feature_id = "f", logFC = 1, stringsAsFactors = FALSE)
+  model <- list(pathways = list(P = "C1"))
+
+  # The worst shape this class takes. `min_size <= sizes & sizes <= max_size`
+  # is all-NA for an NA bound, which() returns nothing, and the run reports
+  # "no pathway passed the size filter" -- a valid experiment disappearing as
+  # a plausible empty result that reads as a finding about the data.
+  for (bad in list(NA, NA_real_, "3", TRUE, c(1, 2), -Inf)) {
+    expect_error(mmc_gsea_metaboanalyst(pw, st, rk, min_size = bad), "min_size")
+    expect_error(mmc_gsea_metaboanalyst(pw, st, rk, max_size = bad), "max_size")
+  }
+  expect_error(run_mummichog_gsea(character(0), de, model, de_method = "limma",
+                                  max_size = NA), "max_size")
+
+  # Inf is the reference default for the upper bound and must stay legal; the
+  # lower bound has no such case.
+  expect_identical(.mmc_gsea_check_max_size(Inf), Inf)
+  expect_identical(.mmc_gsea_check_max_size(5), 5L)
+  expect_error(.mmc_gsea_check_max_size(-Inf), "max_size")
 })
 
 test_that("a pathway covering the whole ranking still returns its row", {
@@ -509,6 +537,30 @@ test_that("a pathway covering the whole ranking still returns its row", {
   expect_identical(res$pval, 1)
   # Classified by its actual cause, not filed under ties.
   expect_false(grepl("tie", res$es_reason, ignore.case = TRUE))
+})
+
+test_that("a sole pathway whose ties outnumber the ranking keeps its row", {
+  for (pkg in c("fgsea", "fastmatch", "data.table", "BiocParallel")) {
+    skip_if_not_installed(pkg)
+  }
+  # The second route to K >= length(stats), and the one the all-position fix
+  # did not cover. Two ECs sharing a score collapse into ONE ranked position,
+  # so length(stats) == 1, while the pathway's tie-group index vector is
+  # c(1, 1) and K == 2. sample.int(1, 2) then raises *cannot take a sample
+  # larger than the population* -- above the calcGseaStat catch, so the engine
+  # aborted and the documented ES-defaulted row was lost.
+  ec  <- c(E1 = 5, E2 = 5)
+  inp <- mmc_gsea_ranked_inputs(ec)
+  expect_length(inp$stats, 1L)          # the tie really does collapse
+
+  res <- mmc_gsea_metaboanalyst(list(PW_tied = c("E1", "E2")),
+                                inp$stats, inp$ranks)
+
+  expect_equal(nrow(res), 1L)
+  expect_true(res$es_defaulted)
+  expect_match(res$es_reason, "^tied EC scores")
+  expect_identical(res$ES, 0)
+  expect_identical(res$pval, 1)
 })
 
 test_that("the reference gsea_param is accepted in both numeric shapes", {
