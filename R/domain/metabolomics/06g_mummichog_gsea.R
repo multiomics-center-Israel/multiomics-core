@@ -125,6 +125,12 @@
 # Upstream's permutation batch size (util_fgsea.R: `granularity <- 1000`).
 .MMC_GSEA_GRANULARITY <- 1000
 
+# How features sharing one m/z may be merged, first value the reference's
+# default. One list, so the entry point normalising a caller's value and
+# mmc_ec_scores() validating it cannot disagree about what is allowed or about
+# what an abbreviation resolves to.
+.MMC_GSEA_RANK_METRICS <- c("mean", "min", "max", "median")
+
 # The one fgsea build the parity fixture was generated on, and therefore the
 # only one this engine is known to reproduce. See .mmc_gsea_check_fgsea().
 .MMC_GSEA_VALIDATED_FGSEA <- "1.36.2"
@@ -363,8 +369,8 @@ mmc_gsea_rank_metric <- function(de_table, de_method = NULL) {
 #' @return A named numeric vector of EC scores, sorted decreasing; empty named
 #'   numeric when nothing can be scored.
 mmc_ec_scores <- function(ec_features, feature_scores,
-                          rank_metric = c("mean", "min", "max", "median")) {
-  rank_metric <- match.arg(rank_metric)
+                          rank_metric = .MMC_GSEA_RANK_METRICS) {
+  rank_metric <- match.arg(rank_metric, .MMC_GSEA_RANK_METRICS)
   out <- stats::setNames(numeric(0), character(0))
   if (is.null(ec_features) || !is.data.frame(ec_features) ||
       nrow(ec_features) == 0 || length(feature_scores) == 0) {
@@ -938,6 +944,10 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   # min_size = 0 while 1 was applied could not be reproduced from its own
   # provenance.
   min_size <- max(as.numeric(min_size), 1)
+  # Same reason, and match.arg() accepts abbreviations: resolved here, once, so
+  # the computation, the deviation check and the provenance all see the name
+  # that actually ran rather than whatever shorthand the caller typed.
+  rank_metric <- match.arg(rank_metric, .MMC_GSEA_RANK_METRICS)
 
   if (!requireNamespace("fgsea", quietly = TRUE)) {
     message("mummichog GSEA: fgsea not available — skipping")

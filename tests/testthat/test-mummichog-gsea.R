@@ -331,6 +331,39 @@ test_that("a non-default rank_metric is recorded as a deviation", {
   expect_identical(ref$params$rank_metric, "mean")
 })
 
+test_that("an abbreviated rank_metric resolves before it is judged or reported", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+
+  # match.arg() accepts abbreviations, and mmc_ec_scores() resolves them in its
+  # own frame only. Left unresolved at the entry point, "mea" would run the
+  # reference "mean" aggregation while being announced as a methodological
+  # deviation that never happened, and reported under a name that is not a
+  # valid setting.
+  abbrev <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                               de_method = "limma", rank_metric = "mea")
+
+  expect_identical(abbrev$params$rank_metric, "mean")
+  expect_false(any(grepl("rank_metric", abbrev$deviations)))
+
+  full <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                             de_method = "limma", rank_metric = "mean")
+  expect_equal(abbrev$table, full$table)
+
+  # A non-default abbreviation still resolves, and is still a deviation -- the
+  # normalisation must not swallow the departure along with the shorthand.
+  med <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                            de_method = "limma", rank_metric = "medi")
+  expect_identical(med$params$rank_metric, "median")
+  expect_true(any(grepl("rank_metric = 'median'", med$deviations, fixed = TRUE)))
+
+  # Both entry points answer to the same list of allowed values.
+  expect_identical(.MMC_GSEA_RANK_METRICS[[1]], .MMC_GSEA_DEFAULTS$rank_metric)
+  expect_error(run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                                  de_method = "limma", rank_metric = "nope"))
+})
+
 test_that("the single-pathway branch is reproducible and declared unvalidated", {
   skip_if_not_installed("fgsea")
   root <- withr::local_tempdir()
