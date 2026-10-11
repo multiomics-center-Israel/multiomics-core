@@ -191,19 +191,39 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #' Build per-contrast mummichog report sections
 #'
 #' Turns the per-contrast pathway tables (from `metab_mummichog_report_pathways`)
-#' into ready-to-render report sections. Pure: builds a bubble plot + a sorted
-#' table + a per-contrast title for each contrast that has a usable result, and
-#' drops contrasts with no result. No file I/O — the report module saves the
-#' standalone exports separately.
+#' into ready-to-render report sections: a bubble plot + a sorted table + a
+#' per-contrast title for each contrast that has a usable result, and, when the
+#' mummichog output files and a readable metabolic model are supplied, that
+#' contrast's supporting evidence. Reads files but writes none — the report
+#' module saves the standalone exports separately.
+#'
+#' The evidence layer is additive and fail-soft: it recomputes no statistics,
+#' and a contrast whose evidence cannot be built still renders its ORA plot and
+#' table with `evidence = NULL`.
 #'
 #' @param pathways_by_contrast Named list keyed by contrast, each a mummichog
 #'   pathway tibble (or NULL). Also tolerates a single tibble (one contrast).
 #' @param config Full pipeline config (for titles + the p-value cutoff line).
+#' @param files  Flat character vector of every mummichog output file across all
+#'   contrasts (the `format = "file"` target's value). The evidence layer reads
+#'   the EmpiricalCompound tables from it; omit it and every section's
+#'   `evidence` is `NULL`.
+#' @param row_data Feature annotations (`pre$row_data`), normalised to the
+#'   generic contract for the agreement comparison. Omit it and every feature
+#'   reads "Not assessed".
+#' @param model  Metabolic model index from `mmc_load_model_pathways()`; when
+#'   `NULL` it is resolved from `config` once for all contrasts. mummichog
+#'   exports no pathway -> compound membership, so without a readable model
+#'   there is no evidence to build.
 #' @return A named list keyed by contrast, each `list(title, subtitle, plot,
-#'   table, slug)`. `slug` is a filesystem-safe, de-duplicated token for the
-#'   contrast (mirrors the engine's per-contrast directory naming) so the
-#'   standalone exports never collide. Empty list when there is nothing to show.
-build_mummichog_report_sections <- function(pathways_by_contrast, config) {
+#'   table, evidence, slug)`. `slug` is a filesystem-safe, de-duplicated token
+#'   for the contrast (mirrors the engine's per-contrast directory naming) so
+#'   the standalone exports never collide. `evidence` is the three-frame list
+#'   from `build_mummichog_pathway_evidence()`, or `NULL`. Empty list when there
+#'   is nothing to show.
+build_mummichog_report_sections <- function(pathways_by_contrast, config,
+                                            files = NULL, row_data = NULL,
+                                            model = NULL) {
   if (is.null(pathways_by_contrast)) return(list())
   # Tolerate a bare single tibble (name it "contrast").
   if (is.data.frame(pathways_by_contrast)) {
@@ -213,6 +233,22 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config) {
 
   nms <- names(pathways_by_contrast)
   if (is.null(nms)) nms <- paste0("contrast_", seq_along(pathways_by_contrast))
+
+  # Resolved once for every contrast: the model's pathway membership (mummichog
+  # exports none, so it comes from the model the stage ran on) and the dataset's
+  # own annotations flattened to the generic contract.
+  if (is.null(model) && !is.null(files) && length(files) > 0) {
+    model <- mmc_load_model_pathways(config)
+  }
+  # The HMDB -> KEGG mapping is optional; a config without a resolvable paths
+  # block must not cost us the whole evidence layer.
+  mapping_file <- tryCatch(
+    resolve_input_path(config, config$modes$metabolomics$enrichment$mapping_file),
+    error = function(e) NULL
+  )
+  annot <- normalize_metab_annotation(row_data, mapping_file = mapping_file)
+  files_by_contrast <- if (is.null(files)) list() else
+    group_mummichog_files_by_contrast(files)
 
   sections <- list()
   for (i in seq_along(pathways_by_contrast)) {
@@ -224,8 +260,23 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config) {
                                   subtitle = ttl$subtitle, p_cutoff = p_cut)
     tbl  <- build_mummichog_pathway_table(pw)
     if (is.null(plot)) next            # nothing plottable -> skip this contrast
+
+    # -- supporting evidence (additive, fail-soft) ---------------------------
+    # Needs this contrast's own output files AND a readable model; without
+    # either there is nothing to trace, and a failure here must not cost the
+    # contrast its ORA plot and table.
+    cfiles   <- files_by_contrast[[contrast]]
+    evidence <- if (is.null(cfiles) || is.null(model)) NULL else tryCatch(
+      build_mummichog_pathway_evidence(pw, cfiles, model, annot),
+      error = function(e) {
+        warning("mummichog evidence: contrast '", contrast, "' failed: ",
+                conditionMessage(e), call. = FALSE)
+        NULL
+      }
+    )
+
     sections[[contrast]] <- list(title = ttl$title, subtitle = ttl$subtitle,
-                                 plot = plot, table = tbl)
+                                 plot = plot, table = tbl, evidence = evidence)
   }
 
   # Assign a de-duplicated, filesystem-safe slug per section (same sanitise +
@@ -257,9 +308,14 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config) {
 #'   in its `mummichog_pinned/` subdirectory.
 #' @param contrast_label Optional contrast tag woven into the filenames
 #'   (e.g. `"LL_vs_HL"`); sanitised to a safe token.
+#' @param evidence Optional three-frame list from
+#'   `build_mummichog_pathway_evidence()`. Each frame is written as TSV + CSV
+#'   beside the pathway table; the HTML report caps its drill-down, so these are
+#'   the complete tables.
 #' @return Character vector of the files written (may be empty).
-save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL) {
-  if (is.null(plot) && is.null(table)) return(character(0))
+save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL,
+                                   evidence = NULL) {
+  if (is.null(plot) && is.null(table) && is.null(evidence)) return(character(0))
 
   # Write next to the engine's result tree (same dir as mod_mummichog_pinned()),
   # so every mummichog artefact sits together under mummichog_pinned/. The stage
@@ -288,12 +344,29 @@ save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL) 
     }
   }
 
+  # NULL only: a zero-row frame is still a result, and the pathway table's
+  # existing behaviour (written whenever it is not NULL) must not change.
+  save_tsv_csv <- function(df, stem) {
+    if (is.null(df) || !is.data.frame(df)) return(character(0))
+    tsv <- file.path(dest_dir, paste0(stem, suffix, ".tsv"))
+    csv <- file.path(dest_dir, paste0(stem, suffix, ".csv"))
+    readr::write_tsv(df, tsv)
+    readr::write_csv(df, csv)
+    c(tsv, csv)
+  }
+
   if (!is.null(table)) {
-    tsv <- file.path(dest_dir, paste0("mummichog_pathway_table", suffix, ".tsv"))
-    csv <- file.path(dest_dir, paste0("mummichog_pathway_table", suffix, ".csv"))
-    readr::write_tsv(table, tsv)
-    readr::write_csv(table, csv)
-    written <- c(written, tsv, csv)
+    written <- c(written, save_tsv_csv(table, "mummichog_pathway_table"))
+  }
+
+  # The report's drill-down is capped; these carry every row.
+  if (!is.null(evidence)) {
+    written <- c(
+      written,
+      save_tsv_csv(evidence$pathway_summary, "mummichog_evidence_pathways"),
+      save_tsv_csv(evidence$ec_table, "mummichog_evidence_empirical_compounds"),
+      save_tsv_csv(evidence$feature_table, "mummichog_evidence_features")
+    )
   }
 
   written

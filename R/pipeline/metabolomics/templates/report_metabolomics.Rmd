@@ -114,6 +114,45 @@ figure_legend <- function(text) {
 }
 
 # ---------------------------------------------------------------------------
+# Mummichog supporting evidence
+# ---------------------------------------------------------------------------
+
+# The drill-down renders one collapsible block per pathway, each holding a
+# nested block per EmpiricalCompound. That is quadratic in page weight, so the
+# HTML caps it; the exported mummichog_evidence_* tables always carry every row.
+MUMMI_EVIDENCE_MAX_PATHWAYS <- 25
+
+#' Render one pathway's supporting evidence as nested collapsible blocks
+#'
+#' @param evidence Three-frame list from `build_mummichog_pathway_evidence()`.
+#' @param pathway  One pathway name present in `evidence$pathway_summary`.
+#' @return Invisibly NULL; called for the HTML it writes.
+render_pathway_evidence <- function(evidence, pathway) {
+  ecs <- evidence$ec_table[evidence$ec_table$Pathway == pathway, , drop = FALSE]
+  if (nrow(ecs) == 0) return(invisible(NULL))
+  feats <- evidence$feature_table[evidence$feature_table$Pathway == pathway, ,
+                                  drop = FALSE]
+
+  cat(sprintf("<details><summary><strong>%s</strong> — %d EmpiricalCompound(s)</summary>\n\n",
+              htmltools::htmlEscape(pathway), nrow(ecs)))
+  for (i in seq_len(nrow(ecs))) {
+    eid <- ecs$EmpiricalCompound[i]
+    cat(sprintf("<details style='margin-left:1.2em'><summary>%s — %s</summary>\n\n",
+                htmltools::htmlEscape(eid),
+                htmltools::htmlEscape(ecs$Agreement[i])))
+    print(htmltools::tagList(make_dt(
+      ecs[i, , drop = FALSE], caption = NULL, pageLength = 5)))
+    rows <- feats[feats$EmpiricalCompound == eid, , drop = FALSE]
+    if (nrow(rows) > 0) {
+      print(htmltools::tagList(make_dt(rows, caption = NULL, pageLength = 10)))
+    }
+    cat("\n\n</details>\n\n")
+  }
+  cat("\n\n</details>\n\n")
+  invisible(NULL)
+}
+
+# ---------------------------------------------------------------------------
 # Helper: safely print a ggplot or return invisible(NULL)
 # ---------------------------------------------------------------------------
 safe_print_plot <- function(p) {
@@ -2425,6 +2464,30 @@ for (contrast in names(mummi_sections)) {
     print(htmltools::tagList(
       make_dt(s$table, caption = sprintf("Mummichog Pathway Enrichment — %s", label))))
   }
+
+  # ---- Supporting Evidence ------------------------------------------------
+  # Present only when the evidence layer could be built: it needs this
+  # contrast's mummichog output files AND a readable metabolic model.
+  if (!is.null(s$evidence)) {
+    cat("\n\n### Supporting Evidence\n\n")
+    cat("Which measured features support each enriched pathway, and whether the identity mummichog used to map an EmpiricalCompound onto the pathway agrees with this dataset's own annotation. Nothing here re-analyses the enrichment; the ORA p-values and overlaps are passed through untouched.\n\n")
+    cat("A **pathway-matching candidate** is a *putative* identity: a candidate compound of the EmpiricalCompound that also belongs to this pathway, i.e. the identity through which the EC maps here. Several candidates can qualify and all are listed. This is deliberately **not** mummichog's \"Best guess\" (`face_compound`), which is picked arbitrarily among candidates and pooled across every significant pathway.\n\n")
+    cat("**Agreement** compares the original annotation with those candidates — by KEGG compound ID when both sides carry one, otherwise by a conservative name/synonym comparison; never by m/z, formula or mass. Per measured feature it reads `Match`, `Conflict` or `Not assessed`. An EmpiricalCompound rolls its features up into four states: `Match` (some agree, none disagree), `Conflict` (some disagree, none agree), `Mixed` (both) and `Not assessed`. Conflicts are reported, never removed. **Annotation confidence** is whatever the dataset declares and is a separate concept from agreement.\n\n")
+    cat("Counts come at two grains and are labelled as such: `ECs ...` columns count EmpiricalCompounds by their roll-up state, `features ...` columns count measured features by their own verdict. Neither is the pathway overlap or the number of candidate compounds.\n\n")
+
+    print(htmltools::tagList(
+      make_dt(s$evidence$pathway_summary,
+              caption = sprintf("Pathway evidence summary — %s", label))))
+
+    pws   <- s$evidence$pathway_summary$Pathway
+    shown <- utils::head(pws, MUMMI_EVIDENCE_MAX_PATHWAYS)
+    cat(sprintf("\n\n#### Pathway drill-down\n\nExpand a pathway to see its supporting EmpiricalCompounds and, within each, every underlying measured feature.%s\n\n",
+                if (length(pws) > length(shown))
+                  sprintf(" Showing the %d most significant of %d pathways; the complete tables are exported as `mummichog_evidence_*`.",
+                          length(shown), length(pws)) else ""))
+    for (pw in shown) render_pathway_evidence(s$evidence, pw)
+  }
+
   cat("\n\n")
 }
 ```

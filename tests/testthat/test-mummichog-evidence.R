@@ -877,3 +877,153 @@ test_that("a feature in two ECs of one pathway is counted once as a feature", {
   expect_equal(s[["Feature-EC links"]], 2)      # one row per EC it supports
   expect_equal(nrow(ev$feature_table), 2L)      # both links stay visible
 })
+
+
+# ===========================================================================
+# Wiring: activating the evidence layer in the report sections and exports
+#
+# The layer above is pure domain code; these cover the path that actually
+# reaches a user. They reuse the fixtures above rather than building their own,
+# so a change to the tree or the model is felt here too.
+# ===========================================================================
+
+.wiring_cfg <- function() {
+  list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
+}
+
+test_that("group_mummichog_files_by_contrast returns files, keyed by contrast", {
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+
+  grp <- group_mummichog_files_by_contrast(files)
+  expect_named(grp, "HL_vs_LL")
+  # Files, not parsed tables: the evidence layer needs the EmpiricalCompound
+  # tables, which the pathway read-back does not carry.
+  expect_type(grp[["HL_vs_LL"]], "character")
+  expect_setequal(grp[["HL_vs_LL"]], files)
+  expect_true(any(grepl("ListOfEmpiricalCompounds\\.tsv$", grp[["HL_vs_LL"]])))
+
+  expect_identical(group_mummichog_files_by_contrast(character(0)), list())
+})
+
+test_that("report sections carry the evidence when files and a model are given", {
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+  model <- read_mummichog_model_pathways(write_model_json(root))
+  rd    <- row_data_with_levels()
+
+  secs <- build_mummichog_report_sections(
+    list(HL_vs_LL = read_mummichog_pathways(files)), .wiring_cfg(),
+    files = files, row_data = rd, model = model)
+
+  s <- secs[["HL_vs_LL"]]
+  expect_false(is.null(s$evidence))
+  expect_named(s$evidence,
+               c("pathway_summary", "ec_table", "feature_table"),
+               ignore.order = TRUE)
+  expect_gt(nrow(s$evidence$ec_table), 0)
+
+  # The ORA side is untouched: still a ggplot and the same pathway table.
+  expect_s3_class(s$plot, "ggplot")
+  expect_s3_class(s$table, "data.frame")
+
+  # Identical to calling the domain layer directly — the wiring adds no
+  # interpretation of its own.
+  direct <- build_mummichog_pathway_evidence(
+    read_mummichog_pathways(files), files, model,
+    normalize_metab_annotation(rd))
+  expect_equal(s$evidence$ec_table, direct$ec_table)
+  expect_equal(s$evidence$pathway_summary, direct$pathway_summary)
+  expect_equal(s$evidence$feature_table, direct$feature_table)
+})
+
+test_that("sections still render without files or a model, carrying no evidence", {
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+  pw    <- list(HL_vs_LL = read_mummichog_pathways(files))
+
+  # mummichog exports no pathway -> compound membership, so without a readable
+  # model there is nothing to trace; the contrast must keep its ORA output.
+  no_files <- build_mummichog_report_sections(pw, .wiring_cfg())
+  expect_null(no_files[["HL_vs_LL"]]$evidence)
+  expect_s3_class(no_files[["HL_vs_LL"]]$plot, "ggplot")
+  expect_s3_class(no_files[["HL_vs_LL"]]$table, "data.frame")
+
+  no_model <- build_mummichog_report_sections(pw, .wiring_cfg(), files = files,
+                                              row_data = row_data_with_levels(),
+                                              model = NULL)
+  expect_null(no_model[["HL_vs_LL"]]$evidence)
+})
+
+test_that("a contrast whose evidence fails keeps its ORA section", {
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+  model <- read_mummichog_model_pathways(write_model_json(root))
+
+  # Fail-soft: one contrast's evidence blowing up must not cost it the plot and
+  # table, nor take the whole report down with it. A genuine failure rather than
+  # a stub, because the functions here are sourced into the global environment
+  # and this suite only mocks package bindings. A `pathways` entry that is not a
+  # list passes the emptiness guard and then fails on the per-pathway lookup.
+  broken <- model
+  broken$pathways <- "not a list"
+  expect_warning(
+    secs <- build_mummichog_report_sections(
+      list(HL_vs_LL = read_mummichog_pathways(files)), .wiring_cfg(),
+      files = files, row_data = row_data_with_levels(), model = broken),
+    "mummichog evidence: contrast 'HL_vs_LL' failed")
+
+  expect_null(secs[["HL_vs_LL"]]$evidence)
+  expect_s3_class(secs[["HL_vs_LL"]]$plot, "ggplot")
+})
+
+test_that("the evidence exports are written as TSV + CSV and read back", {
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+  model <- read_mummichog_model_pathways(write_model_json(root))
+  ev    <- build_mummichog_pathway_evidence(
+    read_mummichog_pathways(files), files, model,
+    normalize_metab_annotation(row_data_with_levels()))
+
+  out <- withr::local_tempdir()
+  written <- save_mummichog_exports(NULL, NULL, out, contrast_label = "HL_vs_LL",
+                                    evidence = ev)
+
+  stems <- c("mummichog_evidence_pathways",
+             "mummichog_evidence_empirical_compounds",
+             "mummichog_evidence_features")
+  for (stem in stems) {
+    for (ext in c("tsv", "csv")) {
+      f <- file.path(out, "mummichog_pinned", paste0(stem, "_HL_vs_LL.", ext))
+      expect_true(f %in% written)
+      expect_true(file.exists(f))
+    }
+  }
+
+  # The CSV round-trips to the same number of rows. (The TSV is written without
+  # quoting, so a cell holding a newline can break it; sanitising those cells is
+  # a separate change and this test deliberately does not assume it.)
+  back <- readr::read_csv(
+    file.path(out, "mummichog_pinned",
+              "mummichog_evidence_empirical_compounds_HL_vs_LL.csv"),
+    show_col_types = FALSE, progress = FALSE)
+  expect_equal(nrow(back), nrow(ev$ec_table))
+})
+
+test_that("evidence stays in the report sections and is dropped only for Shiny", {
+  # The narrowing belongs at the payload boundary. If it moved into the section
+  # builder, the report and the exports would lose the evidence too.
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+  model <- read_mummichog_model_pathways(write_model_json(root))
+
+  secs <- build_mummichog_report_sections(
+    list(HL_vs_LL = read_mummichog_pathways(files)), .wiring_cfg(),
+    files = files, row_data = row_data_with_levels(), model = model)
+
+  expect_true("evidence" %in% names(secs[["HL_vs_LL"]]))
+  expect_setequal(.METAB_SHINY_MUMMICHOG_KEYS,
+                  c("title", "subtitle", "plot", "table", "slug"))
+  expect_false("evidence" %in% .METAB_SHINY_MUMMICHOG_KEYS)
+})
