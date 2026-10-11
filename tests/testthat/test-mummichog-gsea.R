@@ -390,14 +390,15 @@ test_that("the single-pathway branch is reproducible and declared unvalidated", 
   expect_equal(nrow(a$table), 1L)
   expect_equal(a$table, b$table)          # seeded: identical across runs
 
-  expect_true(any(grepl("one tested pathway", a$deviations)))
+  expect_true(any(grepl("one permutable pathway", a$deviations)))
   expect_true(any(grepl("not covered by the parity fixture", a$deviations)))
 
-  # More than one tested pathway goes through the batch call and claims parity.
+  # More than one permutable pathway goes through the batch call and claims
+  # parity.
   many <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
                              de_method = "limma")
   expect_gt(nrow(many$table), 1L)
-  expect_false(any(grepl("one tested pathway", many$deviations)))
+  expect_false(any(grepl("one permutable pathway", many$deviations)))
 })
 
 test_that("the fgsea compatibility policy is decided in one place", {
@@ -561,6 +562,107 @@ test_that("a sole pathway whose ties outnumber the ranking keeps its row", {
   expect_match(res$es_reason, "^tied EC scores")
   expect_identical(res$ES, 0)
   expect_identical(res$pval, 1)
+})
+
+test_that("a tie-expanded pathway keeps its row beside a permutable one", {
+  for (pkg in c("fgsea", "fastmatch", "data.table", "BiocParallel")) {
+    skip_if_not_installed(pkg)
+  }
+  # The reported case: the guard added for a SOLE oversized pathway sat inside
+  # the single-pathway branch, so a second tested pathway sent the run down the
+  # other path and the engine aborted again on the same shape.
+  ec  <- c(E1 = 5, E2 = 5)
+  inp <- mmc_gsea_ranked_inputs(ec)
+  expect_length(inp$stats, 1L)          # the tie really does collapse
+
+  res <- mmc_gsea_metaboanalyst(
+    list(PW_tied = c("E1", "E2"), PW_one = c("E1")), inp$stats, inp$ranks)
+
+  expect_equal(nrow(res), 2L)
+  tied <- res[res$pathway == "PW_tied", ]
+  expect_true(tied$es_defaulted)
+  expect_match(tied$es_reason, "^tied EC scores")
+  expect_identical(tied$ES, 0)
+  expect_identical(tied$pval, 1)
+  # Only PW_one can be permuted, so the seeded loop ran -- and the engine says
+  # so itself rather than leaving it to be inferred from the row count.
+  expect_true(attr(res, "mmc_single_pathway_rng"))
+})
+
+test_that("an unpermutable pathway does not abort the permutation batch", {
+  for (pkg in c("fgsea", "fastmatch", "data.table", "BiocParallel")) {
+    skip_if_not_installed(pkg)
+  }
+  # Two permutable pathways put the run on the cumulative-batch path, where an
+  # oversized set is handed straight to calcGseaStatCumulativeBatch(): it
+  # cannot draw 4 distinct positions from a 3-position ranking, so the whole
+  # engine threw and every row was lost, not just the oversized one.
+  ec  <- c(E1 = 5, E2 = 5, E3 = 3, E4 = 1)
+  inp <- mmc_gsea_ranked_inputs(ec)
+  expect_length(inp$stats, 3L)          # E1/E2 share one position
+
+  res <- mmc_gsea_metaboanalyst(
+    list(PW_big = c("E1", "E2", "E3", "E4"),   # index vector of length 4
+         PW_a   = c("E3", "E4"),
+         PW_b   = c("E1", "E3")),
+    inp$stats, inp$ranks)
+
+  expect_equal(nrow(res), 3L)
+  big <- res[res$pathway == "PW_big", ]
+  expect_identical(big$size, 4)         # tie-expanded beyond the ranking
+  expect_true(big$es_defaulted)
+  expect_match(big$es_reason, "^tied EC scores")
+  expect_identical(big$ES, 0)
+  expect_identical(big$pval, 1)
+  # The pathways that CAN be permuted are scored normally: the oversized one is
+  # excluded from the draw, not allowed to default its neighbours.
+  rest <- res[res$pathway != "PW_big", ]
+  expect_false(any(rest$es_defaulted))
+  # Two permutable pathways means the batch ran, not the seeded loop.
+  expect_false(attr(res, "mmc_single_pathway_rng"))
+  # And the engine says how many rows it produced where the reference aborts,
+  # so the provenance does not have to be reconstructed from the sizes.
+  expect_identical(attr(res, "mmc_unpermutable"), 1L)
+})
+
+test_that("an engine failure is not reported as a size-filter miss", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+
+  # Stub by assignment into the function's own environment: these are sourced
+  # functions, not a package, so with_mocked_bindings() has nothing to rebind.
+  target <- environment(run_mummichog_gsea)
+  orig   <- get("mmc_gsea_metaboanalyst", envir = target)
+  assign("mmc_gsea_metaboanalyst",
+         function(...) stop("synthetic engine failure"), envir = target)
+  withr::defer(assign("mmc_gsea_metaboanalyst", orig, envir = target))
+
+  msgs <- capture_messages(
+    expect_warning(
+      res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                                de_method = "limma"),
+      "engine failed"))
+
+  expect_null(res)
+  # The warning already named the real cause; saying the size filter emptied
+  # the result would dress an engine failure up as a finding about the data.
+  expect_false(any(grepl("size filter", msgs, fixed = TRUE)))
+})
+
+test_that("a genuinely empty result still names the size filter", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+
+  # The other side of the split: when filtering really did run and kept
+  # nothing, that is exactly what the message should say.
+  msgs <- capture_messages(
+    res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                              de_method = "limma", min_size = 1000))
+
+  expect_null(res)
+  expect_true(any(grepl("size filter", msgs, fixed = TRUE)))
 })
 
 test_that("the reference gsea_param is accepted in both numeric shapes", {

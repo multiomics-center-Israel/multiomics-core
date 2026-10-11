@@ -593,13 +593,19 @@ mmc_gsea_ranked_inputs <- function(ec_scores) {
 #'     two ECs in one tie group count twice toward `size` and the ES.
 #'   \item `fgsea::calcGseaStat(..., returnLeadingEdge = TRUE)` for ES.
 #'   \item `fgsea:::calcGseaStatCumulativeBatch(..., seed = seeds[i],
-#'     scoreType = "std")` for the permutation tallies. The `m == 1` case uses
-#'     upstream's plain `sample.int()` loop, but SEEDED: upstream leaves it to
-#'     the BiocParallel worker's RNG, which is not seed-deterministic, so there
-#'     is no reference draw to reproduce. That branch is therefore the one place
-#'     this engine does not claim numerical parity — it is reproducible instead,
-#'     the parity fixture does not exercise it, and `run_mummichog_gsea()`
-#'     records it in `deviations` whenever exactly one pathway is tested.
+#'     scoreType = "std")` for the permutation tallies. The single-pathway case
+#'     uses upstream's plain `sample.int()` loop, but SEEDED: upstream leaves it
+#'     to the BiocParallel worker's RNG, which is not seed-deterministic, so
+#'     there is no reference draw to reproduce. That branch is therefore the one
+#'     place this engine does not claim numerical parity — it is reproducible
+#'     instead, the parity fixture does not exercise it, and
+#'     `run_mummichog_gsea()` records it in `deviations`.
+#'   \item a pathway whose tie-expanded size exceeds the ranking is TESTED but
+#'     not PERMUTED: no draw of that many distinct positions exists, and both
+#'     permutation paths would abort on it. Its null is all zeros, mirroring the
+#'     ES = 0 its observed score necessarily took, which gives `p = 1` exactly.
+#'     Upstream aborts here instead; this is a deliberate departure, and it
+#'     applies only to inputs on which the reference produces no result at all.
 #'   \item `pval = min((1+leEs)/(1+leZero), (1+geEs)/(1+geZero))`,
 #'     `NES = ES / mean(same-sign permuted ES)`,
 #'     `padj = p.adjust(pval, "fdr")` over the kept pathways only.
@@ -643,7 +649,11 @@ mmc_gsea_ranked_inputs <- function(ec_scores) {
 #'   EC ids), `es_defaulted` (TRUE when upstream's tryCatch fallback supplied
 #'   `ES = 0` instead of a computed score) and `es_reason` (why, from
 #'   `.mmc_gsea_fallback_reason()`; `NA` when the score was computed). Zero rows
-#'   when no pathway passes the size filter.
+#'   when no pathway passes the size filter. A non-empty result carries the
+#'   `"mmc_single_pathway_rng"` attribute, `TRUE` when the seeded single-pathway
+#'   loop ran instead of the batch, and `"mmc_unpermutable"`, the number of
+#'   pathways tested without being permuted — the engine reports both so a
+#'   consumer does not have to infer them from the row count or the sizes.
 mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
                                    n_perm     = .MMC_GSEA_DEFAULTS$n_perm,
                                    min_size   = .MMC_GSEA_DEFAULTS$min_size,
@@ -715,7 +725,18 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
   if (m == 0) return(empty)
   pathways_filtered <- pathways_filtered[to_keep]
   pathways_sizes    <- pathways_sizes[to_keep]
-  K <- max(pathways_sizes)
+
+  # A pathway whose tie-expanded size exceeds the ranking cannot be permuted at
+  # all: no draw of that many distinct positions exists. BOTH permutation paths
+  # would abort on it — `sample.int()` in the single-pathway loop, fgsea's C++
+  # batch in the multi-pathway one — so the condition is recognised once here,
+  # ahead of either, rather than guarded separately inside each.
+  #
+  # Only ties can produce it: a size above the ranking means the tie-group index
+  # vector repeats a position, which is exactly what `calcGseaStat`'s
+  # strictly-increasing assertion rejects. Such a pathway's observed score has
+  # therefore already taken the ES = 0 fallback, and the null below mirrors it.
+  permutable <- which(pathways_sizes <= length(stats))
 
   # -- enrichment scores ----------------------------------------------------
   # fgsea > 1.24.0 is the branch upstream takes (renv.lock pins fgsea 1.36.2, so
@@ -773,56 +794,27 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
   })
 
   # -- permutation tallies --------------------------------------------------
+  # Every pathway starts from the tally a null of all zeros produces, which is
+  # what the seeded loop would accumulate for an unpermutable pathway: each
+  # draw scores 0, so it is both `<=` and `>=` the observed score. Paired with
+  # the ES = 0 those pathways already carry, that gives p = 1 exactly. Pathways
+  # that CAN be permuted then overwrite their own entries.
   tallies <- lapply(seq_along(perm_per_proc), function(i) {
-    n1 <- perm_per_proc[i]
-    if (m == 1) {
-      # Upstream's plain sample.int() loop for a single tested pathway. Seeded
-      # here so our run is reproducible; upstream leaves this path to the
-      # BiocParallel worker's RNG, which is not seed-deterministic -- so there
-      # is no reference draw to match, and this is the one branch where the
-      # engine offers reproducibility INSTEAD of parity. run_mummichog_gsea()
-      # records it as a deviation; the parity fixture never reaches it.
-      acc <- list(leEs = 0, geEs = 0, leZero = 0, geZero = 0,
-                  leZeroSum = 0, geZeroSum = 0)
-      withr::with_seed(batch_seeds[i], {
-        for (k in seq_len(n1)) {
-          # No permutation exists once the pathway is as large as the ranking.
-          # Two routes get there, and both are recognised rather than caught:
-          # a pathway covering every position (K == length(stats)), and tied
-          # ECs collapsing the ranking below the pathway's expanded size
-          # (K > length(stats), since tie-group indices are not de-duplicated).
-          # The observed score has already taken the ES = 0 fallback for the
-          # same reason, so the null mirrors it. Checked here because the
-          # second route fails inside sample.int(), before any catch below.
-          if (K >= length(stats)) {
-            rand_es <- 0
-          } else {
-            draw <- sample.int(length(stats), K)
-            # Anything calcGseaStat still refuses on a proper sub-sample scores
-            # 0 only if it is a cause we recognise; a real failure is re-raised
-            # rather than absorbed into the null distribution.
-            rand_es <- tryCatch(
-              fgsea::calcGseaStat(stats = stats, selectedStats = draw,
-                                  gseaParam = 1),
-              error = function(e) {
-                reason <- .mmc_gsea_fallback_reason(draw, conditionMessage(e))
-                if (startsWith(reason, .MMC_GSEA_FALLBACK_UNEXPECTED)) stop(e)
-                0
-              })
-          }
-          acc$leEs      <- acc$leEs + (rand_es <= pathway_scores)
-          acc$geEs      <- acc$geEs + (rand_es >= pathway_scores)
-          acc$leZero    <- acc$leZero + (rand_es <= 0)
-          acc$geZero    <- acc$geZero + (rand_es >= 0)
-          acc$leZeroSum <- acc$leZeroSum + pmin(rand_es, 0)
-          acc$geZeroSum <- acc$geZeroSum + pmax(rand_es, 0)
-        }
-      })
-      return(acc)
+    n1  <- perm_per_proc[i]
+    acc <- list(leEs      = n1 * as.numeric(0 <= pathway_scores),
+                geEs      = n1 * as.numeric(0 >= pathway_scores),
+                leZero    = rep(n1, m), geZero    = rep(n1, m),
+                leZeroSum = rep(0, m),  geZeroSum = rep(0, m))
+    if (length(permutable) == 0) return(acc)
+    sub <- if (length(permutable) == 1) {
+      .mmc_gsea_perm_single(stats, pathway_scores[permutable],
+                            pathways_sizes[permutable], n1, batch_seeds[i])
+    } else {
+      .mmc_gsea_perm_batch(stats, pathway_scores[permutable],
+                           pathways_sizes[permutable], n1, batch_seeds[i])
     }
-    aux <- .mmc_gsea_perm_batch(stats, pathway_scores, pathways_sizes, n1,
-                                batch_seeds[i])
-    aux[c("leEs", "geEs", "leZero", "geZero", "leZeroSum", "geZeroSum")]
+    for (f in names(acc)) acc[[f]][permutable] <- as.numeric(sub[[f]])
+    acc
   })
 
   # Sum each tally across batches, per pathway. Identical to upstream for any
@@ -857,7 +849,7 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
     if (length(hit) == 0) NA_character_ else paste(hit, collapse = "; ")
   }, character(1))
 
-  data.frame(
+  out <- data.frame(
     pathway      = names(pathways_filtered),
     pval         = as.numeric(pval),
     padj         = as.numeric(padj),
@@ -870,6 +862,17 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
     es_reason    = es_reason,
     stringsAsFactors = FALSE
   )
+  # Which permutation path ran is the engine's to report, not something a
+  # consumer should re-derive: the seeded loop is taken when exactly one
+  # pathway is PERMUTABLE, which is not the same as one row in the result once
+  # unpermutable pathways are also tested. Carried as an attribute so the
+  # documented column schema is unchanged.
+  attr(out, "mmc_single_pathway_rng") <- length(permutable) == 1
+  # Likewise for the pathways that were tested but never permuted: upstream
+  # aborts on them, so returning a row at all is ours, and it has to travel
+  # with the result rather than be reconstructed from sizes by each consumer.
+  attr(out, "mmc_unpermutable") <- m - length(permutable)
+  out
 }
 
 # Prefix marking a fallback whose cause we do NOT recognise. Anything carrying
@@ -916,6 +919,60 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
     return("pathway selects every ranked position")
   }
   paste0(.MMC_GSEA_FALLBACK_UNEXPECTED, msg)
+}
+
+#' Run upstream's single-pathway permutation loop, seeded
+#'
+#' The branch upstream takes when exactly one pathway is permutable: a plain
+#' `sample.int()` loop rather than the cumulative batch. Seeded here so the run
+#' is reproducible — upstream leaves it to the BiocParallel worker's RNG, which
+#' is not seed-deterministic, so there is no reference draw to match. It is the
+#' one place this engine offers reproducibility INSTEAD of numerical parity;
+#' `run_mummichog_gsea()` records that as a deviation and the parity fixture
+#' never reaches it.
+#'
+#' Callers filter out pathways larger than the ranking before reaching this, so
+#' the guard below fires only for a pathway covering every position — which
+#' `calcGseaStat()` refuses, exactly as it refuses the observed score for the
+#' same pathway. It is kept as a `>=` so a direct caller cannot walk into
+#' `sample.int()` asking for more positions than exist.
+#'
+#' @param stats,pathway_scores,pathways_sizes,iterations,seed Passed through;
+#'   the scores and sizes hold the single permutable pathway.
+#' @return A tally list with the same six fields as the batch's.
+#' @noRd
+.mmc_gsea_perm_single <- function(stats, pathway_scores, pathways_sizes,
+                                  iterations, seed) {
+  K   <- max(pathways_sizes)
+  acc <- list(leEs = 0, geEs = 0, leZero = 0, geZero = 0,
+              leZeroSum = 0, geZeroSum = 0)
+  withr::with_seed(seed, {
+    for (k in seq_len(iterations)) {
+      if (K >= length(stats)) {
+        rand_es <- 0
+      } else {
+        draw <- sample.int(length(stats), K)
+        # Anything calcGseaStat still refuses on a proper sub-sample scores 0
+        # only if it is a cause we recognise; a real failure is re-raised
+        # rather than absorbed into the null distribution.
+        rand_es <- tryCatch(
+          fgsea::calcGseaStat(stats = stats, selectedStats = draw,
+                              gseaParam = 1),
+          error = function(e) {
+            reason <- .mmc_gsea_fallback_reason(draw, conditionMessage(e))
+            if (startsWith(reason, .MMC_GSEA_FALLBACK_UNEXPECTED)) stop(e)
+            0
+          })
+      }
+      acc$leEs      <- acc$leEs + (rand_es <= pathway_scores)
+      acc$geEs      <- acc$geEs + (rand_es >= pathway_scores)
+      acc$leZero    <- acc$leZero + (rand_es <= 0)
+      acc$geZero    <- acc$geZero + (rand_es >= 0)
+      acc$leZeroSum <- acc$leZeroSum + pmin(rand_es, 0)
+      acc$geZeroSum <- acc$geZeroSum + pmax(rand_es, 0)
+    }
+  })
+  acc
 }
 
 #' Call fgsea's cumulative permutation batch the way upstream does
@@ -1011,7 +1068,10 @@ mmc_gsea_nes_note <- function() {
 #' @param rank_metric How features sharing one m/z are merged (see
 #'   `mmc_ec_scores()`).
 #' @return `NULL` when GSEA cannot run (fgsea unavailable, no model, no ECs, no
-#'   usable statistic, no pathway passing the size filter). Otherwise a list:
+#'   usable statistic, no pathway passing the size filter) and also when the
+#'   engine itself fails — the two are reported apart, by a warning naming the
+#'   cause and by a message naming the filter respectively, so an environment
+#'   or engine failure is never read as an empty experiment. Otherwise a list:
 #'   \describe{
 #'     \item{table}{One row per tested pathway with `Pathway`,
 #'       `Pathway size (model compounds)`, `Detected ECs`, `Tested size`, `ES`,
@@ -1101,7 +1161,13 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
       NULL
     }
   )
-  if (is.null(res) || nrow(res) == 0) {
+  # An engine failure and an empty result are different outcomes and must not
+  # share a diagnosis: the tryCatch above has already warned with the real
+  # cause, and filtering may never have run at all. Reporting "no pathway
+  # passed the size filter" for it would dress an environment or engine failure
+  # up as a finding about the data.
+  if (is.null(res)) return(NULL)
+  if (nrow(res) == 0) {
     message("mummichog GSEA: no pathway passed the size filter")
     return(NULL)
   }
@@ -1167,16 +1233,29 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
       "rank_metric = '%s' (MetaboAnalyst default '%s')",
       rank_metric, d$rank_metric))
   }
-  # The single-tested-pathway branch is OURS, not upstream's: the reference
+  # The single-permutable-pathway branch is OURS, not upstream's: the reference
   # leaves that loop to the BiocParallel worker's RNG, which is not
   # seed-deterministic, so there is nothing stable to reproduce. We seed it
   # instead -- better behaviour, but not validated parity, and the fixture's
-  # six pathways never reach it.
-  if (nrow(res) == 1) {
+  # six pathways never reach it. The engine reports whether it ran; a row count
+  # no longer implies it, since unpermutable pathways are tested without being
+  # permuted.
+  if (isTRUE(attr(res, "mmc_single_pathway_rng"))) {
     deviations <- c(deviations, paste0(
-      "one tested pathway: the permutation loop is seeded here, where the ",
+      "one permutable pathway: the permutation loop is seeded here, where the ",
       "reference leaves it to a non-deterministic worker RNG — reproducible, ",
       "but this branch is not covered by the parity fixture"))
+  }
+  # Returning a row for a pathway that cannot be permuted is also ours: the
+  # reference aborts on that input and produces no table at all, so this is a
+  # departure even though it only applies where upstream yields nothing.
+  n_unpermutable <- attr(res, "mmc_unpermutable")
+  if (isTRUE(n_unpermutable > 0)) {
+    deviations <- c(deviations, sprintf(
+      paste0("%d pathway(s) tested but not permuted: their tie-expanded size ",
+             "exceeds the ranking, so they take an all-zero null (ES = 0, ",
+             "p = 1) where the reference implementation aborts"),
+      n_unpermutable))
   }
   # Same series as the validated fgsea build but a different patch: allowed,
   # and recorded. A different series never gets this far.
