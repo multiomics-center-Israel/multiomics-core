@@ -168,6 +168,27 @@ test_that("pipe_metabolomics returns expected number of targets", {
     expect_gte(length(result), 8)
 })
 
+test_that("the metab shiny payload target passes only arguments the builder takes", {
+    # save_shiny_payload_metabolomics() takes `...` and forwards it straight
+    # into build_shiny_payload_metabolomics(), so an argument name the builder
+    # has no formal for is an "unused argument" error R raises only while the
+    # target builds. The unit tests call the builder directly and never see it,
+    # and so does lint -- which leaves this call site uncovered. Check it here.
+    result <- pipe_metabolomics("pqn")
+    tgt <- setNames(result, get_target_names(result))$metab_shiny_payload
+    expect_false(is.null(tgt))
+
+    expr <- tgt$command$expr
+    if (is.list(expr) || is.expression(expr)) expr <- expr[[1]]
+    expect_identical(expr[[1]], quote(save_shiny_payload_metabolomics))
+
+    # out_file is the wrapper's own formal; out_dir it derives and supplies.
+    passed  <- setdiff(names(as.list(expr)), c("", "out_file"))
+    expect_true(length(passed) > 0)
+    expect_equal(setdiff(passed, names(formals(build_shiny_payload_metabolomics))),
+                 character(0))
+})
+
 
 # =============================================================================
 # Tests: pipe_multiomics() — removed
