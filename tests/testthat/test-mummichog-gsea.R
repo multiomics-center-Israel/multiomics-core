@@ -202,9 +202,9 @@ test_that("the engine refuses any gsea_param but the reference value", {
   rk <- stats::setNames(c(1, 2, 3), c("E1", "E2", "E3"))
 
   expect_error(mmc_gsea_metaboanalyst(pw, st, rk, gsea_param = 2),
-               "gsea_param must be 1")
+               "gsea_param must be the number 1")
   expect_error(mmc_gsea_metaboanalyst(pw, st, rk, gsea_param = 0.5),
-               "gsea_param must be 1")
+               "gsea_param must be the number 1")
   # The message has to say why, not just refuse.
   expect_error(mmc_gsea_metaboanalyst(pw, st, rk, gsea_param = 2),
                "permutation")
@@ -226,7 +226,7 @@ test_that("run_mummichog_gsea rejects gsea_param early, before any work", {
     run_mummichog_gsea(character(0), data.frame(feature_id = "f", logFC = 1),
                        model = list(pathways = list(P = "C1")),
                        de_method = "limma", gsea_param = 2),
-    "gsea_param must be 1")
+    "gsea_param must be the number 1")
 })
 
 test_that("an ES = 0 fallback propagates into NES, the p-value and the BH set", {
