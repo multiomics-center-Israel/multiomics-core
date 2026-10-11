@@ -421,6 +421,62 @@ test_that("the fgsea compatibility policy is decided in one place", {
   }
 })
 
+test_that("fractional n_perm and seed are refused, not truncated", {
+  pw <- list(PW = c("E1", "E2"))
+  st <- stats::setNames(c(2, 1, -1), c("E1", "E2", "E3"))
+  rk <- stats::setNames(c(1, 2, 3), c("E1", "E2", "E3"))
+
+  # Truncating would put the engine back where min_size and rank_metric were:
+  # running 100 permutations while reporting 100.5, or running the default
+  # seed 123 while announcing a departure from it.
+  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = 100.5),
+               "n_perm must be a single whole number")
+  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, seed = 123.9),
+               "seed must be a single whole number")
+  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = 0), "n_perm")
+  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = c(10, 20)), "n_perm")
+  expect_error(mmc_gsea_metaboanalyst(pw, st, rk, n_perm = NA), "n_perm")
+
+  # The entry point refuses before any work, so the caller gets the error
+  # rather than "GSEA skipped".
+  de <- data.frame(feature_id = "f", logFC = 1, stringsAsFactors = FALSE)
+  model <- list(pathways = list(P = "C1"))
+  expect_error(run_mummichog_gsea(character(0), de, model, de_method = "limma",
+                                  n_perm = 100.5),
+               "n_perm must be a single whole number")
+  expect_error(run_mummichog_gsea(character(0), de, model, de_method = "limma",
+                                  seed = 123.9),
+               "seed must be a single whole number")
+
+  # Whole numbers in either storage mode are fine, and 0 is a legal seed.
+  expect_identical(.mmc_gsea_check_count(100, "n_perm"), 100L)
+  expect_identical(.mmc_gsea_check_count(100L, "n_perm"), 100L)
+  expect_identical(.mmc_gsea_check_count(0, "seed", min = 0L), 0L)
+})
+
+test_that("a pathway covering the whole ranking still returns its row", {
+  for (pkg in c("fgsea", "fastmatch", "data.table", "BiocParallel")) {
+    skip_if_not_installed(pkg)
+  }
+  # One pathway, holding every ranked position. calcGseaStat refuses that set,
+  # so the observed score correctly takes the ES = 0 fallback -- but with one
+  # tested pathway the permutation loop draws the whole ranking every time and
+  # hit the same refusal unguarded, aborting the engine. The documented
+  # ES-defaulted row was lost and the contrast read as "GSEA not applicable".
+  ec  <- c(E1 = 3, E2 = 2, E3 = 1)
+  inp <- mmc_gsea_ranked_inputs(ec)
+  res <- mmc_gsea_metaboanalyst(list(PW_all = c("E1", "E2", "E3")),
+                                inp$stats, inp$ranks)
+
+  expect_equal(nrow(res), 1L)
+  expect_true(res$es_defaulted)
+  expect_identical(res$es_reason, "pathway selects every ranked position")
+  expect_identical(res$ES, 0)
+  expect_identical(res$pval, 1)
+  # Classified by its actual cause, not filed under ties.
+  expect_false(grepl("tie", res$es_reason, ignore.case = TRUE))
+})
+
 test_that("the reference gsea_param is accepted in both numeric shapes", {
   for (pkg in c("fgsea", "fastmatch", "data.table", "BiocParallel")) {
     skip_if_not_installed(pkg)

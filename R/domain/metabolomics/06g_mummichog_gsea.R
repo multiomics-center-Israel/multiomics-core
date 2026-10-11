@@ -210,6 +210,36 @@
 #' reference by passing 1 (which would make our ES differ from MetaboAnalyst's
 #' for the same input), the engine runs only where the two agree.
 #'
+#' Require a whole-number count, and return it as one
+#'
+#' `n_perm` and `seed` are whole numbers everywhere they are used: the batch
+#' split needs an integer count, and `withr::with_seed()` coerces to integer.
+#' Accepting `100.5` or `123.9` and quietly truncating would put the engine back
+#' in the position these checks exist to prevent — running one value while
+#' reporting another, and in `seed`'s case announcing a departure from a default
+#' it had in fact used. Refusing is the honest answer: there is no reading of a
+#' fractional permutation count or seed that the caller could have meant.
+#'
+#' @param x    The supplied value.
+#' @param name Argument name, for the message.
+#' @param min  Smallest acceptable value.
+#' @return `x` as an integer, or an error.
+#' @noRd
+.mmc_gsea_check_count <- function(x, name, min = 1L) {
+  ok <- length(x) == 1L && is.numeric(x) && is.finite(x) &&
+    isTRUE(all.equal(as.numeric(x), round(as.numeric(x)))) && x >= min
+  if (!ok) {
+    .mmc_stop(
+      name, " must be a single whole number >= ", min, "; got ",
+      paste(format(x), collapse = ", "), ". It is used as an integer ",
+      "throughout (the permutation batch split, and withr::with_seed()), so a ",
+      "fractional value would run as one number while being reported as ",
+      "another."
+    )
+  }
+  as.integer(round(as.numeric(x)))
+}
+
 #' @param gsea_param The requested exponent.
 #' @return `invisible(TRUE)`, or an error.
 #' @noRd
@@ -583,6 +613,8 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
   # property of the inputs, and must not be masked by an empty-input return or
   # by a missing package.
   .mmc_gsea_check_param(gsea_param)
+  n_perm <- .mmc_gsea_check_count(n_perm, "n_perm")
+  seed   <- .mmc_gsea_check_count(seed, "seed", min = 0L)
 
   # Every column the populated result carries, including the two diagnostics:
   # a caller that rbinds runs together, or reads the documented schema, must
@@ -706,9 +738,22 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
                   leZeroSum = 0, geZeroSum = 0)
       withr::with_seed(batch_seeds[i], {
         for (k in seq_len(n1)) {
-          rand_es <- fgsea::calcGseaStat(
-            stats = stats, selectedStats = sample.int(length(stats), K),
-            gseaParam = 1)
+          draw <- sample.int(length(stats), K)
+          # A pathway covering the whole ranking makes every draw the whole
+          # ranking too, and calcGseaStat refuses that set. Unguarded, the first
+          # permutation aborted the engine and the contrast came back as "GSEA
+          # not applicable" -- losing the ES-defaulted row the observed score
+          # had already, correctly, produced. A refusal calcGseaStat recognises
+          # scores 0, consistent with that row; anything else is a real failure
+          # and is re-raised rather than absorbed into the null distribution.
+          rand_es <- tryCatch(
+            fgsea::calcGseaStat(stats = stats, selectedStats = draw,
+                                gseaParam = 1),
+            error = function(e) {
+              reason <- .mmc_gsea_fallback_reason(draw, conditionMessage(e))
+              if (startsWith(reason, .MMC_GSEA_FALLBACK_UNEXPECTED)) stop(e)
+              0
+            })
           acc$leEs      <- acc$leEs + (rand_es <= pathway_scores)
           acc$geEs      <- acc$geEs + (rand_es >= pathway_scores)
           acc$leZero    <- acc$leZero + (rand_es <= 0)
@@ -938,6 +983,8 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   # First, before the "cannot run here" branches below: an invalid parameter is
   # a caller error and must not be reported as "GSEA was not applicable".
   .mmc_gsea_check_param(gsea_param)
+  n_perm <- .mmc_gsea_check_count(n_perm, "n_perm")
+  seed   <- .mmc_gsea_check_count(seed, "seed", min = 0L)
 
   # Normalise once, here, so the value that runs is the value reported: the
   # engine clamps defensively for direct callers, and a result that said
