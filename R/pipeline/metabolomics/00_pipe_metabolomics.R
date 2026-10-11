@@ -380,11 +380,27 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       tar_target(
         metab_mummichog_report_pathways,
         read_mummichog_pathways_by_contrast(metab_mummichog_pinned_files)
+      ),
+      # Report-facing file list: the same tracked paths under a stable symbol
+      # the report target can depend on in both branches. The supporting-
+      # evidence layer (06f) reads the EmpiricalCompound tables from these; the
+      # pathway tables above do not carry them.
+      #
+      # format = "file" here too, not just upstream: as an ordinary target this
+      # would hash the path vector rather than the files, so a rerun that
+      # rewrote an EmpiricalCompound table without renaming it would leave this
+      # target's hash -- and therefore metab_report -- unchanged, and the report
+      # would keep serving the previous run's evidence.
+      tar_target(
+        metab_mummichog_report_files,
+        metab_mummichog_pinned_files,
+        format = "file"
       )
     ))
   } else {
     analysis_core <- c(analysis_core, list(
-      tar_target(metab_mummichog_report_pathways, NULL)
+      tar_target(metab_mummichog_report_pathways, NULL),
+      tar_target(metab_mummichog_report_files, NULL)
     ))
   }
 
@@ -486,7 +502,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         qc_comparison_file = NULL,
         qc_suite_files     = NULL,
         commentary_file    = metab_commentary,
-        mummichog_pathways = metab_mummichog_report_pathways
+        mummichog_pathways = metab_mummichog_report_pathways,
+        mummichog_files    = metab_mummichog_report_files
       ),
       format = "file"
     ),

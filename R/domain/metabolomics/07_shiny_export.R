@@ -8,6 +8,12 @@
 # New code should use build_shiny_payload_metabolomics().
 # ============================================================
 
+# The per-contrast keys the app's mummichog contract names. The HTML report's
+# section builder also returns `evidence`, which the report renders and the
+# module exports; narrowing happens HERE, at the payload boundary only, so the
+# app's contract is unaffected by what the report gains.
+.METAB_SHINY_MUMMICHOG_KEYS <- c("title", "subtitle", "plot", "table", "slug")
+
 
 # ============================================================
 # CANONICAL BUILDER (v2.0)
@@ -374,7 +380,13 @@ build_shiny_payload_metabolomics <- function(
     # report's own ggplot and table (plus title, subtitle and slug) for each
     # contrast instead of rebuilding them. NULL when mummichog did not run or no
     # contrast has a result; list-style assignment keeps the key present then.
-    mummichog_sections <- build_mummichog_report_sections(mummichog_pathways, config)
+    # This call supplies no mummichog output files, so `evidence` is NULL here
+    # anyway; the narrowing is belt-and-braces, and it is what keeps the app's
+    # contract fixed if a future caller does supply them.
+    mummichog_sections <- lapply(
+        build_mummichog_report_sections(mummichog_pathways, config),
+        function(sec) sec[intersect(.METAB_SHINY_MUMMICHOG_KEYS, names(sec))]
+    )
     payload["mummichog"] <- list(
         if (length(mummichog_sections) > 0) mummichog_sections else NULL
     )
