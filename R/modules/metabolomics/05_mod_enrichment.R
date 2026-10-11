@@ -263,7 +263,8 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             q <- .mod_metab_qea_contrast(pre_sub, config, ct, out_enr, out_ds)
             if (!is.null(q)) { qea_by_contrast[[ct]] <- q; files <- c(files, q$files) }
             s <- .mod_metab_ssgsea_contrast(pre_sub, config, ct, out_enr, out_ds,
-                                            groups = grp$groups)
+                                            groups = grp$groups,
+                                            group_col = grp$group_col)
             if (!is.null(s)) { ssgsea_by_contrast[[ct]] <- s; files <- c(files, s$files) }
         }
     }
@@ -556,11 +557,18 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #'   turns that into a warning naming this contrast and skips it — a contrast
 #'   whose direction cannot be established yields no result rather than a
 #'   result with an arbitrary sign.
+#' @param group_col The column those groups live in, from
+#'   `.resolve_contrast_groups()$group_col` — the contrast's own `Factor` when
+#'   it has one. It travels WITH the groups: the subset above was built from
+#'   this column, so leaving ssGSEA to read the configured
+#'   `enrichment.condition_column` instead would label the samples by an
+#'   unrelated variable, and the groups would not be found at all.
 #' @return list(res, plots, files) or NULL when the contrast yields no table.
 .mod_metab_ssgsea_contrast <- function(pre_sub, config, contrast, out_enr, out_ds,
-                                       groups = NULL) {
+                                       groups = NULL, group_col = NULL) {
     res <- tryCatch(
-        run_metabolomics_ssgsea(pre_sub, config, contrast_groups = groups),
+        run_metabolomics_ssgsea(pre_sub, config, contrast_groups = groups,
+                                contrast_column = group_col),
         error = function(e) {
             warning("metabolomics ssGSEA failed for '", contrast, "': ", e$message)
             NULL

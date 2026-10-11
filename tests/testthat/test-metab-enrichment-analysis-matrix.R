@@ -422,6 +422,27 @@ test_that(".metab_ssgsea_conditions aborts on unusable groups rather than fallin
     expect_silent(.metab_ssgsea_conditions(v, NULL))
 })
 
+test_that(".metab_ssgsea_conditions refuses a third group instead of nulling it", {
+    # Naming the levels would turn the third group's samples into NA, and the
+    # two-group guard downstream counts LEVELS, so it would see exactly two and
+    # let the run proceed — on a GSVA matrix that had already scored all three.
+    v <- c(rep(c("B", "A"), each = 3), "C", "C")
+
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")),
+                 "also carry group\\(s\\) 'C'")
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")), "Subset `pre`")
+
+    # Without a contrast the third level stays visible, which is what lets the
+    # caller's "requires exactly 2 conditions" guard fire.
+    expect_identical(levels(.metab_ssgsea_conditions(v, NULL)), c("A", "B", "C"))
+
+    # A group that is absent is reported as absent, not as surplus data: the
+    # missing check has to run first, or a wrong grouping column would be
+    # described as extra groups.
+    expect_error(.metab_ssgsea_conditions(v, c("B", "MISSING")),
+                 "not among the condition values")
+})
+
 test_that("a contrast whose groups are absent yields no ssGSEA result, not a signed one", {
     skip_if_not_installed("GSVA")
     skip_if_not_installed("withr")
@@ -496,6 +517,48 @@ test_that("the per-contrast ssGSEA wrapper forwards the resolved groups", {
     expect_true("groups" %in% names(formals(.mod_metab_ssgsea_contrast)))
     expect_true("contrast_groups" %in% names(formals(run_metabolomics_ssgsea)))
 
+    # The column travels with the groups. A contrast carrying its own Factor
+    # was subset by THAT column, so sending the groups without it would have
+    # ssGSEA look them up in the configured condition column and find nothing.
+    expect_true("group_col" %in% names(formals(.mod_metab_ssgsea_contrast)))
+    expect_true("contrast_column" %in% names(formals(run_metabolomics_ssgsea)))
+
     body_txt <- paste(deparse(body(.mod_metab_ssgsea_contrast)), collapse = " ")
     expect_match(body_txt, "contrast_groups\\s*=\\s*groups")
+    expect_match(body_txt, "contrast_column\\s*=\\s*group_col")
+
+    # ...and the caller supplies both from the same resolver.
+    caller <- paste(deparse(body(mod_metabolomics_enrichment)), collapse = " ")
+    expect_match(caller, "groups\\s*=\\s*grp\\$groups")
+    expect_match(caller, "group_col\\s*=\\s*grp\\$group_col")
+})
+
+test_that("ssGSEA groups by the contrast's own Factor column when given one", {
+    skip_if_not_installed("GSVA")
+    skip_if_not_installed("withr")
+
+    fx <- .make_enrichment_fixture()
+    on.exit(unlink(fx$gmt), add = TRUE)
+
+    # A second grouping variable whose labels do NOT appear in the configured
+    # condition column — the shape of a contrast that carries its own Factor.
+    # Labels chosen to look nothing like QC/blank so the biological filter
+    # cannot drop them.
+    fx$pre$meta$run_batch <- rep(c("RUN1", "RUN2"),
+                                 length.out = nrow(fx$pre$meta))
+
+    # Without the column, the groups are looked up in `sample_type` and are not
+    # there: the contrast is refused rather than scored by the wrong variable.
+    expect_error(
+        run_metabolomics_ssgsea(fx$pre, fx$config,
+                                contrast_groups = c("RUN2", "RUN1")),
+        "not among the condition values")
+
+    # With it, the same groups resolve and the direction follows them.
+    res <- run_metabolomics_ssgsea(fx$pre, fx$config,
+                                   contrast_groups = c("RUN2", "RUN1"),
+                                   contrast_column = "run_batch")
+    skip_if(is.null(res) || is.null(res$table), "ssGSEA produced no table")
+    expect_identical(res$direction, "RUN2 - RUN1")
+    expect_true(all(c("mean_RUN1", "mean_RUN2") %in% names(res$table)))
 })

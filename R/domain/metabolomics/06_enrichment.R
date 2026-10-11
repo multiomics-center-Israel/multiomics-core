@@ -630,10 +630,18 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
 #'   `score_diff` to numerator-minus-denominator. Omit it for the dataset-wide
 #'   run, where the order falls back to alphabetical and the sign therefore
 #'   carries no contrast direction. Supplying groups that are not both present
-#'   in the scored samples is an error, not a fallback.
+#'   in the scored samples is an error, not a fallback, as is supplying a
+#'   `pre` that still holds a third group.
+#' @param contrast_column The metadata column those groups live in, as
+#'   `.resolve_contrast_groups()$group_col` returns it — the contrast's own
+#'   `Factor` when it has one. It overrides the configured
+#'   `enrichment.condition_column` cascade, because the samples were subset by
+#'   this column and labelling them by another would describe a different
+#'   comparison. `NULL` keeps the cascade.
 #' @return list(table, scores, method, direction) or NULL if disabled or
 #'   unavailable. `direction` names the subtraction `score_diff` reports.
-run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL) {
+run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL,
+                                    contrast_column = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
 
@@ -654,8 +662,12 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL) {
         return(NULL)
     }
 
-    # Resolve condition and sample columns (same cascade as QEA)
-    condition_col <- enr_cfg$condition_column %||%
+    # Resolve condition and sample columns (same cascade as QEA). A contrast
+    # carrying its own Factor overrides the cascade: the stage subset the
+    # samples by THAT column, so reading the configured one here would label
+    # them by an unrelated variable.
+    condition_col <- contrast_column %||%
+                     enr_cfg$condition_column %||%
                      cfg$de$condition_column %||%
                      cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
@@ -842,10 +854,15 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL) {
              length(contrast_groups), " value(s) of class ",
              class(contrast_groups)[1], ".", call. = FALSE)
     }
+    # Missing first: it is the more specific diagnosis. A group the samples do
+    # not carry also makes every real group look "extra", so checking extras
+    # first would report a wrong grouping column as surplus data.
+    #
+    # Plain quotes throughout, not sQuote(): useFancyQuotes defaults to TRUE,
+    # which would make the messages - and anything matching on them -
+    # locale-dependent.
     missing <- setdiff(contrast_groups, present)
     if (length(missing) > 0) {
-        # Plain quotes, not sQuote(): useFancyQuotes defaults to TRUE, which
-        # would make the message - and anything matching on it - locale-dependent.
         stop("metabolomics ssGSEA: contrast group(s) ",
              paste0("'", missing, "'", collapse = " and "),
              " are not among the condition values of the samples being scored (",
@@ -854,6 +871,23 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL) {
              "scoring, so this means the grouping column disagrees with ",
              "inputs$contrasts. Refusing to score rather than report an ",
              "alphabetical sign under this contrast's name.", call. = FALSE)
+    }
+    # Naming the levels explicitly turns any OTHER group's samples into NA, and
+    # the two-group guard downstream cannot see that: it counts levels, and
+    # there would be exactly two. Those samples were already scored by GSVA,
+    # whose normalisation depends on the sample set, so dropping them from the
+    # test afterwards is a different analysis from the module's true two-group
+    # run. The caller subsets first (.subset_pre_to_groups); refuse if it did not.
+    extra <- setdiff(present, contrast_groups)
+    if (length(extra) > 0) {
+        stop("metabolomics ssGSEA: the samples being scored also carry group(s) ",
+             paste0("'", extra, "'", collapse = ", "),
+             " beyond this contrast's ",
+             paste0("'", contrast_groups, "'", collapse = " and "),
+             ". Subset `pre` to the contrast's two groups before scoring: GSVA ",
+             "normalises across the samples it is given, so excluding them only ",
+             "from the Wilcoxon step would not be the same comparison.",
+             call. = FALSE)
     }
     # level 1 = denominator, level 2 = numerator -> score_diff = num - den
     factor(values, levels = c(contrast_groups[2], contrast_groups[1]))
