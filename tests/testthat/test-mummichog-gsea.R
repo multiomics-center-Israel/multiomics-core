@@ -98,6 +98,27 @@ test_that("a literal 't' column is accepted as the moderated statistic", {
   expect_equal(unname(r$values[["f2"]]), -3)
 })
 
+test_that("an unusable 'statistic' column falls through to 't', not to logFC", {
+  # A precomputed DE table can carry an all-NA `statistic` next to a perfectly
+  # good `t`. Picking the column by name alone committed to `statistic` before
+  # testing it, so the real moderated statistic was skipped and the ranking
+  # quietly dropped to logFC.
+  de <- data.frame(stringsAsFactors = FALSE,
+                   feature_id = c("f1", "f2"),
+                   statistic  = c(NA_real_, NA_real_),
+                   t          = c(2, -3),
+                   logFC      = c(1, -1))
+  r <- mmc_gsea_rank_metric(de)
+  expect_identical(r$metric, "moderated_t")
+  expect_match(r$label, "'t'", fixed = TRUE)
+  expect_equal(unname(r$values[["f2"]]), -3)
+
+  # With no usable statistic at all, logFC is still the documented fallback.
+  de_no_t <- de
+  de_no_t$t <- NA_real_
+  expect_identical(mmc_gsea_rank_metric(de_no_t)$metric, "logFC")
+})
+
 
 # ---------------------------------------------------------------------------
 # EmpiricalCompound scores (MetaboAnalyst v2 semantics)
@@ -451,6 +472,70 @@ test_that("report sections carry the GSEA scatter as the pathway plot", {
   expect_false(is.null(s$evidence))
   # ...but the ORA bubble does NOT compete as a second primary plot
   expect_null(s$ora_plot)
+})
+
+test_that("an unplottable ORA does not suppress the contrast's GSEA", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+  cfg  <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
+  pw   <- read_mummichog_pathways_by_contrast(f$files)
+
+  # Blank every ORA p-value: the bubble plot then has nothing finite to draw.
+  # That used to drop the whole contrast before GSEA was ever reached — exactly
+  # the case GSEA exists for, since it reads the full ranked EC list with no
+  # significance cutoff and does not consult the ORA table at all.
+  pw[["HL_vs_LL"]][["p-value"]] <- NA_real_
+  expect_null(plot_mummichog_bubble(pw[["HL_vs_LL"]], title = "t"))
+
+  secs <- build_mummichog_report_sections(
+    pw, cfg,
+    files  = f$files,
+    de_res = list(de_tables = list("HL_vs_LL" = f$de_table)),
+    model  = f$model)
+
+  expect_named(secs, "HL_vs_LL")
+  s <- secs[["HL_vs_LL"]]
+  expect_identical(s$plot_kind, "gsea_scatter")
+  expect_s3_class(s$plot, "ggplot")
+  expect_false(is.null(s$gsea))
+  expect_null(s$ora_plot)
+})
+
+test_that("a contrast with neither plot is still dropped", {
+  # The relaxed guard must not turn into no guard: with no GSEA (no files, no
+  # model) and an unplottable ORA there is nothing to render, so the contrast
+  # is still skipped rather than yielding a section whose `plot` is NULL.
+  cfg <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
+  pw  <- list(HL_vs_LL = data.frame(
+    check.names = FALSE, stringsAsFactors = FALSE,
+    pathway = c("A", "B"), overlap_size = c(1, 2), pathway_size = c(4, 5),
+    "p-value" = c(NA_real_, NA_real_)))
+
+  expect_length(build_mummichog_report_sections(pw, cfg), 0)
+})
+
+test_that("GSEA accepts the stage's summary_df DE fallback", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+  cfg  <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
+  pw   <- read_mummichog_pathways_by_contrast(f$files)
+
+  # 05b runs the contrast happily off de_res$summary_df. Recognising only
+  # de_tables here ran mummichog and then skipped GSEA without saying why.
+  secs <- build_mummichog_report_sections(
+    pw, cfg,
+    files  = f$files,
+    de_res = list(summary_df = f$de_table),
+    model  = f$model)
+
+  s <- secs[["HL_vs_LL"]]
+  expect_false(is.null(s$gsea))
+  expect_identical(s$plot_kind, "gsea_scatter")
 })
 
 test_that("report sections fall back to the ORA plot when GSEA cannot run", {

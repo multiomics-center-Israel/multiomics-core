@@ -137,14 +137,20 @@ mmc_gsea_rank_metric <- function(de_table) {
       !"feature_id" %in% names(de_table)) {
     return(NULL)
   }
-  stat_col <- .mmc_find_col(de_table, c("statistic", "t"))
   usable <- function(col) {
     if (is.null(col) || !col %in% names(de_table)) return(FALSE)
     v <- suppressWarnings(as.numeric(de_table[[col]]))
     any(is.finite(v))
   }
+  # Test the candidates in order of preference rather than committing to the
+  # first one that merely exists. A precomputed DE table can carry an unusable
+  # `statistic` (all NA, or non-numeric) next to a perfectly good `t`; picking
+  # by name alone would skip the real moderated statistic and quietly rank on
+  # logFC instead — or drop the contrast when there is no logFC either.
+  stat_candidates <- c("statistic", "t")
+  stat_col <- Find(usable, stat_candidates[stat_candidates %in% names(de_table)])
 
-  if (usable(stat_col)) {
+  if (!is.null(stat_col)) {
     v      <- suppressWarnings(as.numeric(de_table[[stat_col]]))
     metric <- "moderated_t"
     label  <- paste0("moderated t statistic (DE column '", stat_col, "')")

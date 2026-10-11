@@ -236,8 +236,10 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #'   ONLY in that case (it is the fallback, not a second primary plot).
 #'   `slug` is a filesystem-safe,
 #'   de-duplicated token for the contrast (mirrors the engine's per-contrast
-#'   directory naming) so the standalone exports never collide. Empty list when
-#'   there is nothing to show.
+#'   directory naming) so the standalone exports never collide. A contrast is
+#'   dropped only when it has no pathway rows at all, or when NEITHER analysis
+#'   yielded a plot — an unplottable ORA alone does not suppress its GSEA.
+#'   Empty list when there is nothing to show.
 build_mummichog_report_sections <- function(pathways_by_contrast, config,
                                             files = NULL, de_res = NULL,
                                             row_data = NULL, model = NULL) {
@@ -277,7 +279,6 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     ora_plot <- plot_mummichog_bubble(pw, title = ttl$title,
                                       subtitle = ttl$subtitle, p_cutoff = p_cut)
     tbl  <- build_mummichog_pathway_table(pw)
-    if (is.null(ora_plot)) next        # nothing plottable -> skip this contrast
 
     cfiles <- files_by_contrast[[contrast]]
 
@@ -314,6 +315,13 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
         title = sub("^Mummichog pathway analysis",
                     "Mummichog GSEA (peaks to pathways)", ttl$title),
         subtitle = ttl$subtitle, p_cutoff = p_cut)
+
+    # A contrast earns a section when EITHER analysis produced a plot. GSEA
+    # reads the full ranked list with no significance cutoff, so the contrast
+    # whose ORA has nothing plottable — no row clearing p_cutoff — is exactly
+    # the one it can still speak for. Gating it behind the bubble plot dropped
+    # that result unseen, which is also why this check now runs after GSEA.
+    if (is.null(gsea_plot) && is.null(ora_plot)) next
 
     # -- supporting evidence (fail-soft) -------------------------------------
     evidence <- if (is.null(cfiles) || is.null(model)) NULL else tryCatch(
@@ -354,9 +362,9 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
 
 #' Locate one contrast's DE table inside a DE results object
 #'
-#' Mirrors how the stage itself resolves contrasts (05b): the named
-#' `de_tables` entry first, then the single-table fallbacks a non-standard
-#' `de_res` can take. Returns `NULL` rather than guessing when the contrast
+#' Mirrors how the stage itself resolves contrasts (05b), in the same order:
+#' the named `de_tables` entry first, then `summary_df`, then a bare
+#' data.frame. Returns `NULL` rather than guessing when the contrast
 #' cannot be identified — GSEA is then skipped for it, which is preferable to
 #' ranking one contrast's ECs with another contrast's statistics.
 #'
@@ -373,6 +381,10 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     if (length(tabs) == 1L) return(tabs[[1]])
     return(NULL)
   }
+  # Same single-table fallbacks the stage accepts (05b), in the same order. The
+  # stage runs the contrast happily off summary_df, so recognising only
+  # de_tables here would run mummichog and then skip GSEA without saying why.
+  if (is.data.frame(de_res$summary_df)) return(de_res$summary_df)
   if (is.data.frame(de_res)) return(de_res)
   NULL
 }
