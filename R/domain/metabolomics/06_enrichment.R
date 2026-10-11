@@ -750,10 +750,11 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL,
     # ---- Wilcoxon test per pathway ----
     # Align condition labels to score matrix columns via sample IDs
     meta <- pre$meta
+    # The column is handed over as it is, NOT coerced to character: without a
+    # contrast the helper reproduces factor()'s own ordering, and that ordering
+    # depends on the column's type.
     conditions <- .metab_ssgsea_conditions(
-        as.character(meta[[condition_col]][
-            match(colnames(scores), meta[[sample_col]])
-        ]),
+        meta[[condition_col]][match(colnames(scores), meta[[sample_col]])],
         contrast_groups)
     cond_levels <- levels(conditions)
 
@@ -834,16 +835,26 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL,
 #' exactly the failure this function exists to prevent. So an unusable
 #' `contrast_groups` aborts instead.
 #'
-#' @param values          Character vector of per-sample condition values.
+#' @param values          Per-sample condition values, passed through as the
+#'   metadata column holds them (factor, numeric or character). Do not coerce
+#'   before calling: the no-contrast path's ordering depends on the type.
 #' @param contrast_groups `c(numerator, denominator)`, or `NULL` for the
 #'   dataset-wide run that is not tied to a contrast.
 #' @return A factor over `values` whose SECOND level is the contrast's
 #'   numerator, so `mean2 - mean1` reads numerator minus denominator.
 .metab_ssgsea_conditions <- function(values, contrast_groups = NULL) {
-    present <- sort(unique(values[!is.na(values)]))
+    # No contrast named: nothing is being asserted about direction, so hand the
+    # column to factor() untouched and inherit its ordering exactly. That
+    # ordering is type-dependent and the dataset-wide path has always relied on
+    # it: a factor column keeps its declared level order, and a numeric one
+    # sorts numerically (2 before 10). Coercing to character first would sort
+    # both lexicographically, which silently flips `score_diff` on this path.
+    if (is.null(contrast_groups)) return(factor(values))
 
-    # No contrast named: nothing is being asserted about direction.
-    if (is.null(contrast_groups)) return(factor(values, levels = present))
+    # From here the groups are compared against `contrast_groups`, which are
+    # the character values inputs$contrasts carries.
+    values  <- as.character(values)
+    present <- sort(unique(values[!is.na(values)]))
 
     bad <- length(contrast_groups) != 2L || any(is.na(contrast_groups)) ||
            !all(nzchar(contrast_groups))

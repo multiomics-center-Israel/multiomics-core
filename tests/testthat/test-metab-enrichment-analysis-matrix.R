@@ -484,6 +484,38 @@ test_that("the global ssGSEA path still tolerates unlabelled samples", {
                      c("A", "B", "C"))
 })
 
+test_that("the global path inherits factor()'s ordering, not a character sort", {
+    # `score_diff` is mean(level 2) - mean(level 1), so the level ORDER is the
+    # reported sign on this path too. factor()'s ordering is type-dependent,
+    # and the dataset-wide run has always relied on it. Coercing to character
+    # before building the factor would reorder both cases below and flip the
+    # sign of a result nothing in this PR is meant to touch.
+
+    # A factor column keeps its DECLARED order, which need not be alphabetical.
+    f <- factor(c("B", "A", "B", "A"), levels = c("B", "A"))
+    expect_identical(levels(.metab_ssgsea_conditions(f, NULL)), c("B", "A"))
+
+    # A numeric column sorts NUMERICALLY: 2 before 10, not "10" before "2".
+    expect_identical(levels(.metab_ssgsea_conditions(c(2, 10, 2, 10), NULL)),
+                     c("2", "10"))
+
+    # Unused declared levels are dropped, exactly as factor() does, so the
+    # two-group guard still counts the groups that are actually present.
+    f3 <- factor(c("B", "A"), levels = c("B", "A", "C"))
+    expect_identical(levels(.metab_ssgsea_conditions(f3, NULL)), c("B", "A"))
+
+    # A character column is unaffected: it sorted alphabetically before too.
+    expect_identical(levels(.metab_ssgsea_conditions(c("B", "A"), NULL)),
+                     c("A", "B"))
+
+    # With a contrast the groups decide, whatever the column's type: the
+    # numerator is level 2 even when the declared order says otherwise.
+    expect_identical(levels(.metab_ssgsea_conditions(f, c("A", "B"))),
+                     c("B", "A"))
+    expect_identical(levels(.metab_ssgsea_conditions(c(2, 10), c("2", "10"))),
+                     c("10", "2"))
+})
+
 test_that("a contrast whose groups are absent yields no ssGSEA result, not a signed one", {
     skip_if_not_installed("GSVA")
     skip_if_not_installed("withr")
