@@ -267,6 +267,127 @@ test_that("an ES = 0 fallback propagates into NES, the p-value and the BH set", 
   expect_equal(nrow(res), 2L)
 })
 
+# ---- provenance: what ran must be what the result says ran ----------------
+
+test_that("an empty engine result carries the same columns as a full one", {
+  for (pkg in c("fgsea", "fastmatch", "data.table", "BiocParallel")) {
+    skip_if_not_installed(pkg)
+  }
+  # Callers rbind runs together and read the documented schema; a valid empty
+  # run must not hand back a narrower contract than a populated one.
+  st <- stats::setNames(c(2, 1, -1), c("E1", "E2", "E3"))
+  rk <- stats::setNames(c(1, 2, 3), c("E1", "E2", "E3"))
+
+  no_pathways <- mmc_gsea_metaboanalyst(list(), st, rk)
+  filtered    <- mmc_gsea_metaboanalyst(list(PW = c("E1", "E2")), st, rk,
+                                        min_size = 99)
+  full        <- mmc_gsea_metaboanalyst(list(PW = c("E1", "E2")), st, rk)
+
+  expect_equal(nrow(no_pathways), 0L)
+  expect_equal(nrow(filtered), 0L)
+  expect_gt(nrow(full), 0L)
+
+  expect_identical(names(no_pathways), names(full))
+  expect_identical(names(filtered), names(full))
+  expect_true(all(c("es_defaulted", "es_reason") %in% names(no_pathways)))
+  expect_type(no_pathways$es_defaulted, "logical")
+  expect_type(no_pathways$es_reason, "character")
+})
+
+test_that("min_size is normalised once and reported as the value that ran", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+
+  # The engine clamps min_size to 1. Reporting the caller's 0 would describe a
+  # run that never happened, and make the result unreproducible from its own
+  # provenance.
+  res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                            de_method = "limma", min_size = 0)
+
+  expect_equal(res$params$min_size, 1)
+  # ... and 0 is not a departure from the reference either: 1 is the reference.
+  expect_false(any(grepl("min_size", res$deviations)))
+
+  same <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                             de_method = "limma", min_size = 1)
+  expect_equal(res$table, same$table)
+})
+
+test_that("a non-default rank_metric is recorded as a deviation", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+
+  # Merging features that share an m/z by something other than the reference's
+  # "mean" changes every EC score, and so every statistic downstream of it.
+  res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                            de_method = "limma", rank_metric = "median")
+  expect_true(any(grepl("rank_metric = 'median'", res$deviations, fixed = TRUE)))
+
+  ref <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                            de_method = "limma")
+  expect_false(any(grepl("rank_metric", ref$deviations)))
+  expect_identical(ref$params$rank_metric, "mean")
+})
+
+test_that("the single-pathway branch is reproducible and declared unvalidated", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+  # One pathway -> the engine takes its seeded sample.int() loop instead of the
+  # batch call. Upstream leaves that loop to a non-deterministic worker RNG, so
+  # there is no reference draw to match: we offer reproducibility instead, and
+  # the result has to say so rather than imply parity.
+  one <- list(pathways = f$model$pathways["PW_pos"])
+
+  a <- run_mummichog_gsea(f$files, f$de_table, one, contrast = "c",
+                          de_method = "limma")
+  b <- run_mummichog_gsea(f$files, f$de_table, one, contrast = "c",
+                          de_method = "limma")
+
+  expect_equal(nrow(a$table), 1L)
+  expect_equal(a$table, b$table)          # seeded: identical across runs
+
+  expect_true(any(grepl("one tested pathway", a$deviations)))
+  expect_true(any(grepl("not covered by the parity fixture", a$deviations)))
+
+  # More than one tested pathway goes through the batch call and claims parity.
+  many <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                             de_method = "limma")
+  expect_gt(nrow(many$table), 1L)
+  expect_false(any(grepl("one tested pathway", many$deviations)))
+})
+
+test_that("the fgsea compatibility policy is decided in one place", {
+  skip_if_not_installed("fgsea")
+  installed <- as.character(utils::packageVersion("fgsea"))
+  series <- function(v) paste(strsplit(v, ".", fixed = TRUE)[[1]][1:2],
+                              collapse = ".")
+
+  if (identical(installed, .MMC_GSEA_VALIDATED_FGSEA)) {
+    # The validated build: supported, and silent about it.
+    expect_null(.mmc_gsea_check_fgsea())
+  } else if (identical(series(installed), series(.MMC_GSEA_VALIDATED_FGSEA))) {
+    # Same series, different patch: allowed, warned about once, and the exact
+    # version recorded so the result says what it actually ran on.
+    expect_warning(note <- .mmc_gsea_check_fgsea(), installed, fixed = TRUE)
+    expect_match(note, installed, fixed = TRUE)
+    expect_match(note, .MMC_GSEA_VALIDATED_FGSEA, fixed = TRUE)
+    # The provenance path must not warn a second time for the same run.
+    expect_silent(.mmc_gsea_check_fgsea(warn = FALSE))
+  } else {
+    # A different series is refused outright -- no statistics are computed on a
+    # build whose internals the parity suite declines to validate.
+    expect_error(.mmc_gsea_check_fgsea(), "validated compatibility range")
+    expect_error(mmc_gsea_metaboanalyst(
+      list(PW = c("E1", "E2")),
+      stats::setNames(c(2, 1), c("E1", "E2")),
+      stats::setNames(c(1, 2), c("E1", "E2"))),
+      "validated compatibility range")
+  }
+})
+
 test_that("the reference gsea_param is accepted in both numeric shapes", {
   for (pkg in c("fgsea", "fastmatch", "data.table", "BiocParallel")) {
     skip_if_not_installed(pkg)

@@ -118,11 +118,66 @@
   gsea_param = 1,         # .run_fgsea_inner(gseaParam = 1)
   min_size   = 1,         # .run_fgsea_inner(minSize = 1)
   max_size   = Inf,       # .run_fgsea_inner(maxSize = Inf)
-  seed       = 123L       # .run_fgsea_inner: set.seed(123)
+  seed       = 123L,      # .run_fgsea_inner: set.seed(123)
+  rank_metric = "mean"    # peaks_to_function.R: rank.metric default
 )
 
 # Upstream's permutation batch size (util_fgsea.R: `granularity <- 1000`).
 .MMC_GSEA_GRANULARITY <- 1000
+
+# The one fgsea build the parity fixture was generated on, and therefore the
+# only one this engine is known to reproduce. See .mmc_gsea_check_fgsea().
+.MMC_GSEA_VALIDATED_FGSEA <- "1.36.2"
+
+#' Decide whether the installed fgsea may be used, and how it is reported
+#'
+#' The engine calls fgsea INTERNALS (`calcGseaStatCumulativeBatch`), whose
+#' behaviour is not covered by any stability promise, so "a recent enough
+#' fgsea" is not evidence of numerical parity — the exact build is. The parity
+#' fixture refuses to establish parity across `x.y` series for that reason, and
+#' this is the matching runtime rule, so the engine cannot quietly compute
+#' statistics on a build the test suite would decline to validate:
+#'
+#' \describe{
+#'   \item{exactly the validated build}{supported, silent.}
+#'   \item{another patch of the same `x.y`}{allowed, with a warning, and the
+#'     exact version recorded in the result's `deviations`.}
+#'   \item{a different `x.y` series}{refused.}
+#' }
+#'
+#' Centralised here and called from one place per entry point, so the policy
+#' cannot drift between the gate and the provenance it reports.
+#'
+#' @param warn Emit the patch-mismatch warning (the caller that records the
+#'   deviation passes FALSE, so one run warns once).
+#' @return `NULL` when the build is the validated one, otherwise a single
+#'   deviation string. Errors on a different `x.y` series.
+#' @noRd
+.mmc_gsea_check_fgsea <- function(warn = TRUE) {
+  installed <- as.character(utils::packageVersion("fgsea"))
+  if (identical(installed, .MMC_GSEA_VALIDATED_FGSEA)) return(NULL)
+
+  series <- function(v) paste(strsplit(v, ".", fixed = TRUE)[[1]][1:2],
+                              collapse = ".")
+  if (!identical(series(installed), series(.MMC_GSEA_VALIDATED_FGSEA))) {
+    .mmc_stop(
+      "fgsea ", installed, " is outside the validated compatibility range. ",
+      "This engine reproduces ", .MMC_GSEA_REF_REPO, "@",
+      substr(.MMC_GSEA_REF_COMMIT, 1, 10), " through fgsea internals that are ",
+      "not covered by any API stability promise, and parity was established ",
+      "only on fgsea ", .MMC_GSEA_VALIDATED_FGSEA, ". Install that build ",
+      "(it is the one renv.lock pins) rather than running the engine on a ",
+      "series whose permutation tallies, p-values and NES have not been ",
+      "checked against the reference."
+    )
+  }
+  note <- sprintf(paste0("fgsea %s, not the validated %s — same series, so the ",
+                         "internals this engine calls are very likely ",
+                         "unchanged, but parity was not established on it"),
+                  installed, .MMC_GSEA_VALIDATED_FGSEA)
+  if (isTRUE(warn)) warning("mummichog GSEA: ", note, call. = FALSE)
+  note
+}
 
 #' Refuse any gseaParam but 1
 #'
@@ -461,8 +516,13 @@ mmc_gsea_ranked_inputs <- function(ec_scores) {
 #'     two ECs in one tie group count twice toward `size` and the ES.
 #'   \item `fgsea::calcGseaStat(..., returnLeadingEdge = TRUE)` for ES.
 #'   \item `fgsea:::calcGseaStatCumulativeBatch(..., seed = seeds[i],
-#'     scoreType = "std")` for the permutation tallies (the `m == 1` case uses
-#'     upstream's plain `sample.int()` loop instead).
+#'     scoreType = "std")` for the permutation tallies. The `m == 1` case uses
+#'     upstream's plain `sample.int()` loop, but SEEDED: upstream leaves it to
+#'     the BiocParallel worker's RNG, which is not seed-deterministic, so there
+#'     is no reference draw to reproduce. That branch is therefore the one place
+#'     this engine does not claim numerical parity — it is reproducible instead,
+#'     the parity fixture does not exercise it, and `run_mummichog_gsea()`
+#'     records it in `deviations` whenever exactly one pathway is tested.
 #'   \item `pval = min((1+leEs)/(1+leZero), (1+geEs)/(1+geZero))`,
 #'     `NES = ES / mean(same-sign permuted ES)`,
 #'     `padj = p.adjust(pval, "fdr")` over the kept pathways only.
@@ -518,10 +578,14 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
   # by a missing package.
   .mmc_gsea_check_param(gsea_param)
 
+  # Every column the populated result carries, including the two diagnostics:
+  # a caller that rbinds runs together, or reads the documented schema, must
+  # not find the contract narrower on a valid empty run.
   empty <- data.frame(pathway = character(0), pval = numeric(0),
                       padj = numeric(0), ES = numeric(0), NES = numeric(0),
                       nMoreExtreme = numeric(0), size = numeric(0),
-                      leadingEdge = character(0), stringsAsFactors = FALSE)
+                      leadingEdge = character(0), es_defaulted = logical(0),
+                      es_reason = character(0), stringsAsFactors = FALSE)
   if (length(pathways) == 0 || length(stats) == 0 || length(ranks) == 0) {
     return(empty)
   }
@@ -531,6 +595,9 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
                 "GSEA engine.")
     }
   }
+  # Before any statistic is computed: an unvalidated fgsea must not produce
+  # numbers at all, rather than produce them and be caveated afterwards.
+  .mmc_gsea_check_fgsea()
 
   # -- permutation batching + batch seeds (upstream, verbatim) ---------------
   granularity <- .MMC_GSEA_GRANULARITY
@@ -625,7 +692,10 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
     if (m == 1) {
       # Upstream's plain sample.int() loop for a single tested pathway. Seeded
       # here so our run is reproducible; upstream leaves this path to the
-      # BiocParallel worker's RNG, which is not seed-deterministic.
+      # BiocParallel worker's RNG, which is not seed-deterministic -- so there
+      # is no reference draw to match, and this is the one branch where the
+      # engine offers reproducibility INSTEAD of parity. run_mummichog_gsea()
+      # records it as a deviation; the parity fixture never reaches it.
       acc <- list(leEs = 0, geEs = 0, leZero = 0, geZero = 0,
                   leZeroSum = 0, geZeroSum = 0)
       withr::with_seed(batch_seeds[i], {
@@ -764,6 +834,10 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
                pathwayScores = pathway_scores,
                pathwaysSizes = pathways_sizes,
                iterations = iterations, seed = seed)
+  # Upstream's own branch, kept so this mirrors the pinned source. The
+  # compatibility gate in mmc_gsea_metaboanalyst() admits only the validated
+  # 1.36.x series, so in this pipeline it always takes the first arm; the
+  # comparison stays because it is what upstream writes, not a live choice.
   if (utils::packageVersion("fgsea") > "1.12.0") args$scoreType <- "std"
   do.call(fn, args)
 }
@@ -854,10 +928,16 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
                                max_size   = .MMC_GSEA_DEFAULTS$max_size,
                                gsea_param = .MMC_GSEA_DEFAULTS$gsea_param,
                                seed       = .MMC_GSEA_DEFAULTS$seed,
-                               rank_metric = "mean") {
+                               rank_metric = .MMC_GSEA_DEFAULTS$rank_metric) {
   # First, before the "cannot run here" branches below: an invalid parameter is
   # a caller error and must not be reported as "GSEA was not applicable".
   .mmc_gsea_check_param(gsea_param)
+
+  # Normalise once, here, so the value that runs is the value reported: the
+  # engine clamps defensively for direct callers, and a result that said
+  # min_size = 0 while 1 was applied could not be reproduced from its own
+  # provenance.
+  min_size <- max(as.numeric(min_size), 1)
 
   if (!requireNamespace("fgsea", quietly = TRUE)) {
     message("mummichog GSEA: fgsea not available — skipping")
@@ -960,6 +1040,30 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
     deviations <- c(deviations, sprintf(
       "seed = %s (MetaboAnalyst default %s)", seed, d$seed))
   }
+  # How features sharing one m/z are merged changes every EC score, and so every
+  # statistic downstream of it. Left out, a "min"/"max"/"median" run would
+  # report an empty deviation list while differing from the reference at the
+  # first step.
+  if (!identical(rank_metric, d$rank_metric)) {
+    deviations <- c(deviations, sprintf(
+      "rank_metric = '%s' (MetaboAnalyst default '%s')",
+      rank_metric, d$rank_metric))
+  }
+  # The single-tested-pathway branch is OURS, not upstream's: the reference
+  # leaves that loop to the BiocParallel worker's RNG, which is not
+  # seed-deterministic, so there is nothing stable to reproduce. We seed it
+  # instead -- better behaviour, but not validated parity, and the fixture's
+  # six pathways never reach it.
+  if (nrow(res) == 1) {
+    deviations <- c(deviations, paste0(
+      "one tested pathway: the permutation loop is seeded here, where the ",
+      "reference leaves it to a non-deterministic worker RNG — reproducible, ",
+      "but this branch is not covered by the parity fixture"))
+  }
+  # Same series as the validated fgsea build but a different patch: allowed,
+  # and recorded. A different series never gets this far.
+  fgsea_note <- .mmc_gsea_check_fgsea(warn = FALSE)
+  if (!is.null(fgsea_note)) deviations <- c(deviations, fgsea_note)
   # Upstream aggregates its permutation tallies by data.table ROW, which is only
   # well defined for a single batch; we sum per pathway across batches instead.
   if (n_perm > .MMC_GSEA_GRANULARITY) {
