@@ -122,6 +122,41 @@ test_that("an unusable 'statistic' column falls through to 't', not to logFC", {
                    "logFC")
 })
 
+test_that("a non-numeric statistic column is not ranked on", {
+  # as.numeric() on a factor returns LEVEL CODES, not the labels. Sorted
+  # alphabetically, "-6" and "4" become 1 and 2 -- a ranking that inverts the
+  # real one here, and would have been reported as the signed t statistic.
+  de <- data.frame(stringsAsFactors = FALSE,
+                   feature_id = c("f1", "f2"),
+                   statistic  = factor(c("-6", "4")),
+                   logFC      = c(-2, 1))
+  r <- mmc_gsea_rank_metric(de, de_method = "limma")
+
+  expect_identical(r$metric, "logFC")
+  expect_match(r$label, "no usable t statistic")
+  expect_equal(unname(r$values[["f1"]]), -2)   # the real values, not 1 and 2
+  # The same applies to the fallback column, which then has nothing to offer.
+  de$logFC <- factor(c("-2", "1"))
+  expect_null(mmc_gsea_rank_metric(de, de_method = "limma"))
+
+  # A character column is refused on the same rule -- type is checked, never
+  # coerced -- and an integer one is a perfectly good statistic.
+  de_chr <- data.frame(stringsAsFactors = FALSE,
+                       feature_id = c("f1", "f2"),
+                       statistic  = c("-6", "4"),
+                       logFC      = c(-2, 1))
+  expect_identical(mmc_gsea_rank_metric(de_chr, de_method = "limma")$metric,
+                   "logFC")
+
+  de_int <- data.frame(stringsAsFactors = FALSE,
+                       feature_id = c("f1", "f2"),
+                       statistic  = c(-6L, 4L),
+                       logFC      = c(-2, 1))
+  r_int <- mmc_gsea_rank_metric(de_int, de_method = "limma")
+  expect_identical(r_int$metric, "t_statistic")
+  expect_equal(unname(r_int$values[["f1"]]), -6)
+})
+
 
 # ---- the ranking statistic is chosen by DE method, never by column name ----
 
@@ -538,6 +573,11 @@ test_that("a pathway covering the whole ranking still returns its row", {
   expect_identical(res$pval, 1)
   # Classified by its actual cause, not filed under ties.
   expect_false(grepl("tie", res$es_reason, ignore.case = TRUE))
+  # The null was substituted, not drawn, so the row is one the reference never
+  # produces -- counted as such rather than passed off as a permuted result.
+  expect_identical(attr(res, "mmc_unpermutable"), 1L)
+  # And no seeded-RNG claim: with nothing to draw, that loop never ran.
+  expect_false(attr(res, "mmc_single_pathway_rng"))
 })
 
 test_that("a sole pathway whose ties outnumber the ranking keeps its row", {
@@ -584,9 +624,12 @@ test_that("a tie-expanded pathway keeps its row beside a permutable one", {
   expect_match(tied$es_reason, "^tied EC scores")
   expect_identical(tied$ES, 0)
   expect_identical(tied$pval, 1)
-  # Only PW_one can be permuted, so the seeded loop ran -- and the engine says
-  # so itself rather than leaving it to be inferred from the row count.
-  expect_true(attr(res, "mmc_single_pathway_rng"))
+  # Neither row was permuted: PW_tied has no draw at all, and PW_one is the
+  # sole remaining pathway while covering the whole (one-position) ranking, so
+  # its null is substituted too. Both are counted, and no seeded-RNG deviation
+  # is claimed for a loop that never drew anything.
+  expect_identical(attr(res, "mmc_unpermutable"), 2L)
+  expect_false(attr(res, "mmc_single_pathway_rng"))
 })
 
 test_that("an unpermutable pathway does not abort the permutation batch", {

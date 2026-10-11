@@ -328,10 +328,21 @@ mmc_gsea_rank_metric <- function(de_table, de_method = NULL) {
       !"feature_id" %in% names(de_table)) {
     return(NULL)
   }
+  # Type BEFORE value, and resolved in ONE place so the gate and the extraction
+  # cannot disagree about what a column holds. as.numeric() on a factor returns
+  # LEVEL CODES, not the labels: a factor `statistic` holding -6 and 4 would
+  # pass the gate as 1 and 2 and then be reported as the signed statistic that
+  # ranked the experiment. A column that is not numeric is not a statistic, and
+  # the caller falls through to logFC with a label saying so.
+  column_values <- function(col) {
+    if (is.null(col) || !col %in% names(de_table)) return(NULL)
+    v <- de_table[[col]]
+    if (!is.numeric(v)) return(NULL)
+    as.numeric(v)
+  }
   usable <- function(col) {
-    if (is.null(col) || !col %in% names(de_table)) return(FALSE)
-    v <- suppressWarnings(as.numeric(de_table[[col]]))
-    any(is.finite(v))
+    v <- column_values(col)
+    !is.null(v) && any(is.finite(v))
   }
   # NULL, NA and "" all mean "not recorded", and are handled as such rather
   # than reaching the method lookup as a value.
@@ -351,12 +362,12 @@ mmc_gsea_rank_metric <- function(de_table, de_method = NULL) {
   }
 
   if (!is.null(stat_col)) {
-    v      <- suppressWarnings(as.numeric(de_table[[stat_col]]))
+    v      <- column_values(stat_col)
     metric <- "t_statistic"
     label  <- sprintf("signed t statistic (DE method '%s', column '%s')",
                       method, stat_col)
   } else if (usable("logFC")) {
-    v      <- suppressWarnings(as.numeric(de_table$logFC))
+    v      <- column_values("logFC")
     metric <- "logFC"
     label  <- if (!is.na(method) && method %in% .MMC_GSEA_UNSIGNED_STAT_METHODS) {
       sprintf(paste0("log2 fold change (DE method '%s' reports an unsigned ",
@@ -600,12 +611,14 @@ mmc_gsea_ranked_inputs <- function(ec_scores) {
 #'     place this engine does not claim numerical parity — it is reproducible
 #'     instead, the parity fixture does not exercise it, and
 #'     `run_mummichog_gsea()` records it in `deviations`.
-#'   \item a pathway whose tie-expanded size exceeds the ranking is TESTED but
-#'     not PERMUTED: no draw of that many distinct positions exists, and both
-#'     permutation paths would abort on it. Its null is all zeros, mirroring the
+#'   \item a pathway with no valid draw is TESTED but not PERMUTED — either its
+#'     tie-expanded size exceeds the ranking, or it is the sole permutable
+#'     pathway and covers every position. Its null is all zeros, mirroring the
 #'     ES = 0 its observed score necessarily took, which gives `p = 1` exactly.
-#'     Upstream aborts here instead; this is a deliberate departure, and it
-#'     applies only to inputs on which the reference produces no result at all.
+#'     Upstream aborts on both shapes instead, so this is a deliberate
+#'     departure; it is counted in `"mmc_unpermutable"` and reported in
+#'     `deviations`, and it applies only to inputs on which the reference
+#'     produces no result at all.
 #'   \item `pval = min((1+leEs)/(1+leZero), (1+geEs)/(1+geZero))`,
 #'     `NES = ES / mean(same-sign permuted ES)`,
 #'     `padj = p.adjust(pval, "fdr")` over the kept pathways only.
@@ -737,6 +750,22 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
   # strictly-increasing assertion rejects. Such a pathway's observed score has
   # therefore already taken the ES = 0 fallback, and the null below mirrors it.
   permutable <- which(pathways_sizes <= length(stats))
+  # One more pathway gets a substituted null rather than a drawn one, and it
+  # has to be counted here rather than hidden inside the loop: a SOLE
+  # permutable pathway covering the whole ranking. Every draw returns all
+  # positions, which `calcGseaStat()` refuses for the same reason it refused
+  # the observed score, so the loop substitutes zero too. Recognising it here
+  # keeps one answer to "was this pathway permuted?" and makes the departure
+  # countable; the numbers are unchanged either way, since the all-zero null
+  # below is exactly what that loop accumulated.
+  #
+  # It is deliberately NOT applied when two or more pathways are permutable:
+  # the batch path CAN draw every position, so an all-position pathway really
+  # is permuted there. That asymmetry is upstream's two code paths, not ours.
+  if (length(permutable) == 1 &&
+      pathways_sizes[permutable] == length(stats)) {
+    permutable <- integer(0)
+  }
 
   # -- enrichment scores ----------------------------------------------------
   # fgsea > 1.24.0 is the branch upstream takes (renv.lock pins fgsea 1.36.2, so
@@ -931,11 +960,11 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
 #' `run_mummichog_gsea()` records that as a deviation and the parity fixture
 #' never reaches it.
 #'
-#' Callers filter out pathways larger than the ranking before reaching this, so
-#' the guard below fires only for a pathway covering every position — which
-#' `calcGseaStat()` refuses, exactly as it refuses the observed score for the
-#' same pathway. It is kept as a `>=` so a direct caller cannot walk into
-#' `sample.int()` asking for more positions than exist.
+#' Callers now filter out both shapes that have no valid draw — a size above
+#' the ranking, and a sole pathway covering all of it — so the guard below is
+#' unreachable from `mmc_gsea_metaboanalyst()` and is kept only so a direct
+#' caller cannot walk into `sample.int()` asking for more positions than exist,
+#' or into the all-selected set `calcGseaStat()` refuses.
 #'
 #' @param stats,pathway_scores,pathways_sizes,iterations,seed Passed through;
 #'   the scores and sizes hold the single permutable pathway.
@@ -1252,8 +1281,9 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   n_unpermutable <- attr(res, "mmc_unpermutable")
   if (isTRUE(n_unpermutable > 0)) {
     deviations <- c(deviations, sprintf(
-      paste0("%d pathway(s) tested but not permuted: their tie-expanded size ",
-             "exceeds the ranking, so they take an all-zero null (ES = 0, ",
+      paste0("%d pathway(s) tested but not permuted: no draw exists for them ",
+             "(a tie-expanded size above the ranking, or a sole pathway ",
+             "covering all of it), so they take an all-zero null (ES = 0, ",
              "p = 1) where the reference implementation aborts"),
       n_unpermutable))
   }
