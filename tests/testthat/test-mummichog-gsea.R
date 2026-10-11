@@ -421,6 +421,40 @@ test_that("the fgsea compatibility policy is decided in one place", {
   }
 })
 
+test_that("the m/z merge weights a feature by its EC multiplicity (as built)", {
+  # DOCUMENTS CURRENT BEHAVIOUR. It is NOT an upstream-parity assertion: the
+  # m/z merge has no counterpart in the single-dataset path this engine's stage
+  # runs (upstream drops duplicate m/z rows before scores exist, and uses
+  # rank.metric only in its meta-analysis function). Pinned here so the choice
+  # is visible and cannot change unnoticed while the question is open.
+  #
+  # fA is mapped to TWO EmpiricalCompounds, so read_mummichog_ec_features()
+  # gives it two rows; fB shares its m/z and has one. With "mean" over rows,
+  # the shared m/z resolves to (2*3 + 0)/3 = 2, not the per-feature (3 + 0)/2.
+  ec_features <- data.frame(
+    stringsAsFactors = FALSE,
+    EID        = c("E1", "E2", "E3", "E4"),
+    feature_id = c("fA", "fA", "fB", "fC"),
+    mz         = c(100, 100, 100, 200))
+  scores <- c(fA = 3, fB = 0, fC = -5)
+
+  got <- mmc_ec_scores(ec_features, scores)
+
+  expect_equal(unname(got[["E1"]]), 2)   # row-weighted, not 1.5
+  expect_equal(unname(got[["E2"]]), 2)
+  expect_equal(unname(got[["E3"]]), 2)
+  expect_equal(unname(got[["E4"]]), -5)  # its own m/z, untouched by the merge
+
+  # The per-feature mean a de-duplicating implementation would give.
+  expect_false(isTRUE(all.equal(unname(got[["E1"]]), 1.5)))
+
+  # Step 2 is upstream's rule and is unaffected: an EC takes the SIGNED max of
+  # its members, so the negative score is kept rather than replaced by a
+  # larger magnitude.
+  expect_equal(unname(got[["E4"]]), -5)
+  expect_true(all(diff(unname(got)) <= 0))   # returned in decreasing order
+})
+
 test_that("fractional n_perm and seed are refused, not truncated", {
   pw <- list(PW = c("E1", "E2"))
   st <- stats::setNames(c(2, 1, -1), c("E1", "E2", "E3"))
