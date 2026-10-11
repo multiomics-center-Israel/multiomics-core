@@ -1101,57 +1101,92 @@ if (file.exists(de_counts_file)) {
 
 ## DE Gene Overlap {.tabset}
 
-Genes called DE in more than one contrast. With up to three contrasts this is
-a Venn diagram. With more, an UpSet plot: the bars on the right are the number
-of DE genes per contrast, and each column is one combination of contrasts
-(the filled dots) with the number of genes DE in exactly that combination.
+Genes called DE in more than one contrast. When the config lists contrast
+pairs under `report_sections.de_overlap_groups`, each pair gets a Venn
+diagram. Otherwise all contrasts are compared at once: a Venn diagram for up
+to three contrasts, an UpSet plot beyond that (bars on the right: DE genes
+per contrast; each column: one combination of contrasts, the filled dots,
+with the number of genes DE in exactly that combination).
 
-```{r de-overlap-setup, include=FALSE}
-fig_h_overlap <- if (length(contrast_names) > 3) 7 else 6
-```
+```{r de-overlap, results='asis', echo=FALSE}
+padj_cut_ov <- rna_cfg$de$p_cutoff %||% 0.05
+lfc_cut_ov  <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
+overlap_groups <- resolve_de_overlap_groups(rna_cfg$report_sections$de_overlap_groups,
+                                            contrast_names)
+show_png <- function(f) if (!is.null(f)) cat(sprintf("![](%s)\n\n", f))
 
-### All DE Genes
-
-```{r de-overlap-venn-all, fig.height=fig_h_overlap, fig.width=10, results='asis'}
-if (!is.null(de_data) && length(contrast_names) >= 2) {
-    draw_de_overlap(
-        collect_de_gene_sets(de_data, contrast_names,
-                             padj_cut = rna_cfg$de$p_cutoff %||% 0.05,
-                             lfc_cut = log2(rna_cfg$de$linear_fc_cutoff %||% 1.5),
-                             direction = "all"),
-        title = "DE Gene Overlap (All)", fill_high = "steelblue", use_venn = has_ggVennDiagram)
+if (is.null(de_data) || length(contrast_names) < 2) {
+    cat("At least two contrasts with DE results are needed for an overlap plot.\n\n")
+} else if (length(overlap_groups) == 0) {
+    tabs <- list(
+        list(dir = "all",  tab = "All DE Genes",   title = "DE Gene Overlap (All)",     fill = "steelblue"),
+        list(dir = "up",   tab = "Up-regulated",   title = "Up-regulated Gene Overlap", fill = "#E41A1C"),
+        list(dir = "down", tab = "Down-regulated", title = "Down-regulated Gene Overlap", fill = "#377EB8"))
+    for (t in tabs) {
+        cat("###", t$tab, "\n\n")
+        sets <- collect_de_gene_sets(de_data, contrast_names, padj_cut_ov, lfc_cut_ov, direction = t$dir)
+        show_png(write_de_overlap_png(sets, title = t$title, fill_high = t$fill,
+                                      height = if (length(contrast_names) > 3) 7 else 6,
+                                      use_venn = has_ggVennDiagram))
+    }
 } else {
-    cat("At least two contrasts with DE results are needed for an overlap plot.\n")
+    id_col_ov <- names(de_data)[1]
+    for (g in overlap_groups) {
+        cat("###", g$name, "\n\n")
+        sets <- collect_de_gene_sets(de_data, g$contrasts, padj_cut_ov, lfc_cut_ov,
+                                     direction = "all", gene_col = id_col_ov)
+        show_png(write_de_overlap_png(sets, title = g$name, use_venn = has_ggVennDiagram))
+    }
 }
 ```
 
-### Up-regulated
+## DE Gene Heatmaps {.tabset}
 
-```{r de-overlap-venn-up, fig.height=fig_h_overlap, fig.width=10, results='asis'}
-if (!is.null(de_data) && length(contrast_names) >= 2) {
-    draw_de_overlap(
-        collect_de_gene_sets(de_data, contrast_names,
-                             padj_cut = rna_cfg$de$p_cutoff %||% 0.05,
-                             lfc_cut = log2(rna_cfg$de$linear_fc_cutoff %||% 1.5),
-                             direction = "up"),
-        title = "Up-regulated Gene Overlap", fill_high = "#E41A1C", use_venn = has_ggVennDiagram)
-} else {
-    cat("At least two contrasts with DE results are needed for an overlap plot.\n")
+Clustered heatmaps of DE genes, using the normalized expression matrix
+(z-score per gene across samples, capped at ±3). The first tab holds every
+gene called DE in at least one contrast. Each further tab holds the genes of
+one Venn diagram above, with a row annotation for the contrast(s) each gene is
+DE in.
+
+```{r de-heatmaps, results='asis', echo=FALSE}
+norm_files_ov <- list.files(datasets_dir, pattern = "^rna_norm_.*\\.tsv$", full.names = TRUE)
+expr_ov <- if (length(norm_files_ov) > 0) {
+    read.delim(norm_files_ov[1], row.names = 1, check.names = FALSE)
+} else NULL
+
+meta_file_ov <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata)
+annot_ov <- NULL
+if (file.exists(meta_file_ov)) {
+    meta_ov <- read_table_auto(meta_file_ov)
+    sample_col_ov <- rna_cfg$effects$samples %||% "SampleID"
+    annot_cols_ov <- intersect(unlist(rna_cfg$effects$heatmap_annotations %||% resolve_group_col(rna_cfg)),
+                               names(meta_ov))
+    if (sample_col_ov %in% names(meta_ov) && length(annot_cols_ov) > 0) {
+        annot_ov <- as.data.frame(meta_ov)[, annot_cols_ov, drop = FALSE]
+        annot_ov[] <- lapply(annot_ov, as.character)
+        rownames(annot_ov) <- meta_ov[[sample_col_ov]]
+    }
 }
-```
 
-### Down-regulated
-
-```{r de-overlap-venn-down, fig.height=fig_h_overlap, fig.width=10, results='asis'}
-if (!is.null(de_data) && length(contrast_names) >= 2) {
-    draw_de_overlap(
-        collect_de_gene_sets(de_data, contrast_names,
-                             padj_cut = rna_cfg$de$p_cutoff %||% 0.05,
-                             lfc_cut = log2(rna_cfg$de$linear_fc_cutoff %||% 1.5),
-                             direction = "down"),
-        title = "Down-regulated Gene Overlap", fill_high = "#377EB8", use_venn = has_ggVennDiagram)
+if (is.null(expr_ov) || is.null(de_data)) {
+    cat("Normalized expression or DE results not available.\n\n")
 } else {
-    cat("At least two contrasts with DE results are needed for an overlap plot.\n")
+    id_col_ov <- names(de_data)[1]
+    all_sets <- collect_de_gene_sets(de_data, contrast_names, padj_cut_ov, lfc_cut_ov,
+                                     direction = "all", gene_col = id_col_ov)
+    cat("### All DE genes\n\n")
+    ph <- de_cluster_heatmap(expr_ov, unique(unlist(all_sets)), annot_col = annot_ov,
+                             title = "DE in at least one contrast")
+    if (is.null(ph)) cat("Fewer than two DE genes.\n\n") else show_png(write_pheatmap_png(ph, width = 10, height = 10))
+
+    for (g in overlap_groups) {
+        cat("###", g$name, "\n\n")
+        sets <- collect_de_gene_sets(de_data, g$contrasts, padj_cut_ov, lfc_cut_ov,
+                                     direction = "all", gene_col = id_col_ov)
+        ph <- de_cluster_heatmap(expr_ov, unique(unlist(sets)), annot_col = annot_ov,
+                                 membership = overlap_membership(sets), title = g$name)
+        if (is.null(ph)) cat("Fewer than two DE genes.\n\n") else show_png(write_pheatmap_png(ph, width = 11, height = 10))
+    }
 }
 ```
 
@@ -2457,7 +2492,7 @@ group_col <- resolve_group_col(rna_cfg)
 if (!is.null(norm_expr) && !is.null(heatmap_de_source) && nrow(heatmap_de_source) > 0) {
     tryCatch({
         hm <- make_top_de_heatmap(10, norm_expr, heatmap_de_source, meta_df, group_col)
-        if (!is.null(hm)) print(hm)
+        if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 6))
     }, error = function(e) cat("Heatmap error:", e$message))
 } else {
     cat("Expression matrix or DE results not available.")
@@ -2476,7 +2511,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 ```{r heatmap-top50, fig.height=8, fig.width=10}
 if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     hm <- make_top_de_heatmap(50, norm_expr, heatmap_de_source, meta_df, group_col)
-    if (!is.null(hm)) print(hm)
+    if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 8))
 }
 ```
 
@@ -2491,7 +2526,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 ```{r heatmap-top100, fig.height=10, fig.width=10}
 if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     hm <- make_top_de_heatmap(100, norm_expr, heatmap_de_source, meta_df, group_col)
-    if (!is.null(hm)) print(hm)
+    if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 10))
 }
 ```
 
@@ -2506,7 +2541,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 ```{r heatmap-top200, fig.height=12, fig.width=10}
 if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     hm <- make_top_de_heatmap(200, norm_expr, heatmap_de_source, meta_df, group_col)
-    if (!is.null(hm)) print(hm)
+    if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 12))
 }
 ```
 
@@ -2528,7 +2563,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
         n_all <- 500
     }
     hm <- make_top_de_heatmap(n_all, norm_expr, heatmap_de_source, meta_df, group_col)
-    if (!is.null(hm)) print(hm)
+    if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 14))
 }
 ```
 

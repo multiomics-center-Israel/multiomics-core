@@ -140,6 +140,15 @@ modes:
     # --------------------------------------------------------
     # Plotting / QC aesthetics
     # --------------------------------------------------------
+    # Report: compare chosen contrasts instead of all at once (optional).
+    # Each group (2 or 3 contrasts) gets a Venn diagram in "DE Gene Overlap" and a
+    # clustered heatmap of its genes in "DE Gene Heatmaps". Without groups, all
+    # contrasts are compared in one Venn (up to 3) or UpSet plot (4 or more).
+    # report_sections:
+    #   de_overlap_groups:
+    #     - name: "Treatment vs control: early and late"
+    #       contrasts: ["treated_6h_vs_control", "treated_24h_vs_control"]
+
     effects:
       # Color variable for plots
       # Single value (default):
