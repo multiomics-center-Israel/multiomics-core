@@ -400,19 +400,48 @@ test_that(".metab_ssgsea_conditions puts the numerator second", {
     expect_identical(levels(.metab_ssgsea_conditions(v, NULL)), c("A", "B"))
 })
 
-test_that(".metab_ssgsea_conditions warns and falls back on unusable groups", {
+test_that(".metab_ssgsea_conditions aborts on unusable groups rather than falling back", {
     v <- rep(c("B", "A"), each = 3)
 
-    # A group that is not in the data cannot define a direction; falling back
-    # silently would report an alphabetical sign under a contrast's label.
-    expect_warning(cond <- .metab_ssgsea_conditions(v, c("B", "MISSING")),
-                   "not both present")
-    expect_identical(levels(cond), c("A", "B"))
+    # Naming a contrast asserts a direction. A group the data does not carry
+    # cannot establish one, and falling back to the alphabet would put an
+    # arbitrary sign under that contrast's label in the title, the filename and
+    # the exported table. The error names the groups and what was actually seen.
+    expect_error(.metab_ssgsea_conditions(v, c("B", "MISSING")),
+                 "'MISSING'.*not among the condition values")
+    expect_error(.metab_ssgsea_conditions(v, c("MISSING", "ALSO_MISSING")),
+                 "'MISSING' and 'ALSO_MISSING'")
 
-    expect_warning(.metab_ssgsea_conditions(v, c("B", NA)), "not both present")
-    expect_warning(.metab_ssgsea_conditions(v, "B"), "not both present")
-    # NULL is the documented "no contrast" case, not a mistake: no warning.
+    # Malformed input is a caller bug, reported as such rather than as missing data.
+    expect_error(.metab_ssgsea_conditions(v, c("B", NA)), "two non-empty")
+    expect_error(.metab_ssgsea_conditions(v, "B"), "two non-empty")
+    expect_error(.metab_ssgsea_conditions(v, c("B", "")), "two non-empty")
+    expect_error(.metab_ssgsea_conditions(v, c("A", "B", "C")), "two non-empty")
+
+    # NULL is the documented "no contrast" case, not a mistake: no error, no warning.
     expect_silent(.metab_ssgsea_conditions(v, NULL))
+})
+
+test_that("a contrast whose groups are absent yields no ssGSEA result, not a signed one", {
+    skip_if_not_installed("GSVA")
+    skip_if_not_installed("withr")
+
+    fx <- .make_enrichment_fixture()
+    on.exit(unlink(fx$gmt), add = TRUE)
+
+    # Establish that this environment CAN score, so the expectation below is
+    # about the groups and not about a missing prerequisite returning NULL.
+    ok <- run_metabolomics_ssgsea(fx$pre, fx$config, contrast_groups = c("B", "A"))
+    skip_if(is.null(ok) || is.null(ok$table), "ssGSEA produced no table")
+
+    # The stage subsets the samples to the contrast's two groups before scoring,
+    # so a mismatch here means the grouping column disagrees with
+    # inputs$contrasts. The contrast must drop out, not come back signed by the
+    # alphabet.
+    expect_error(
+        run_metabolomics_ssgsea(fx$pre, fx$config,
+                                contrast_groups = c("B", "NOT_A_GROUP")),
+        "not among the condition values")
 })
 
 test_that(".metab_ssgsea_conditions keeps a >2-group column intact", {

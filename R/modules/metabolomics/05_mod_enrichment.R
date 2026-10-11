@@ -551,7 +551,11 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #' @inheritParams .mod_metab_qea_contrast
 #' @param groups `c(numerator, denominator)` for this contrast, from
 #'   `.resolve_contrast_groups()`. Passed through so `score_diff` is reported in
-#'   the contrast's own direction rather than in alphabetical order.
+#'   the contrast's own direction rather than in alphabetical order. Groups the
+#'   scored samples do not carry abort the scoring, and the `tryCatch` below
+#'   turns that into a warning naming this contrast and skips it — a contrast
+#'   whose direction cannot be established yields no result rather than a
+#'   result with an arbitrary sign.
 #' @return list(res, plots, files) or NULL when the contrast yields no table.
 .mod_metab_ssgsea_contrast <- function(pre_sub, config, contrast, out_enr, out_ds,
                                        groups = NULL) {

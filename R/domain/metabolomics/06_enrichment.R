@@ -629,7 +629,8 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
 #'   being run, as `.resolve_contrast_groups()` returns it. It fixes the sign of
 #'   `score_diff` to numerator-minus-denominator. Omit it for the dataset-wide
 #'   run, where the order falls back to alphabetical and the sign therefore
-#'   carries no contrast direction.
+#'   carries no contrast direction. Supplying groups that are not both present
+#'   in the scored samples is an error, not a fallback.
 #' @return list(table, scores, method, direction) or NULL if disabled or
 #'   unavailable. `direction` names the subtraction `score_diff` reports.
 run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL) {
@@ -813,6 +814,14 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL) {
 #' decide it instead, so one resolver owns contrast direction for every
 #' enrichment method.
 #'
+#' `NULL` means the dataset-wide run, which is not tied to a contrast: there the
+#' alphabetical order is kept, and `direction` reports the subtraction it
+#' produced. But once a caller names a contrast it is asserting a direction, and
+#' falling back to the alphabet there would put an arbitrary sign under that
+#' contrast's label in the plot title, the filename and the exported table —
+#' exactly the failure this function exists to prevent. So an unusable
+#' `contrast_groups` aborts instead.
+#'
 #' @param values          Character vector of per-sample condition values.
 #' @param contrast_groups `c(numerator, denominator)`, or `NULL` for the
 #'   dataset-wide run that is not tied to a contrast.
@@ -820,19 +829,31 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL) {
 #'   numerator, so `mean2 - mean1` reads numerator minus denominator.
 .metab_ssgsea_conditions <- function(values, contrast_groups = NULL) {
     present <- sort(unique(values[!is.na(values)]))
-    usable  <- !is.null(contrast_groups) && length(contrast_groups) == 2L &&
-               !any(is.na(contrast_groups)) && all(contrast_groups %in% present)
 
-    if (!usable) {
-        if (!is.null(contrast_groups)) {
-            warning("metabolomics ssGSEA: contrast groups (",
-                    paste(contrast_groups, collapse = " vs "),
-                    ") are not both present among the condition values (",
-                    paste(present, collapse = ", "),
-                    ") — falling back to alphabetical order, so score_diff's ",
-                    "sign is NOT this contrast's direction.", call. = FALSE)
-        }
-        return(factor(values, levels = present))
+    # No contrast named: nothing is being asserted about direction.
+    if (is.null(contrast_groups)) return(factor(values, levels = present))
+
+    bad <- length(contrast_groups) != 2L || any(is.na(contrast_groups)) ||
+           !all(nzchar(contrast_groups))
+    if (bad) {
+        stop("metabolomics ssGSEA: contrast_groups must be two non-empty ",
+             "group names, c(numerator, denominator), as ",
+             ".resolve_contrast_groups() returns them; got ",
+             length(contrast_groups), " value(s) of class ",
+             class(contrast_groups)[1], ".", call. = FALSE)
+    }
+    missing <- setdiff(contrast_groups, present)
+    if (length(missing) > 0) {
+        # Plain quotes, not sQuote(): useFancyQuotes defaults to TRUE, which
+        # would make the message - and anything matching on it - locale-dependent.
+        stop("metabolomics ssGSEA: contrast group(s) ",
+             paste0("'", missing, "'", collapse = " and "),
+             " are not among the condition values of the samples being scored (",
+             paste(present, collapse = ", "),
+             "). The samples were subset to this contrast's two groups before ",
+             "scoring, so this means the grouping column disagrees with ",
+             "inputs$contrasts. Refusing to score rather than report an ",
+             "alphabetical sign under this contrast's name.", call. = FALSE)
     }
     # level 1 = denominator, level 2 = numerator -> score_diff = num - den
     factor(values, levels = c(contrast_groups[2], contrast_groups[1]))
