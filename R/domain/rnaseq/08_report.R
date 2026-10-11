@@ -300,6 +300,9 @@ de_cluster_heatmap <- function(expr, genes, annot_col = NULL, membership = NULL,
         z <- z[, keep, drop = FALSE]
         annot_col <- annot_col[keep, , drop = FALSE]
     }
+    # pheatmap() can switch the current device while it builds; give it back.
+    prev <- grDevices::dev.cur()
+    on.exit(if (prev != 1 && prev %in% grDevices::dev.list()) grDevices::dev.set(prev), add = TRUE)
     annot_row <- NULL
     if (!is.null(membership)) {
         names(membership) <- clean(names(membership))
@@ -332,9 +335,8 @@ de_cluster_heatmap <- function(expr, genes, annot_col = NULL, membership = NULL,
 #' @return The PNG path, or NULL when there was nothing to draw.
 write_de_overlap_png <- function(gene_sets, title, file = tempfile(fileext = ".png"),
                                  width = 10, height = 6, ...) {
-    grDevices::png(file, width = width, height = height, units = "in", res = 100)
-    kind <- tryCatch(draw_de_overlap(gene_sets, title, ...),
-                     finally = grDevices::dev.off())
+    kind <- with_png_device(file, width = width, height = height,
+                            code = draw_de_overlap(gene_sets, title, ...))
     if (identical(kind, "none")) {
         unlink(file)
         return(NULL)
