@@ -901,10 +901,29 @@ test_that("group_mummichog_files_by_contrast returns files, keyed by contrast", 
   # Files, not parsed tables: the evidence layer needs the EmpiricalCompound
   # tables, which the pathway read-back does not carry.
   expect_type(grp[["HL_vs_LL"]], "character")
-  expect_setequal(grp[["HL_vs_LL"]], files)
+  # contrasts.tsv is the dir -> label map and sits one level ABOVE the contrast
+  # directories, so it belongs to no single contrast: the grouping pattern wants
+  # a segment under mummichog_pinned/ followed by another "/", which it cannot
+  # match. Everything that IS under the contrast dir has to be here.
+  expect_setequal(grp[["HL_vs_LL"]], files[!grepl("/contrasts\\.tsv$", files)])
+  expect_false(any(grepl("/contrasts\\.tsv$", grp[["HL_vs_LL"]])))
   expect_true(any(grepl("ListOfEmpiricalCompounds\\.tsv$", grp[["HL_vs_LL"]])))
 
   expect_identical(group_mummichog_files_by_contrast(character(0)), list())
+})
+
+test_that("the contrasts.tsv map restores the original contrast label", {
+  # The directory token is sanitised; the map carries the real DE label. Only a
+  # fixture where the two differ can fail when the map is ignored and the
+  # directory name used as the key instead.
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root, contrast_dir = "contrast_1")
+
+  expect_named(group_mummichog_files_by_contrast(files), "HL_vs_LL")
+
+  # Map absent -> the sanitised directory name is the documented fallback.
+  unmapped <- files[!grepl("/contrasts\\.tsv$", files)]
+  expect_named(group_mummichog_files_by_contrast(unmapped), "contrast_1")
 })
 
 test_that("report sections carry the evidence when files and a model are given", {
