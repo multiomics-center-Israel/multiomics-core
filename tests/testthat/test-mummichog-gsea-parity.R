@@ -90,6 +90,11 @@ test_that("the parity fixture is present and records its provenance", {
 
 test_that("a fixture generated off the locked fgsea build is flagged for redo", {
   skip_if_not(file.exists(ref_file), "parity reference fixture not found")
+  # With no fgsea installed there is no running build to hold the fixture
+  # against, so this check has nothing to enforce and must skip rather than
+  # error on packageVersion(). It cannot borrow skip_unless_parity_fgsea():
+  # a series mismatch is precisely the case it still has to report on.
+  skip_if_not_installed("fgsea")
   ref <- readRDS(ref_file)
   running <- as.character(utils::packageVersion("fgsea"))
 
