@@ -371,3 +371,102 @@ test_that("run_metabolomics_ssgsea does not read pre$expr_raw anymore", {
     # now derives from expr_work, not expr_raw.
     expect_equal(r_noise$scores, r_clean$scores)
 })
+
+
+# ==============================================================================
+# ssGSEA contrast direction
+#
+# score_diff is mean(level 2) - mean(level 1), so the LEVEL ORDER is the
+# reported direction. factor() orders alphabetically, which is unrelated to the
+# contrast: it happens to agree whenever the numerator sorts second, and
+# silently reports the opposite subtraction when it does not. The groups the
+# stage already resolved (c(Numerator, Denominator)) decide it instead.
+#
+# The shared fixture has groups "A" and "B" with the MOVER pathway elevated in
+# B, so "B - A" is the alphabet-agrees case and "A - B" is the one that must
+# flip.
+# ==============================================================================
+
+test_that(".metab_ssgsea_conditions puts the numerator second", {
+    v <- rep(c("B", "A"), each = 3)
+
+    # Numerator B: alphabet already agrees, so the order is unchanged...
+    expect_identical(levels(.metab_ssgsea_conditions(v, c("B", "A"))),
+                     c("A", "B"))
+    # ...numerator A: the order must be reversed, which is the whole fix.
+    expect_identical(levels(.metab_ssgsea_conditions(v, c("A", "B"))),
+                     c("B", "A"))
+    # No contrast (the dataset-wide run): alphabetical, as before.
+    expect_identical(levels(.metab_ssgsea_conditions(v, NULL)), c("A", "B"))
+})
+
+test_that(".metab_ssgsea_conditions warns and falls back on unusable groups", {
+    v <- rep(c("B", "A"), each = 3)
+
+    # A group that is not in the data cannot define a direction; falling back
+    # silently would report an alphabetical sign under a contrast's label.
+    expect_warning(cond <- .metab_ssgsea_conditions(v, c("B", "MISSING")),
+                   "not both present")
+    expect_identical(levels(cond), c("A", "B"))
+
+    expect_warning(.metab_ssgsea_conditions(v, c("B", NA)), "not both present")
+    expect_warning(.metab_ssgsea_conditions(v, "B"), "not both present")
+    # NULL is the documented "no contrast" case, not a mistake: no warning.
+    expect_silent(.metab_ssgsea_conditions(v, NULL))
+})
+
+test_that(".metab_ssgsea_conditions keeps a >2-group column intact", {
+    # The caller refuses to test more than two groups; the helper must not
+    # quietly drop the third level and make it look like two.
+    v <- c("A", "B", "QC")
+    expect_identical(levels(.metab_ssgsea_conditions(v, NULL)),
+                     c("A", "B", "QC"))
+})
+
+test_that("ssGSEA reports score_diff in the contrast's direction, not the alphabet's", {
+    skip_if_not_installed("GSVA")
+    skip_if_not_installed("withr")
+
+    fx <- .make_enrichment_fixture()
+    on.exit(unlink(fx$gmt), add = TRUE)
+
+    r_none <- run_metabolomics_ssgsea(fx$pre, fx$config)
+    r_ba   <- run_metabolomics_ssgsea(fx$pre, fx$config, contrast_groups = c("B", "A"))
+    r_ab   <- run_metabolomics_ssgsea(fx$pre, fx$config, contrast_groups = c("A", "B"))
+    skip_if(is.null(r_none$table) || is.null(r_ba$table) || is.null(r_ab$table),
+            "ssGSEA produced no table")
+
+    key <- function(r) r$table[order(r$table$pathway), , drop = FALSE]
+    t_none <- key(r_none); t_ba <- key(r_ba); t_ab <- key(r_ab)
+
+    # Numerator B: the alphabet already agreed, so NOTHING may move.
+    expect_identical(t_ba$score_diff, t_none$score_diff)
+    expect_identical(t_ba$p_value, t_none$p_value)
+    expect_identical(t_ba$FDR, t_none$FDR)
+
+    # Numerator A: the sign must flip, and ONLY the sign.
+    expect_equal(t_ab$score_diff, -t_ba$score_diff)
+    expect_identical(t_ab$p_value, t_ba$p_value)      # Wilcoxon is symmetric
+    expect_identical(t_ab$FDR, t_ba$FDR)
+    expect_identical(t_ab$significant, t_ba$significant)
+    expect_identical(t_ab$pathway, t_ba$pathway)
+
+    # The reported direction travels with the numbers.
+    expect_identical(r_ba$direction, "B - A")
+    expect_identical(r_ab$direction, "A - B")
+
+    # Per-group mean columns are named after their group, so they never flip.
+    expect_equal(t_ab$mean_A, t_ba$mean_A)
+    expect_equal(t_ab$mean_B, t_ba$mean_B)
+})
+
+test_that("the per-contrast ssGSEA wrapper forwards the resolved groups", {
+    # The direction has to survive the module layer: the wrapper knew the
+    # contrast all along and used it only for the filename and the plot title,
+    # which is exactly how the label and the number came to disagree.
+    expect_true("groups" %in% names(formals(.mod_metab_ssgsea_contrast)))
+    expect_true("contrast_groups" %in% names(formals(run_metabolomics_ssgsea)))
+
+    body_txt <- paste(deparse(body(.mod_metab_ssgsea_contrast)), collapse = " ")
+    expect_match(body_txt, "contrast_groups\\s*=\\s*groups")
+})

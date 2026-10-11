@@ -262,7 +262,8 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             }
             q <- .mod_metab_qea_contrast(pre_sub, config, ct, out_enr, out_ds)
             if (!is.null(q)) { qea_by_contrast[[ct]] <- q; files <- c(files, q$files) }
-            s <- .mod_metab_ssgsea_contrast(pre_sub, config, ct, out_enr, out_ds)
+            s <- .mod_metab_ssgsea_contrast(pre_sub, config, ct, out_enr, out_ds,
+                                            groups = grp$groups)
             if (!is.null(s)) { ssgsea_by_contrast[[ct]] <- s; files <- c(files, s$files) }
         }
     }
@@ -548,10 +549,14 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #' dataset with more than two groups still yields per-contrast ssGSEA results.
 #'
 #' @inheritParams .mod_metab_qea_contrast
+#' @param groups `c(numerator, denominator)` for this contrast, from
+#'   `.resolve_contrast_groups()`. Passed through so `score_diff` is reported in
+#'   the contrast's own direction rather than in alphabetical order.
 #' @return list(res, plots, files) or NULL when the contrast yields no table.
-.mod_metab_ssgsea_contrast <- function(pre_sub, config, contrast, out_enr, out_ds) {
+.mod_metab_ssgsea_contrast <- function(pre_sub, config, contrast, out_enr, out_ds,
+                                       groups = NULL) {
     res <- tryCatch(
-        run_metabolomics_ssgsea(pre_sub, config),
+        run_metabolomics_ssgsea(pre_sub, config, contrast_groups = groups),
         error = function(e) {
             warning("metabolomics ssGSEA failed for '", contrast, "': ", e$message)
             NULL

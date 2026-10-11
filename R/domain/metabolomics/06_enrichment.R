@@ -625,8 +625,14 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
 #' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
 #'   row_data, info). Scores are computed on the DE analysis matrix.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
-#' @return list(table, scores, method) or NULL if disabled/unavailable.
-run_metabolomics_ssgsea <- function(pre, config) {
+#' @param contrast_groups Optional `c(numerator, denominator)` for the contrast
+#'   being run, as `.resolve_contrast_groups()` returns it. It fixes the sign of
+#'   `score_diff` to numerator-minus-denominator. Omit it for the dataset-wide
+#'   run, where the order falls back to alphabetical and the sign therefore
+#'   carries no contrast direction.
+#' @return list(table, scores, method, direction) or NULL if disabled or
+#'   unavailable. `direction` names the subtraction `score_diff` reports.
+run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
 
@@ -731,16 +737,20 @@ run_metabolomics_ssgsea <- function(pre, config) {
     # ---- Wilcoxon test per pathway ----
     # Align condition labels to score matrix columns via sample IDs
     meta <- pre$meta
-    conditions <- factor(meta[[condition_col]][
-        match(colnames(scores), meta[[sample_col]])
-    ])
+    conditions <- .metab_ssgsea_conditions(
+        as.character(meta[[condition_col]][
+            match(colnames(scores), meta[[sample_col]])
+        ]),
+        contrast_groups)
     cond_levels <- levels(conditions)
 
     # Wilcoxon rank-sum requires exactly two groups; return raw scores otherwise
     if (length(cond_levels) != 2) {
         message("ssGSEA: Wilcoxon test requires exactly 2 conditions, found ",
                 length(cond_levels))
-        return(list(table = NULL, scores = scores, method = "ssgsea"))
+        # No test, so no subtraction to name.
+        return(list(table = NULL, scores = scores, method = "ssgsea",
+                    direction = NA_character_))
     }
 
     # Split sample indices by condition for the two-group comparison
@@ -781,8 +791,51 @@ run_metabolomics_ssgsea <- function(pre, config) {
     list(
         table  = results_df,
         scores = scores,
-        method = "ssgsea_wilcoxon"
+        method = "ssgsea_wilcoxon",
+        # What score_diff's sign actually means, carried beside the numbers so a
+        # reader never has to infer it from the level order.
+        direction = paste(cond_levels[2], "-", cond_levels[1])
     )
+}
+
+
+#' Order the two ssGSEA condition levels by the contrast's own direction
+#'
+#' `score_diff` is `mean(level 2) - mean(level 1)`, so the level ORDER is the
+#' reported direction. Left to `factor()`'s default that order is alphabetical,
+#' which has nothing to do with the contrast being run: for a contrast whose
+#' numerator sorts first, the difference comes out denominator-minus-numerator —
+#' the opposite of what the plot title and the filename say, and silently
+#' correct whenever the alphabet happens to agree.
+#'
+#' The groups the stage already resolved from `inputs$contrasts`
+#' (`.resolve_contrast_groups()`, which returns `c(Numerator, Denominator)`)
+#' decide it instead, so one resolver owns contrast direction for every
+#' enrichment method.
+#'
+#' @param values          Character vector of per-sample condition values.
+#' @param contrast_groups `c(numerator, denominator)`, or `NULL` for the
+#'   dataset-wide run that is not tied to a contrast.
+#' @return A factor over `values` whose SECOND level is the contrast's
+#'   numerator, so `mean2 - mean1` reads numerator minus denominator.
+.metab_ssgsea_conditions <- function(values, contrast_groups = NULL) {
+    present <- sort(unique(values[!is.na(values)]))
+    usable  <- !is.null(contrast_groups) && length(contrast_groups) == 2L &&
+               !any(is.na(contrast_groups)) && all(contrast_groups %in% present)
+
+    if (!usable) {
+        if (!is.null(contrast_groups)) {
+            warning("metabolomics ssGSEA: contrast groups (",
+                    paste(contrast_groups, collapse = " vs "),
+                    ") are not both present among the condition values (",
+                    paste(present, collapse = ", "),
+                    ") — falling back to alphabetical order, so score_diff's ",
+                    "sign is NOT this contrast's direction.", call. = FALSE)
+        }
+        return(factor(values, levels = present))
+    }
+    # level 1 = denominator, level 2 = numerator -> score_diff = num - den
+    factor(values, levels = c(contrast_groups[2], contrast_groups[1]))
 }
 
 
