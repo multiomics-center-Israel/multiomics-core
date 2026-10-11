@@ -2776,15 +2776,24 @@ if (length(fgsea_tables) > 0) {
 
 ## Pathway Dotplots {.tabset}
 
+One tab per contrast (in contrasts-file order), with one sub-tab per pathway
+collection and method. GSEA dotplots mark NES -2 and 2 with red dashed lines.
+
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
-plot_pngs <- list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
-if (length(plot_pngs) > 0) {
-    for (pp in plot_pngs) {
-        label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
-        label <- gsub("_", " ", label_raw)
-        cat(sprintf("\n### %s\n\n", label))
-        cat(sprintf("![%s](%s)\n\n", label, pp))
-        render_commentary(paste0("pathway_", label_raw))
+# Contrast order from the final results columns (= contrasts file); the
+# volcano section may have reordered contrast_names.
+pw_contrasts <- if (!is.null(de_data)) sub("^padj\\.", "", grep("^padj\\.", names(de_data), value = TRUE)) else contrast_names
+dotplots <- list_pathway_dotplots(enrich_plot_dir, pw_contrasts)
+if (nrow(dotplots) > 0) {
+    dotplots$tab <- ifelse(is.na(dotplots$contrast), "Other", gsub("_", " ", dotplots$contrast))
+    for (tab in unique(dotplots$tab)) {
+        cat(sprintf("\n### %s {.tabset}\n\n", tab))
+        for (i in which(dotplots$tab == tab)) {
+            label_raw <- sub("^pathway_|\\.png$", "", basename(dotplots$path[i]))
+            cat(sprintf("\n#### %s\n\n", dotplots$label[i]))
+            cat(sprintf("![%s](%s)\n\n", dotplots$label[i], dotplots$path[i]))
+            render_commentary(paste0("pathway_", label_raw))
+        }
     }
 }
 ```
