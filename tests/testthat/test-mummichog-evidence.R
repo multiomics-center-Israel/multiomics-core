@@ -1030,6 +1030,110 @@ test_that("the evidence exports are written as TSV + CSV and read back", {
   expect_equal(nrow(back), nrow(ev$ec_table))
 })
 
+# The six evidence files of one contrast, as save_mummichog_exports() names them.
+.evidence_export_paths <- function(dir, suffix = "_HL_vs_LL") {
+  file.path(dir, "mummichog_pinned",
+            paste0(rep(c("mummichog_evidence_pathways",
+                         "mummichog_evidence_empirical_compounds",
+                         "mummichog_evidence_features"), each = 2),
+                   suffix, c(".tsv", ".csv")))
+}
+
+test_that("a rerun whose evidence is gone takes the stale exports with it", {
+  # Driven through the section builder, the way 06_mod_report does it: run two
+  # resolves no model, so the section legitimately carries evidence = NULL. The
+  # HTML then omits the tab -- and these files, left behind, would be the only
+  # thing on disk still claiming the contrast has evidence.
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+  model <- read_mummichog_model_pathways(write_model_json(root))
+  pw    <- list(HL_vs_LL = read_mummichog_pathways(files))
+  out   <- withr::local_tempdir()
+
+  # The section's own table, slug and evidence, as the module passes them. The
+  # plot is left out so the test needs no graphics device; the bubble export is
+  # covered in test-mummichog-plots.R and is not what this is about.
+  export_section <- function(s) {
+    save_mummichog_exports(NULL, s$table, out, contrast_label = s$slug,
+                           evidence = s$evidence)
+  }
+
+  s1 <- build_mummichog_report_sections(
+    pw, .wiring_cfg(), files = files, row_data = row_data_with_levels(),
+    model = model)[["HL_vs_LL"]]
+  expect_false(is.null(s1$evidence))
+  export_section(s1)
+  expect_true(all(file.exists(.evidence_export_paths(out))))
+
+  # model = NULL and no model resolvable from this config -> no evidence.
+  s2 <- suppressMessages(build_mummichog_report_sections(
+    pw, .wiring_cfg(), files = files, row_data = row_data_with_levels(),
+    model = NULL))[["HL_vs_LL"]]
+  expect_null(s2$evidence)
+  written <- export_section(s2)
+
+  expect_false(any(file.exists(.evidence_export_paths(out))))
+  # The ORA side is still exported, and is what the rerun reports writing.
+  for (ext in c("tsv", "csv")) {
+    f <- file.path(out, "mummichog_pinned",
+                   paste0("mummichog_pathway_table_HL_vs_LL.", ext))
+    expect_true(f %in% written)
+    expect_true(file.exists(f))
+  }
+})
+
+test_that("a rerun missing one evidence frame does not keep its stale file", {
+  # The nastier half: evidence is present, so the NULL check above would pass,
+  # but one frame is empty. Only that stem's pair must go.
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+  model <- read_mummichog_model_pathways(write_model_json(root))
+  ev    <- build_mummichog_pathway_evidence(
+    read_mummichog_pathways(files), files, model,
+    normalize_metab_annotation(row_data_with_levels()))
+
+  out <- withr::local_tempdir()
+  save_mummichog_exports(NULL, NULL, out, contrast_label = "HL_vs_LL",
+                         evidence = ev)
+  other <- file.path(out, "mummichog_pinned", "unrelated.tsv")
+  writeLines("keep me", other)
+
+  partial <- ev
+  partial$ec_table <- NULL
+  written <- save_mummichog_exports(NULL, NULL, out, contrast_label = "HL_vs_LL",
+                                    evidence = partial)
+
+  gone <- file.path(out, "mummichog_pinned",
+                    paste0("mummichog_evidence_empirical_compounds_HL_vs_LL.",
+                           c("tsv", "csv")))
+  expect_false(any(file.exists(gone)))
+  expect_false(any(gone %in% written))
+  # The two frames that survived are rewritten, and a neighbour is not collateral.
+  expect_true(all(file.exists(setdiff(.evidence_export_paths(out), gone))))
+  expect_true(file.exists(other))
+})
+
+test_that("another contrast's evidence exports survive this one's rerun", {
+  root  <- withr::local_tempdir()
+  files <- build_evidence_tree(root)
+  model <- read_mummichog_model_pathways(write_model_json(root))
+  ev    <- build_mummichog_pathway_evidence(
+    read_mummichog_pathways(files), files, model,
+    normalize_metab_annotation(row_data_with_levels()))
+
+  out <- withr::local_tempdir()
+  save_mummichog_exports(NULL, NULL, out, contrast_label = "HL_vs_LL",
+                         evidence = ev)
+  save_mummichog_exports(NULL, NULL, out, contrast_label = "ML_vs_LL",
+                         evidence = ev)
+
+  # One contrast loses its evidence; the other's files are not its business.
+  save_mummichog_exports(NULL, NULL, out, contrast_label = "HL_vs_LL",
+                         evidence = NULL)
+  expect_false(any(file.exists(.evidence_export_paths(out, "_HL_vs_LL"))))
+  expect_true(all(file.exists(.evidence_export_paths(out, "_ML_vs_LL"))))
+})
+
 test_that("evidence stays in the report sections and is dropped only for Shiny", {
   # The narrowing belongs at the payload boundary. If it moved into the section
   # builder, the report and the exports would lose the evidence too.

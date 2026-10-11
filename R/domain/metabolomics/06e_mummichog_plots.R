@@ -311,22 +311,46 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
 #' @param evidence Optional three-frame list from
 #'   `build_mummichog_pathway_evidence()`. Each frame is written as TSV + CSV
 #'   beside the pathway table; the HTML report caps its drill-down, so these are
-#'   the complete tables.
+#'   the complete tables. This contrast's six evidence files are removed first,
+#'   by name, so a run that comes back without evidence (or without one frame)
+#'   cannot leave the previous run's tables behind. Exports of other kinds, of
+#'   other contrasts, and anything else in the directory are left alone.
 #' @return Character vector of the files written (may be empty).
 save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL,
                                    evidence = NULL) {
-  if (is.null(plot) && is.null(table) && is.null(evidence)) return(character(0))
-
   # Write next to the engine's result tree (same dir as mod_mummichog_pinned()),
   # so every mummichog artefact sits together under mummichog_pinned/. The stage
   # runs first and only wipes its v2/ subdir, so these top-level files persist.
   dest_dir <- file.path(out_dir, "mummichog_pinned")
-  ensure_dir(dest_dir)
   suffix <- if (!is.null(contrast_label) && nzchar(contrast_label)) {
     paste0("_", gsub("[^A-Za-z0-9]+", "_", contrast_label))
   } else {
     ""
   }
+
+  # Clear this contrast's evidence exports before writing whatever this run
+  # produced. A rerun can legitimately come back without evidence -- no readable
+  # model, a partial mummichog run salvaged by .mmc_check_run_outputs(), or the
+  # fail-soft branch in build_mummichog_report_sections() -- and a single frame
+  # can be missing from an otherwise good set. {targets} stops tracking paths a
+  # later run omits but never deletes them, so without this the report correctly
+  # omits the tab while last run's tables stay on disk reading as current.
+  #
+  # Ahead of the nothing-to-save return, so a contrast that comes back empty is
+  # covered too, and unconditional, so the per-frame case is. Only these six
+  # names, never a pattern: the pathway and plot exports, other contrasts, and
+  # anything else in the directory are untouched.
+  evidence_exports <- file.path(
+    dest_dir,
+    paste0(rep(c("mummichog_evidence_pathways",
+                 "mummichog_evidence_empirical_compounds",
+                 "mummichog_evidence_features"), each = 2),
+           suffix, c(".tsv", ".csv")))
+  unlink(evidence_exports[file.exists(evidence_exports)])
+
+  if (is.null(plot) && is.null(table) && is.null(evidence)) return(character(0))
+
+  ensure_dir(dest_dir)
   written <- character(0)
 
   if (!is.null(plot)) {
