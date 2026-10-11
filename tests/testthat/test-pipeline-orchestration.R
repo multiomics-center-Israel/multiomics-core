@@ -195,11 +195,23 @@ test_that("the report's mummichog file list tracks content, not just paths", {
     # rerun rewriting an EmpiricalCompound table in place would leave its hash
     # unchanged and metab_report up to date on last run's evidence. format =
     # "file" makes {targets} hash the files themselves, as it does upstream.
-    result <- pipe_metabolomics("pqn")
-    by_name <- setNames(result, get_target_names(result))
+    # mummichog is opt-in, and the alias only exists in the enabled branch --
+    # pipe_metabolomics() defaults to FALSE, which builds the NULL stand-ins.
+    on <- pipe_metabolomics("pqn", mummichog_enabled = TRUE)
+    on <- setNames(on, get_target_names(on))
 
-    expect_identical(by_name$metab_mummichog_pinned_files$settings$format, "file")
-    expect_identical(by_name$metab_mummichog_report_files$settings$format, "file")
+    expect_identical(on$metab_mummichog_pinned_files$settings$format, "file")
+    expect_identical(on$metab_mummichog_report_files$settings$format, "file")
+
+    # Disabled branch unchanged: the same two symbols the report depends on,
+    # as ordinary targets, and no pinned stage.
+    off <- pipe_metabolomics("pqn")
+    off <- setNames(off, get_target_names(off))
+
+    expect_true(all(c("metab_mummichog_report_pathways",
+                      "metab_mummichog_report_files") %in% names(off)))
+    expect_false("metab_mummichog_pinned_files" %in% names(off))
+    expect_false(identical(off$metab_mummichog_report_files$settings$format, "file"))
 })
 
 
