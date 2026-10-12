@@ -269,6 +269,27 @@ test_that("the mummichog section renders without GSEA or evidence", {
   expect_match(html, "no pathway passed the size filter")
 })
 
+test_that("a contrast without GSEA says so when another contrast has it", {
+  skip_unless_renderable()
+
+  # Mixed outcome: the methodology block takes the has_gsea branch and promises
+  # two analyses per contrast, so a contrast that returned NULL must say why
+  # rather than just missing a tab.
+  secs <- render_fixture_sections()
+  absent <- render_fixture_sections(with_gsea = FALSE, with_evidence = FALSE)[[1]]
+  absent$slug <- "XX_vs_YY"
+  secs[["XX_vs_YY"]] <- absent
+
+  html <- render_mummichog_section(secs, withr::local_tempdir())
+
+  # The contrast that has it still renders its real GSEA section ...
+  expect_match(html, "Mummichog GSEA over the full ranked EmpiricalCompound list")
+  # ... and the one that does not is explained, without asserting a cause it
+  # cannot know.
+  expect_match(html, "No GSEA results for this contrast")
+  expect_match(html, "no pathway passed the size filter")
+})
+
 test_that("the mummichog section renders with no results at all", {
   skip_unless_renderable()
 

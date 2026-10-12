@@ -2561,6 +2561,16 @@ for (contrast in names(mummi_sections)) {
     print(htmltools::tagList(
       make_dt(s$gsea$table,
               caption = sprintf("Mummichog GSEA (MS peaks-to-pathways) — %s", label))))
+
+  } else if (has_gsea) {
+    # Some OTHER contrast produced GSEA, so the methodology block above has
+    # already told the reader to expect it per contrast. Without this, a
+    # contrast that returned nothing would simply be missing a tab, with no
+    # way to tell an analysis that found nothing from one that never ran.
+    # Same wording as that block, for the same reason: a NULL result does not
+    # say which of the two it was.
+    cat("\n\n### GSEA\n\n")
+    cat("No GSEA results for this contrast. Either it could not run — it needs a DE table for this contrast, `fgsea` and a readable metabolic model — or it ran and no pathway passed the size filter. The console log for the run distinguishes the two.\n\n")
   }
 
   # ---- Supporting Evidence ------------------------------------------------
