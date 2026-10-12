@@ -206,6 +206,26 @@ skip_unless_renderable <- function() {
   skip_if_not(file.exists(METAB_TEMPLATE), "report template not found")
 }
 
+# Character offset of a pandoc section anchor, or NA when the tab is absent.
+# Tab ORDER is part of this section's contract -- the GSEA scatter has to be the
+# first plot a reader meets -- so the tests assert on positions, not just on
+# presence.
+anchor_at <- function(html, id) {
+  m <- regexpr(sprintf('id="%s"', id), html, fixed = TRUE)
+  if (m[[1]] == -1L) NA_integer_ else as.integer(m[[1]])
+}
+
+# The HTML between two anchors, i.e. one tab's own content. Lets a test assert
+# what a tab does NOT contain, which is how "no ORA plot under a GSEA heading"
+# is checked.
+tab_body <- function(html, from, to) {
+  a <- anchor_at(html, from)
+  b <- anchor_at(html, to)
+  expect_false(is.na(a), info = paste("missing tab:", from))
+  expect_false(is.na(b), info = paste("missing tab:", to))
+  substr(html, a, b)
+}
+
 
 test_that("the mummichog section renders with GSEA and evidence", {
   skip_unless_renderable()
@@ -213,18 +233,40 @@ test_that("the mummichog section renders with GSEA and evidence", {
   html <- render_mummichog_section(render_fixture_sections(),
                                    withr::local_tempdir())
 
-  # The four per-contrast tabs, matched on their section ids so prose that
+  # The five per-contrast tabs, matched on their section ids so prose that
   # merely mentions a tab name cannot stand in for the tab itself.
-  expect_match(html, 'id="bubble-plot"', fixed = TRUE)
-  expect_match(html, 'id="results-table"', fixed = TRUE)
-  expect_match(html, 'id="gsea"', fixed = TRUE)
+  expect_match(html, 'id="gsea-plot"', fixed = TRUE)
+  expect_match(html, 'id="gsea-results-table"', fixed = TRUE)
+  expect_match(html, 'id="ora-bubble-plot"', fixed = TRUE)
+  expect_match(html, 'id="ora-results-table"', fixed = TRUE)
   expect_match(html, 'id="supporting-evidence"', fixed = TRUE)
   expect_match(html, 'id="pathway-drill-down"', fixed = TRUE)
 
-  # The ORA bubble keeps its own legend: GSEA is additive, so the section must
-  # still describe the bubble plot rather than replacing it with the scatter.
-  expect_match(html, "Each bubble is a pathway")
-  expect_match(html, "Mummichog GSEA over the full ranked EmpiricalCompound list")
+  # The contract: GSEA is the PRIMARY visualization. Its tab precedes every ORA
+  # tab, so the first plot a reader meets in a contrast is the NES scatter.
+  expect_lt(anchor_at(html, "gsea-plot"),
+            anchor_at(html, "gsea-results-table"))
+  expect_lt(anchor_at(html, "gsea-results-table"),
+            anchor_at(html, "ora-bubble-plot"))
+  expect_lt(anchor_at(html, "ora-bubble-plot"),
+            anchor_at(html, "ora-results-table"))
+  expect_lt(anchor_at(html, "ora-results-table"),
+            anchor_at(html, "supporting-evidence"))
+
+  # ... and the plot in that first tab is the scatter, described by its own
+  # NES / -log10(GSEA p) legend, not the enrichment-ratio bubble.
+  gsea_tab <- tab_body(html, "gsea-plot", "gsea-results-table")
+  expect_match(gsea_tab, "Mummichog GSEA over the full ranked EmpiricalCompound list")
+  # The two axes named separately, so a reflow of the legend prose between them
+  # cannot break the assertion that this is the NES-vs-p scatter.
+  expect_match(gsea_tab, "x = NES", fixed = TRUE)
+  expect_match(gsea_tab, "-log10(raw GSEA p-value)", fixed = TRUE)
+  expect_false(grepl("Each bubble is a pathway", gsea_tab, fixed = TRUE))
+
+  # ORA is preserved, demoted in position only: its plot and legend still render
+  # under their own heading.
+  expect_match(tab_body(html, "ora-bubble-plot", "ora-results-table"),
+               "Each bubble is a pathway")
 
   # Both analyses are named and distinguished in the methodology block.
   expect_match(html, "complete ranked EmpiricalCompound list with no significance cutoff")
@@ -251,15 +293,30 @@ test_that("the mummichog section renders without GSEA or evidence", {
     render_fixture_sections(with_gsea = FALSE, with_evidence = FALSE),
     withr::local_tempdir())
 
-  # The ORA tabs are unaffected by GSEA's absence -- that is the whole point of
-  # keeping the bubble plot primary.
-  expect_match(html, 'id="bubble-plot"', fixed = TRUE)
-  expect_match(html, 'id="results-table"', fixed = TRUE)
+  # The ORA tabs are unaffected by GSEA's absence: ORA results stay available
+  # under their own headings.
+  expect_match(html, 'id="ora-bubble-plot"', fixed = TRUE)
+  expect_match(html, 'id="ora-results-table"', fixed = TRUE)
   expect_match(html, "Each bubble is a pathway")
 
-  # The optional tabs are simply absent, and the methodology says why rather
-  # than leaving a reader to infer it from a missing tab.
-  expect_false(grepl('id="gsea"', html, fixed = TRUE))
+  # The GSEA Plot tab is rendered even with nothing to plot, so the primary tab
+  # always answers what GSEA found. Its results table is the tab that goes away.
+  expect_match(html, 'id="gsea-plot"', fixed = TRUE)
+  expect_false(grepl('id="gsea-results-table"', html, fixed = TRUE))
+  expect_lt(anchor_at(html, "gsea-plot"), anchor_at(html, "ora-bubble-plot"))
+
+  # And what it carries is the explanation, NOT the ORA bubble wearing a GSEA
+  # heading. This is the substitution the section must never make: a reader on
+  # the GSEA tab must not be shown an enrichment-ratio plot.
+  gsea_tab <- tab_body(html, "gsea-plot", "ora-bubble-plot")
+  expect_match(gsea_tab, "No GSEA results for this contrast")
+  expect_false(grepl("Each bubble is a pathway", gsea_tab, fixed = TRUE))
+  expect_false(grepl("x = NES", gsea_tab, fixed = TRUE))
+  # It points the reader at where the ORA results actually are.
+  expect_match(gsea_tab, "ORA Bubble Plot")
+
+  # Evidence is simply absent, and the methodology says why rather than leaving
+  # a reader to infer it from a missing tab.
   expect_false(grepl('id="supporting-evidence"', html, fixed = TRUE))
   expect_match(html, "has no results in this report")
   # And it must NOT assert a cause: a NULL GSEA result means either that the
@@ -295,7 +352,7 @@ test_that("the mummichog section renders with no results at all", {
 
   html <- render_mummichog_section(list(), withr::local_tempdir())
   expect_true(nzchar(html))
-  expect_false(grepl('id="bubble-plot"', html, fixed = TRUE))
-  expect_false(grepl('id="gsea"', html, fixed = TRUE))
+  expect_false(grepl('id="gsea-plot"', html, fixed = TRUE))
+  expect_false(grepl('id="ora-bubble-plot"', html, fixed = TRUE))
   expect_false(grepl('id="supporting-evidence"', html, fixed = TRUE))
 })

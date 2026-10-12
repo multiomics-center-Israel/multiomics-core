@@ -2447,16 +2447,16 @@ cat("[**Mummichog**](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 20
 cat("By testing whether significant m/z features map to pathway members more often than expected by chance, it bypasses the identification bottleneck of traditional approaches. Each contrast below is an INDEPENDENT mummichog run over all features (that contrast's own p-values define its significant set).\n\n")
 
 cat("Two complementary analyses are reported per contrast:\n\n")
-cat(sprintf("- **ORA (mummichog)** tests the features that clear the significance cutoff (p < %s) against the pathways their m/z values map to. This is the primary analysis and the one plotted.\n", p_cut))
+cat(sprintf("- **ORA (mummichog)** tests the features that clear the significance cutoff (p < %s) against the pathways their m/z values map to. Its bubble plot and table are reported per contrast under their own tabs.\n", p_cut))
 if (has_gsea) {
-  cat("- **GSEA (MS peaks-to-pathways)** uses the **complete ranked EmpiricalCompound list with no significance cutoff** and asks whether a pathway's ECs sit systematically at one end of that ranking. It reports ES / NES / raw p-value / BH-adjusted p-value, and can reach pathways whose ECs shift coherently without any single feature clearing the cutoff.\n\n")
+  cat("- **GSEA (MS peaks-to-pathways)** uses the **complete ranked EmpiricalCompound list with no significance cutoff** and asks whether a pathway's ECs sit systematically at one end of that ranking. It reports ES / NES / raw p-value / BH-adjusted p-value, and can reach pathways whose ECs shift coherently without any single feature clearing the cutoff. **Its scatter is each contrast's primary plot.**\n\n")
 } else {
   # Deliberately does NOT assert a cause. A NULL GSEA result means either that
   # the analysis could not run (missing fgsea, model, DE table, or the switch
   # off) OR that it ran and no pathway passed the size filter -- a legitimate
   # negative result. The section cannot tell them apart, so it names both
   # rather than reporting a finding about the data as a setup omission.
-  cat("- **GSEA (MS peaks-to-pathways)** has no results in this report. Either it could not run -- it needs `fgsea`, a readable metabolic model (`model_ref` / `model_json`) and a DE table for the contrast, and is switchable via `gsea_enabled` -- or it ran and no pathway passed the size filter. The console log for the run distinguishes the two. Only the ORA analysis is shown.\n\n")
+  cat("- **GSEA (MS peaks-to-pathways)** has no results in this report. Either it could not run -- it needs `fgsea`, a readable metabolic model (`model_ref` / `model_json`) and a DE table for the contrast, and is switchable via `gsea_enabled` -- or it ran and no pathway passed the size filter. The console log for the run distinguishes the two. Each contrast's **GSEA Plot** tab says so in place of a plot; only the ORA analysis is shown, under its own tabs.\n\n")
 }
 
 cat("**Parameters:**\n\n")
@@ -2507,30 +2507,23 @@ if (has_gsea) {
 ```
 
 ```{r mummichog-per-contrast, results='asis', fig.width=11, fig.height=8}
-# One tab per contrast: Bubble Plot | Results Table | GSEA (when it ran) |
-# Supporting Evidence (when it could be built). The bubble plot stays the
-# section's primary view; GSEA is additive and never replaces it.
+# One tab per contrast, in this order: GSEA Plot | GSEA Results Table (when it
+# ran) | ORA Bubble Plot | ORA Results Table | Supporting Evidence (when it
+# could be built). The GSEA scatter is the section's primary view; the ORA
+# bubble keeps its own tab, under its own name, and is never shown under a GSEA
+# heading -- a contrast without GSEA gets the explanation below instead of a
+# substituted plot.
 for (contrast in names(mummi_sections)) {
   s     <- mummi_sections[[contrast]]
   label <- gsub("_vs_", " vs ", contrast, fixed = TRUE)
   cat(sprintf("\n## %s {.tabset}\n\n", label))
 
-  cat("### Bubble Plot\n\n")
-  safe_print_plot(s$plot)
-  figure_legend(sprintf("Mummichog pathway analysis (%s). Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / pathway size), y = -log10(p-value), point size = pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled.", label, p_cut))
-
-  cat("\n\n### Results Table\n\n")
-  if (!is.null(s$table)) {
-    # print() forces the DT widget to render inside the loop.
-    print(htmltools::tagList(
-      make_dt(s$table, caption = sprintf("Mummichog Pathway Enrichment — %s", label))))
-  }
-
-  # ---- GSEA ---------------------------------------------------------------
-  # Present only when the complementary GSEA ran for this contrast. It needs
-  # fgsea, a readable model, a DE table for the contrast, and gsea_enabled.
+  # ---- GSEA plot (primary view) -------------------------------------------
+  # Rendered for every contrast, so the first tab always answers what GSEA
+  # found -- including when it found nothing, or never ran. Three states are
+  # kept apart: plotted, ran-but-unplottable, and absent.
+  cat("### GSEA Plot\n\n")
   if (!is.null(s$gsea)) {
-    cat("\n\n### GSEA\n\n")
     cat(sprintf("GSEA over the **complete** ranked list of %d EmpiricalCompounds (no significance cutoff), ranked by the %s. `P.Value` is the raw permutation p-value and `padj` its Benjamini-Hochberg adjustment over the %d tested pathways.\n\n",
                 s$gsea$n_ec, s$gsea$metric_label, s$gsea$n_pathways))
     cat("**Reading NES.** ", s$gsea$nes_note, "\n\n", sep = "")
@@ -2547,7 +2540,28 @@ for (contrast in names(mummi_sections)) {
     if (!is.null(s$gsea_plot)) {
       safe_print_plot(s$gsea_plot)
       figure_legend(sprintf("Mummichog GSEA over the full ranked EmpiricalCompound list (%s), in the style of MetaboAnalyst's MS Peaks-to-Pathways summary. Each point is a pathway: x = NES, y = -log10(raw GSEA p-value), colour = NES on a diverging scale centred at 0, point size = sqrt(-log10 p) — the same quantity as the y axis, which is MetaboAnalyst's own size mapping and carries no additional information. The dashed line marks p = %g, the vertical line marks NES = 0, and the most significant pathways are labelled. %s", label, p_cut, s$gsea$nes_note))
+    } else {
+      # GSEA produced results but the scatter could not be drawn. Saying so is
+      # the whole point of this branch: the alternative is a tab that looks
+      # like GSEA found nothing when its table says otherwise.
+      cat("GSEA ran for this contrast but its scatter could not be rendered. The results themselves are unaffected — see the **GSEA Results Table** tab.\n\n")
     }
+  } else {
+    # Same wording as the methodology block, for the same reason: a NULL result
+    # does not say which of the two it was, so the tab names both rather than
+    # reporting a finding about the data as a setup omission. Rendered for every
+    # contrast so an analysis that found nothing is never indistinguishable from
+    # one that never ran -- and never replaced by the ORA bubble under this
+    # heading.
+    cat("No GSEA results for this contrast. Either it could not run — it needs a DE table for this contrast, `fgsea` and a readable metabolic model — or it ran and no pathway passed the size filter. The console log for the run distinguishes the two.\n\n")
+    cat("The ORA analysis for this contrast is shown under the **ORA Bubble Plot** and **ORA Results Table** tabs.\n\n")
+  }
+
+  # ---- GSEA results table -------------------------------------------------
+  # Present only when the complementary GSEA ran for this contrast. It needs
+  # fgsea, a readable model, a DE table for the contrast, and gsea_enabled.
+  if (!is.null(s$gsea)) {
+    cat("\n\n### GSEA Results Table\n\n")
 
     # Rows whose ES was supplied by the reference implementation's fallback
     # rather than computed. Stated here because such a row still consumes a
@@ -2561,16 +2575,20 @@ for (contrast in names(mummi_sections)) {
     print(htmltools::tagList(
       make_dt(s$gsea$table,
               caption = sprintf("Mummichog GSEA (MS peaks-to-pathways) — %s", label))))
+  }
 
-  } else if (has_gsea) {
-    # Some OTHER contrast produced GSEA, so the methodology block above has
-    # already told the reader to expect it per contrast. Without this, a
-    # contrast that returned nothing would simply be missing a tab, with no
-    # way to tell an analysis that found nothing from one that never ran.
-    # Same wording as that block, for the same reason: a NULL result does not
-    # say which of the two it was.
-    cat("\n\n### GSEA\n\n")
-    cat("No GSEA results for this contrast. Either it could not run — it needs a DE table for this contrast, `fgsea` and a readable metabolic model — or it ran and no pathway passed the size filter. The console log for the run distinguishes the two.\n\n")
+  # ---- ORA ----------------------------------------------------------------
+  # The cutoff-based mummichog analysis, unchanged: same plot object, same
+  # table, same legend. Secondary to GSEA in position only.
+  cat("\n\n### ORA Bubble Plot\n\n")
+  safe_print_plot(s$plot)
+  figure_legend(sprintf("Mummichog pathway analysis (%s). Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / pathway size), y = -log10(p-value), point size = pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled.", label, p_cut))
+
+  cat("\n\n### ORA Results Table\n\n")
+  if (!is.null(s$table)) {
+    # print() forces the DT widget to render inside the loop.
+    print(htmltools::tagList(
+      make_dt(s$table, caption = sprintf("Mummichog Pathway Enrichment — %s", label))))
   }
 
   # ---- Supporting Evidence ------------------------------------------------

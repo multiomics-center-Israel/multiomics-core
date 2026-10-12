@@ -106,7 +106,9 @@ To map pathways back to your feature ids, `join_features_to_results()` uses the 
 
 ## Complementary GSEA (MS peaks-to-pathways)
 
-Alongside the ORA above, the pipeline runs a MetaboAnalyst-style GSEA over the same mapped EmpiricalCompound universe. It is **additive**: the pinned mummichog engine, its statistics and its outputs are untouched, and the bubble plot remains the section's primary view.
+Alongside the ORA above, the pipeline runs a MetaboAnalyst-style GSEA over the same mapped EmpiricalCompound universe. It is **additive computationally**: the pinned mummichog engine, its statistics and its outputs are untouched, and the ORA bubble plot and table are still produced and still exported.
+
+In the HTML report, though, **the GSEA scatter is each contrast's primary plot**. The tabs run GSEA Plot → GSEA Results Table → ORA Bubble Plot → ORA Results Table → Supporting Evidence, so the first figure a reader meets is NES against -log10(GSEA p-value). The ORA bubble keeps its own tab under its own name; it is never shown under a GSEA heading. A contrast without GSEA gets the explanation in that first tab instead of a plot — see [When GSEA has no results](#when-gsea-has-no-results).
 
 Where ORA tests the features that clear the significance cutoff, GSEA uses the **complete ranked EmpiricalCompound list with no cutoff**, so it can reach pathways whose ECs shift coherently without any single feature reaching significance.
 
@@ -129,6 +131,20 @@ A signed ranking is the premise of GSEA, and W is non-negative, so ranking on it
 GSEA needs `fgsea` and a **readable** metabolic model — the built-in `human_mfn` model ships inside the Python package, so its pathway membership cannot be read and both GSEA and the supporting-evidence section are skipped with a message. Use `model_ref` or `model_json`.
 
 `gsea_enabled: true` under the `mummichog:` block is the switch; it defaults to on wherever mummichog is enabled, so configs written before GSEA existed keep working. Four optional keys (`gsea_permutations`, `gsea_seed`, `gsea_min_size`, `gsea_max_size`) carry the pinned MetaboAnalystR defaults. Overriding any of them is a methodological deviation, and the result records it as one. Note `gsea_seed` is **not** the project `seed:`: 123 is upstream's own value.
+
+### When GSEA has no results
+
+The GSEA Plot tab is rendered for **every** contrast, including ones with nothing to plot, so the primary tab always answers what GSEA found. What it says depends on which of three things happened:
+
+| State | The GSEA Plot tab shows |
+| --- | --- |
+| GSEA ran and the scatter was built | the scatter and its NES / -log10(p) legend |
+| GSEA ran but the scatter could not be drawn | a sentence saying so, pointing at the GSEA Results Table, which is unaffected |
+| GSEA produced nothing | the explanation below. No plot. |
+
+That last message deliberately **does not assert a cause**. A missing GSEA result means either that the analysis could not run (no `fgsea`, no readable model, no DE table for the contrast, or `gsea_enabled: false`) *or* that it ran and no pathway passed the size filter — a legitimate negative result. The report cannot tell the two apart, so it names both and points at the run's console log, which can. Reporting a real negative as a misconfiguration would be worse than saying less.
+
+In none of these states is the ORA bubble shown under a GSEA heading. ORA always lives in its own tabs, under its own name, with its own legend.
 
 ### Outputs
 
