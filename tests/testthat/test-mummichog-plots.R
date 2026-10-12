@@ -439,3 +439,40 @@ test_that("a live section's GSEA exports are never cleared as orphans", {
   expect_length(gone, 0L)
   expect_true(file.exists(live))
 })
+
+test_that("orphan cleanup follows the de-duplicated slug, not the bare sanitise", {
+  out  <- withr::local_tempdir()
+  root <- withr::local_tempdir()
+  dest <- file.path(out, "mummichog_pinned")
+  dir.create(dest, recursive = TRUE, showWarnings = FALSE)
+
+  # Two contrast labels that collapse to ONE token. The stage therefore names
+  # its directories A_B and A_B_1, and a run in which both produced sections
+  # wrote exports under both slugs.
+  mp <- file.path(root, "mummichog_pinned")
+  for (d in c("A_B", "A_B_1")) {
+    dir.create(file.path(mp, d, "v2", "1.run", "tables"), recursive = TRUE,
+               showWarnings = FALSE)
+    file.create(file.path(mp, d, "v2", "1.run", "tables",
+                          sprintf("mcg_pathwayanalysis_%s.tsv", d)))
+  }
+  readr::write_tsv(
+    data.frame(dir = c("A_B", "A_B_1"), contrast = c("A-B", "A_B"),
+               stringsAsFactors = FALSE),
+    file.path(mp, "contrasts.tsv"))
+  files <- list.files(mp, recursive = TRUE, full.names = TRUE)
+
+  live_f  <- file.path(dest, "mummichog_gsea_table_A_B.tsv")
+  stale_f <- file.path(dest, "mummichog_gsea_table_A_B_1.tsv")
+  file.create(live_f, stale_f)
+
+  # Only one contrast has a section this run, so its slug is the bare token.
+  # Sanitising each label independently would yield c("A_B", "A_B") and the
+  # "_1" file would never be named -- the case this function exists to catch.
+  gone <- clear_orphan_mummichog_gsea_exports(
+    files, list(A_B = list(slug = "A_B")), out)
+
+  expect_true(stale_f %in% gone)
+  expect_false(file.exists(stale_f))
+  expect_true(file.exists(live_f))       # never the live section's own file
+})

@@ -396,9 +396,7 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
 #' reading as current.
 #'
 #' Deliberately narrow: it removes only the four GSEA files, only for contrasts
-#' with no live section, and never a slug a live section owns. Where two
-#' contrasts sanitise to the same slug it skips rather than guesses, so the
-#' failure mode is a leftover file, never a deleted live one. Whether such a
+#' with no live section, and never a slug a live section owns. Whether such a
 #' contrast should get a GSEA analysis at all is a separate question about the
 #' section contract, tracked rather than decided here.
 #'
@@ -414,8 +412,19 @@ clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
   live <- vapply(sections, function(s) s$slug %||% NA_character_, character(1),
                  USE.NAMES = FALSE)
   live <- live[!is.na(live)]
-  # Same sanitise the slugs are built from, so the two sides are comparable.
-  orphans <- setdiff(gsub("[^A-Za-z0-9]+", "_", names(groups)), live)
+  # Same sanitise AND the same make.unique the slugs are built from. Sanitising
+  # each label independently would collapse a colliding pair to one token, and
+  # the `_1` member's stale files would never be named -- which is exactly the
+  # case this function exists to catch.
+  #
+  # Over the full contrast list, not the sections: the suffixes are assigned
+  # within the collision group, so the SET of possible slugs is the same
+  # whatever order the groups arrive in, even though which contrast owns which
+  # suffix may differ from the section numbering. Only the set is used, and
+  # subtracting `live` means a file the current run wrote can never be picked
+  # up here however the two numberings disagree.
+  all_slugs <- make.unique(gsub("[^A-Za-z0-9]+", "_", names(groups)), sep = "_")
+  orphans <- setdiff(all_slugs, live)
   if (length(orphans) == 0) return(character(0))
 
   dest_dir <- file.path(out_dir, "mummichog_pinned")
