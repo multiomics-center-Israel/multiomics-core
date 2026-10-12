@@ -256,15 +256,19 @@ test_that("the mummichog section renders with GSEA and evidence", {
   expect_false(grepl('id="ora-results-table"', html, fixed = TRUE))
   expect_false(grepl('id="supporting-evidence"', html, fixed = TRUE))
 
-  # The Summary: the nominal pathway with its compact cells, and the labels.
+  # The Summary: the top-ranked pathways with their compact cells and labels.
   summary_tab <- tab_body(html, "summary", "ora-plot")
+  expect_match(summary_tab, "Top 20 Mummichog pathways for this contrast", fixed = TRUE)
+  # pageLength 20 for this table only, so the whole top 20 fits one page.
+  expect_match(summary_tab, '"pageLength":20', fixed = TRUE)
   expect_match(summary_tab, "Fatty acid degradation", fixed = TRUE)
   expect_match(summary_tab, "Mummichog-only candidate", fixed = TRUE)
   expect_match(summary_tab, "Not tested", fixed = TRUE)
   expect_match(summary_tab, "2 ECs / 3 features", fixed = TRUE)
   expect_match(summary_tab, "no adjusted pathway p-value is reported", fixed = TRUE)
-  # Not a nominal pathway, so not in the Summary.
-  expect_false(grepl("Glycolysis", summary_tab, fixed = TRUE))
+  # Ranked, but not nominal: listed, and never called a candidate.
+  expect_match(summary_tab, "Glycolysis", fixed = TRUE)
+  expect_match(summary_tab, "No nominal Mummichog signal", fixed = TRUE)
 
   # Each plot tab carries its own plot, legend and one-line count.
   ora_tab <- tab_body(html, "ora-plot", "gsea-plot")
@@ -354,7 +358,7 @@ test_that("a GSEA-only pathway shows no ORA evidence as its support", {
   expect_false(grepl("Glycolysis", ev_tab, fixed = TRUE))
 })
 
-test_that("a contrast with no nominal pathway says so and lists none", {
+test_that("a contrast with no nominal pathway says so above its ranked rows", {
   skip_unless_renderable()
 
   html <- render_mummichog_section(render_fixture_sections(nominal = FALSE),
@@ -364,9 +368,13 @@ test_that("a contrast with no nominal pathway says so and lists none", {
   expect_match(summary_tab,
                "No Mummichog pathway reached nominal p &lt; 0.05 in ORA or GSEA for this contrast.",
                fixed = TRUE)
-  expect_false(grepl("Fatty acid degradation", summary_tab, fixed = TRUE))
+  expect_match(summary_tab, "not significant results", fixed = TRUE)
+  # The ranked rows are still listed, none as a candidate.
+  expect_match(summary_tab, "Fatty acid degradation", fixed = TRUE)
+  expect_match(summary_tab, "No nominal Mummichog signal", fixed = TRUE)
+  expect_false(grepl("Mummichog-only candidate", summary_tab, fixed = TRUE))
   expect_match(tab_body(html, "pathway-evidence", "advanced-downloads"),
-               "Summary pathways has ORA-derived evidence",
+               "No Summary pathway has a nominal ORA result with ORA-derived evidence",
                fixed = TRUE)
 })
 

@@ -2584,23 +2584,31 @@ for (contrast in names(mummi_sections)) {
 
   # ---- Summary --------------------------------------------------------------
   cat("### Summary\n\n")
-  cat(sprintf("Pathways with nominal (unadjusted) p < %g in Mummichog ORA and/or Mummichog GSEA for this contrast, and what enrichment based on identified metabolites says about the same pathway.\n\n", p_cut))
+  cat(sprintf("Top %d Mummichog pathways for this contrast, ranked by the smaller raw p-value from ORA or GSEA. Nominal p < %g indicates a pathway-level Mummichog signal; the complete ORA and GSEA results are under **Advanced / Downloads**.\n\n",
+              .MMC_SUMMARY_TOP_N, p_cut))
   if (is.null(s$summary)) {
     cat("The Summary could not be built for this contrast; the full results are under **Advanced / Downloads**.\n\n")
   } else if (nrow(s$summary) == 0) {
-    cat(sprintf("**No Mummichog pathway reached nominal p < %g in ORA or GSEA for this contrast.**\n\n", p_cut))
+    cat("No Mummichog pathway results for this contrast.\n\n")
   } else {
+    # Ranked rows need not be significant: say so plainly when none is.
+    if (!any(s$summary[["Nominal Mummichog signal"]])) {
+      cat(sprintf("**No Mummichog pathway reached nominal p < %g in ORA or GSEA for this contrast.** The rows below are the top-ranked pathways, not significant results.\n\n", p_cut))
+    }
+    # pageLength = 20 for this table only, so the whole top-20 fits one page.
     print(htmltools::tagList(make_dt(
       s$summary[, .MMC_SUMMARY_DISPLAY_COLS, drop = FALSE],
-      caption = sprintf("Mummichog summary — %s", label))))
+      caption = sprintf("Mummichog summary — %s", label),
+      pageLength = .MMC_SUMMARY_TOP_N)))
     cat(sprintf(paste0(
       "\n\n<p style='font-size:0.9em; color:#555;'>",
       "<strong>Nominal</strong> means unadjusted p < %g. %s Mummichog GSEA FDR is the Benjamini–Hochberg adjustment.<br>",
       "<strong>Identified-metabolite support</strong> lists the enrichment methods on identified metabolites (ORA, QEA, GSEA) with FDR < %g for the same pathway ID. ",
       "<em>None</em>: tested, not significant. <em>Not tested</em>: in the shared pathway library but absent from this contrast's identified-metabolite results. ",
       "<em>Not comparable</em>: no shared pathway ID.<br>",
+      "<strong>No nominal Mummichog signal</strong>: ranked here, but neither ORA nor GSEA reached nominal p. ",
       "A <strong>Mummichog-only candidate</strong> is a pathway-level hypothesis, not a confirmed finding.<br>",
-      "<strong>Supporting evidence</strong> counts the ECs and distinct measured features behind the ORA result; see <strong>Pathway Evidence</strong>.</p>\n\n"),
+      "<strong>Supporting evidence</strong> counts the ECs and distinct measured features behind a nominal ORA result; see <strong>Pathway Evidence</strong>.</p>\n\n"),
       p_cut, ora_p_note, .MMC_SUMMARY_FDR))
   }
 
@@ -2656,7 +2664,7 @@ for (contrast in names(mummi_sections)) {
                           s$summary$Pathway %in% ev_pws]
     shown <- utils::head(pws, MUMMI_EVIDENCE_MAX_PATHWAYS)
     if (length(shown) == 0) {
-      cat("None of this contrast's Summary pathways has ORA-derived evidence. The evidence for every pathway is under **Advanced / Downloads**.\n\n")
+      cat("No Summary pathway has a nominal ORA result with ORA-derived evidence. The evidence for every pathway is under **Advanced / Downloads**.\n\n")
     } else {
       cat(sprintf("Expand a pathway to see its supporting ECs and, within each, the measured features.%s Evidence for the other pathways is under **Advanced / Downloads**.\n\n",
                   if (length(pws) > length(shown))

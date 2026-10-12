@@ -108,7 +108,7 @@ To map pathways back to your feature ids, `join_features_to_results()` uses the 
 
 Per contrast, the tabs are:
 
-1.  **Summary** — the pathways with nominal p < `p_cutoff` in Mummichog ORA and/or GSEA (they need not agree), ordered by the smaller of the two raw p-values. Columns: Pathway, Identified-metabolite support, Mummichog ORA (`p = …`; empirical raw p, no adjusted value exists), Mummichog GSEA (`p = …; FDR = …`), Mummichog contribution, Supporting evidence (`n ECs / m features`, distinct measured features, from the ORA-derived evidence; `Not available — GSEA-only signal` for a GSEA-only pathway), Annotation agreement (EC counts, zeros omitted). When nothing qualifies, the tab says so and lists no pathways.
+1.  **Summary** — the top 20 pathways (all of them if fewer), ranked by the smaller of the raw Mummichog ORA and GSEA p-values (a missing value counts as `Inf`). Rows need not be significant: a pathway is *nominal* when ORA or GSEA is below `p_cutoff`, and when none is, the tab says so above the table. Columns: Pathway, Identified-metabolite support, Mummichog ORA (`p = …`; empirical raw p, no adjusted value exists), Mummichog GSEA (`p = …; FDR = …`), Mummichog contribution, Supporting evidence (`n ECs / m features`, distinct measured features, shown only for pathways nominal in ORA; `Not available — GSEA-only signal` for a GSEA-only pathway; `—` for a pathway nominal in neither), Annotation agreement (EC counts, zeros omitted). The `mummichog_summary_<contrast>` export holds the same rows; the complete ORA and GSEA results are under Advanced / Downloads.
 2.  **ORA plot** — the bubble plot with a one-line count of nominal pathways.
 3.  **GSEA plot** — the scatter with a one-line count of nominal pathways and how many survive BH correction.
 4.  **Pathway Evidence** — Pathway → EmpiricalCompound → measured features for the Summary pathways that are nominal in ORA and have evidence (a GSEA-only pathway's ORA evidence row stays under Advanced, so it is never read as ORA support). A Mixed EC also shows each feature's annotation and agreement.
@@ -122,7 +122,7 @@ The Summary compares a Mummichog pathway with enrichment on identified metabolit
 | tested | the id appears in at least one of this contrast's identified ORA / QEA / GSEA result tables |
 | supported | at least one tested method has FDR < 0.05 |
 
-Identified-metabolite support reads `Not comparable` (not joinable), `Not tested` (joinable, not tested), the supporting methods such as `ORA + QEA`, or `None` (tested, not supported). Mummichog contribution reads `Not comparable`, `Confirms identified signal` (supported) or `Mummichog-only candidate` (otherwise) — a hypothesis, not a confirmed finding. Nothing here computes a statistic: it reads the existing results (`build_mummichog_summary()`, `R/domain/metabolomics/06h_mummichog_summary.R`).
+Identified-metabolite support reads `Not comparable` (not joinable), `Not tested` (joinable, not tested), the supporting methods such as `ORA + QEA`, or `None` (tested, not supported). Mummichog contribution reads `No nominal Mummichog signal` (neither ORA nor GSEA below `p_cutoff` — a ranked row, never a candidate), then for nominal rows `Not comparable`, `Confirms identified signal` (supported) or `Mummichog-only candidate` (otherwise) — a hypothesis, not a confirmed finding. Nothing here computes a statistic: it reads the existing results (`build_mummichog_summary()`, `R/domain/metabolomics/06h_mummichog_summary.R`).
 
 ## Complementary GSEA (MS peaks-to-pathways)
 

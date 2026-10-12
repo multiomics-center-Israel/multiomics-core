@@ -27,6 +27,9 @@
                              QEA  = "qea_by_contrast",
                              GSEA = "gsea_by_contrast")
 
+# How many pathways each contrast's Summary lists (and exports).
+.MMC_SUMMARY_TOP_N <- 20L
+
 # The Summary columns the report shows; the export carries the rest as well.
 .MMC_SUMMARY_DISPLAY_COLS <- c(
   "Pathway", "Identified-metabolite support", "Mummichog ORA",
@@ -148,10 +151,11 @@ mmc_nominal_sentence <- function(p, p_cutoff, analysis, padj = NULL,
 
 #' Build one contrast's mummichog Summary table
 #'
-#' Keeps the pathways with a nominal mummichog result (ORA `p.value` and/or GSEA
-#' `P.Value` below `p_cutoff`; the two need not agree), orders them by the
-#' smaller of those p-values, and places beside each one what the other results
-#' already say about it.
+#' Ranks every pathway by the smaller of its raw mummichog ORA `p.value` and
+#' GSEA `P.Value` (a missing value counts as `Inf`), keeps the first `top_n`,
+#' and places beside each one what the other results already say about it. A
+#' row need not be significant: `nominal` (ORA or GSEA below `p_cutoff`) says
+#' whether it carries a pathway-level mummichog signal at all.
 #'
 #' Identified-metabolite support and the mummichog contribution follow three
 #' separate questions:
@@ -167,7 +171,8 @@ mmc_nominal_sentence <- function(p, p_cutoff, analysis, padj = NULL,
 #'                                  !tested   -> "Not tested"
 #'                                  supported -> the methods, e.g. "ORA + QEA"
 #'                                  otherwise -> "None"
-#' Mummichog contribution:          !joinable -> "Not comparable"
+#' Mummichog contribution:          !nominal  -> "No nominal Mummichog signal"
+#'                                  !joinable -> "Not comparable"
 #'                                  supported -> "Confirms identified signal"
 #'                                  otherwise -> "Mummichog-only candidate"
 #' }
@@ -183,41 +188,44 @@ mmc_nominal_sentence <- function(p, p_cutoff, analysis, padj = NULL,
 #' @param library_ids Result of `mmc_identified_pathway_library()`.
 #' @param p_cutoff    Nominal threshold (`mummichog.p_cutoff`).
 #' @param fdr         Adjusted-p threshold.
-#' @return A data.frame, one row per qualifying pathway: the
+#' @param top_n       Number of top-ranked pathways to keep.
+#' @return A data.frame, one row per kept pathway in rank order: the
 #'   `.MMC_SUMMARY_DISPLAY_COLS` labels followed by the values behind them
-#'   (`Pathway ID`, `ORA p.value`, `GSEA P.Value`, `GSEA padj`,
-#'   `Supporting ECs`, `Supporting features`, `Identified methods tested`).
-#'   The evidence cells, agreement and counts are filled only for pathways
-#'   nominal in ORA; a GSEA-only pathway reads `Not available — GSEA-only
-#'   signal` even when an ORA evidence row exists for it.
-#'   Zero rows when no pathway qualifies.
+#'   (`Pathway ID`, `Nominal Mummichog signal`, `ORA p.value`, `GSEA P.Value`,
+#'   `GSEA padj`, `Supporting ECs`, `Supporting features`,
+#'   `Identified methods tested`). The evidence cells, agreement and counts are
+#'   filled only for pathways nominal in ORA; a GSEA-only pathway reads
+#'   `Not available — GSEA-only signal` even when an ORA evidence row exists for
+#'   it, and a pathway nominal in neither reads `—`. Zero rows only when there
+#'   are no pathway results at all.
 build_mummichog_summary <- function(ora_table, gsea_table = NULL,
                                     evidence = NULL, pathway_ids = NULL,
                                     identified = NULL,
                                     library_ids = character(0),
-                                    p_cutoff = 0.05, fdr = .MMC_SUMMARY_FDR) {
+                                    p_cutoff = 0.05, fdr = .MMC_SUMMARY_FDR,
+                                    top_n = .MMC_SUMMARY_TOP_N) {
   lookup <- function(tbl, key, col) {
     if (!is.data.frame(tbl) || !col %in% names(tbl)) {
       return(rep(NA_real_, length(key)))
     }
     suppressWarnings(as.numeric(tbl[[col]][match(key, tbl$Pathway)]))
   }
-  all_pw <- unique(c(if (is.data.frame(ora_table)) ora_table$Pathway,
-                     if (is.data.frame(gsea_table)) gsea_table$Pathway))
+  all_pw <- as.character(unique(c(
+    if (is.data.frame(ora_table)) ora_table$Pathway,
+    if (is.data.frame(gsea_table)) gsea_table$Pathway)))
   ora_p  <- lookup(ora_table, all_pw, "p.value")
   gsea_p <- lookup(gsea_table, all_pw, "P.Value")
-  ora_nom  <- !is.na(ora_p) & ora_p < p_cutoff
-  gsea_nom <- !is.na(gsea_p) & gsea_p < p_cutoff
-  keep <- ora_nom | gsea_nom
+  rank_p <- pmin(ifelse(is.na(ora_p), Inf, ora_p),
+                 ifelse(is.na(gsea_p), Inf, gsea_p))
+  keep <- utils::head(order(rank_p, all_pw), top_n)
 
   pw       <- all_pw[keep]
   ora_p    <- ora_p[keep]
   gsea_p   <- gsea_p[keep]
-  ora_nom  <- ora_nom[keep]
   gsea_q   <- lookup(gsea_table, pw, "padj")
-  ord <- order(pmin(ora_p, gsea_p, na.rm = TRUE), pw)
-  pw <- pw[ord]; ora_p <- ora_p[ord]; gsea_p <- gsea_p[ord]
-  ora_nom <- ora_nom[ord]; gsea_q <- gsea_q[ord]
+  ora_nom  <- !is.na(ora_p) & ora_p < p_cutoff
+  gsea_nom <- !is.na(gsea_p) & gsea_p < p_cutoff
+  nominal  <- ora_nom | gsea_nom
   n <- length(pw)
 
   # -- the cross-analysis join, on the exact shared pathway id ---------------
@@ -238,9 +246,12 @@ build_mummichog_summary <- function(ora_table, gsea_table = NULL,
   ident[supported]  <- sig_label[supported]
   ident[!tested]    <- "Not tested"
   ident[!joinable]  <- "Not comparable"
+  # A row without a nominal mummichog signal is ranked, not found: it is never
+  # called a candidate, whatever the identified side says.
   contrib <- rep("Mummichog-only candidate", n)
   contrib[supported] <- "Confirms identified signal"
   contrib[!joinable] <- "Not comparable"
+  contrib[!nominal]  <- "No nominal Mummichog signal"
 
   # -- evidence (ORA-derived) -------------------------------------------------
   ps <- evidence$pathway_summary
@@ -260,7 +271,8 @@ build_mummichog_summary <- function(ora_table, gsea_table = NULL,
   plural  <- function(k, word) sprintf("%d %s%s", as.integer(k), word,
                                        ifelse(k == 1, "", "s"))
   ev_label <- rep("Not available", n)
-  ev_label[!ora_nom] <- "Not available — GSEA-only signal"
+  ev_label[!ora_nom & gsea_nom] <- "Not available — GSEA-only signal"
+  ev_label[!nominal] <- "—"
   agree <- rep(NA_character_, n)
   if (any(has_ev)) {
     ev_label[has_ev] <- paste(plural(n_ec[has_ev], "EC"), "/",
@@ -285,6 +297,7 @@ build_mummichog_summary <- function(ora_table, gsea_table = NULL,
     "Supporting evidence"           = ev_label,
     "Annotation agreement"          = agree,
     "Pathway ID"                    = pid,
+    "Nominal Mummichog signal"      = nominal,
     "ORA p.value"                   = ora_p,
     "GSEA P.Value"                  = gsea_p,
     "GSEA padj"                     = gsea_q,

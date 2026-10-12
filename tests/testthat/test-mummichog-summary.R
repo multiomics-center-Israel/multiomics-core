@@ -10,7 +10,7 @@
 #   P1  ORA nominal, GSEA nominal  -> evidence present
 #   P2  ORA not nominal, GSEA nominal (GSEA-only), yet with an ORA evidence row
 #   P3  ORA nominal only           -> evidence present
-#   P4  nominal nowhere            -> excluded
+#   P4  nominal nowhere            -> ranked last, "No nominal Mummichog signal"
 #   P5  GSEA nominal, no model id  -> not comparable
 summary_fixture <- function() {
   ora <- data.frame(
@@ -83,11 +83,26 @@ test_that("identified support reads ORA, QEA and GSEA only, at FDR < 0.05", {
   expect_equal(nrow(mmc_identified_support(identified_fixture(), "other")), 0)
 })
 
-test_that("only pathways nominal in ORA and/or GSEA are kept, ordered by min p", {
+test_that("every pathway is ranked by min(ORA p, GSEA p), missing as Inf", {
   s <- build_fixture_summary()
-  expect_identical(s$Pathway, c("Path two", "Path one", "Path three", "Path five"))
+  expect_identical(s$Pathway,
+                   c("Path two", "Path one", "Path three", "Path five", "Path four"))
+  expect_identical(s$`Nominal Mummichog signal`, c(TRUE, TRUE, TRUE, TRUE, FALSE))
   expect_identical(names(s)[seq_along(.MMC_SUMMARY_DISPLAY_COLS)],
                    .MMC_SUMMARY_DISPLAY_COLS)
+})
+
+test_that("only the top_n ranked pathways are kept", {
+  f <- summary_fixture()
+  s <- build_mummichog_summary(f$ora, f$gsea, f$evidence, f$ids,
+                               library_ids = "xx00010", top_n = 2)
+  expect_identical(s$Pathway, c("Path two", "Path one"))
+  # Pathways missing from both tables' p-values still rank, last.
+  f$ora$p.value[f$ora$Pathway == "Path four"] <- NA
+  f$gsea$P.Value[f$gsea$Pathway == "Path four"] <- NA
+  s <- build_mummichog_summary(f$ora, f$gsea, f$evidence, f$ids,
+                               library_ids = "xx00010")
+  expect_identical(tail(s$Pathway, 1), "Path four")
 })
 
 test_that("joinable, tested and supported are kept apart", {
@@ -112,6 +127,12 @@ test_that("joinable, tested and supported are kept apart", {
   expect_identical(row_of(s, "Path five")$`Identified-metabolite support`,
                    "Not comparable")
   expect_identical(row_of(s, "Path five")$`Mummichog contribution`, "Not comparable")
+
+  # ranked but not nominal: never a candidate; identified support is unchanged
+  four <- row_of(s, "Path four")
+  expect_identical(four$`Mummichog contribution`, "No nominal Mummichog signal")
+  expect_identical(four$`Identified-metabolite support`, "Not tested")
+  expect_identical(four$`Supporting evidence`, "—")
 })
 
 test_that("an id outside the identified pathway library is not comparable", {
@@ -150,18 +171,30 @@ test_that("missing GSEA reads 'Not run' and the ORA side still works", {
   f <- summary_fixture()
   s <- build_mummichog_summary(f$ora, gsea_table = NULL, evidence = f$evidence,
                                pathway_ids = f$ids, library_ids = "xx00010")
-  expect_identical(s$Pathway, c("Path one", "Path three"))
+  expect_identical(s$Pathway, c("Path one", "Path three", "Path two", "Path four"))
   expect_true(all(s$`Mummichog GSEA` == "Not run"))
   # no identified results supplied: comparable pathways are untested
-  expect_identical(s$`Identified-metabolite support`, c("Not tested", "Not comparable"))
+  expect_identical(s$`Identified-metabolite support`,
+                   c("Not tested", "Not comparable", "Not comparable", "Not comparable"))
+  expect_identical(s$`Mummichog contribution`,
+                   c("Mummichog-only candidate", "Not comparable",
+                     "No nominal Mummichog signal", "No nominal Mummichog signal"))
 })
 
-test_that("no nominal pathway gives a zero-row summary with the full schema", {
+test_that("with no nominal pathway every row says so and none is a candidate", {
   f <- summary_fixture()
   f$ora$p.value <- 0.5
   f$gsea$P.Value <- 0.5
   s <- build_mummichog_summary(f$ora, f$gsea, f$evidence, f$ids,
                                library_ids = "xx00010")
+  expect_equal(nrow(s), 5)
+  expect_false(any(s$`Nominal Mummichog signal`))
+  expect_true(all(s$`Mummichog contribution` == "No nominal Mummichog signal"))
+  expect_true(all(s$`Supporting evidence` == "—"))
+})
+
+test_that("no pathway results at all gives a zero-row summary with the full schema", {
+  s <- build_mummichog_summary(NULL, NULL)
   expect_equal(nrow(s), 0)
   expect_true(all(.MMC_SUMMARY_DISPLAY_COLS %in% names(s)))
 })
