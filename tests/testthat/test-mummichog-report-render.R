@@ -261,7 +261,12 @@ test_that("the mummichog section renders without GSEA or evidence", {
   # than leaving a reader to infer it from a missing tab.
   expect_false(grepl('id="gsea"', html, fixed = TRUE))
   expect_false(grepl('id="supporting-evidence"', html, fixed = TRUE))
-  expect_match(html, "did not run for this report")
+  expect_match(html, "has no results in this report")
+  # And it must NOT assert a cause: a NULL GSEA result means either that the
+  # analysis could not run or that it ran and found nothing, and the section
+  # cannot tell them apart. Naming only the setup causes would report a
+  # legitimate negative result as a misconfiguration.
+  expect_match(html, "no pathway passed the size filter")
 })
 
 test_that("the mummichog section renders with no results at all", {
