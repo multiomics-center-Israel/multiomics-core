@@ -60,7 +60,7 @@
 #'
 #' @param config Full pipeline config.
 #' @return Character vector of pathway ids; empty when no GMT is configured or
-#'   readable.
+#'   readable. A GMT that exists but cannot be read is skipped with a warning.
 mmc_identified_pathway_library <- function(config) {
   gmt <- tryCatch(
     resolve_input_path(config, config$modes$metabolomics$enrichment$gmt_file),
@@ -68,8 +68,16 @@ mmc_identified_pathway_library <- function(config) {
   )
   if (length(gmt) == 0) return(character(0))
   gmt <- gmt[!is.na(gmt) & nzchar(gmt) & file.exists(gmt)]
-  ids <- unlist(lapply(gmt, function(f) names(read_gmt_list(f))),
-                use.names = FALSE)
+  # A GMT that exists but cannot be read must not take the whole report down:
+  # identified-metabolite support is optional, so that library is skipped.
+  ids <- unlist(lapply(gmt, function(f) tryCatch(
+    names(read_gmt_list(f)),
+    error = function(e) {
+      warning("mummichog summary: could not read GMT '", f, "' (",
+              conditionMessage(e), ") — its pathways are treated as not ",
+              "comparable", call. = FALSE)
+      character(0)
+    })), use.names = FALSE)
   unique(as.character(ids))
 }
 

@@ -229,6 +229,13 @@ test_that("the identified pathway library is read from the configured GMT", {
   cfg <- list(modes = list(metabolomics = list(enrichment = list(gmt_file = gmt))))
   expect_setequal(mmc_identified_pathway_library(cfg), c("xx00010", "xx00020"))
   expect_length(mmc_identified_pathway_library(list()), 0)
+
+  # A GMT that exists but cannot be read is skipped with a warning, not fatal.
+  bad <- file.path(dir, "unreadable.gmt")
+  dir.create(bad)
+  cfg$modes$metabolomics$enrichment$gmt_file <- c(bad, gmt)
+  expect_warning(ids <- mmc_identified_pathway_library(cfg), "could not read GMT")
+  expect_setequal(ids, c("xx00010", "xx00020"))
 })
 
 test_that("save_mummichog_exports writes the summary and clears a stale one", {

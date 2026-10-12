@@ -2676,8 +2676,18 @@ for (contrast in names(mummi_sections)) {
 
   # ---- Advanced / Downloads ---------------------------------------------------
   cat("\n\n### Advanced / Downloads\n\n")
-  cat(sprintf("Complete result tables for this contrast. Each table has CSV / Excel buttons; the complete files are also written to `metabolomics/mummichog_pinned/` with the suffix `_%s` (`mummichog_summary`, `mummichog_pathway_table`, `mummichog_gsea_table`, `mummichog_evidence_pathways`, `mummichog_evidence_empirical_compounds`, `mummichog_evidence_features`, each as TSV and CSV).\n\n",
-              s$slug %||% contrast))
+  # Name only the exports save_mummichog_exports() writes for THIS contrast:
+  # GSEA and evidence files exist only when those layers were built.
+  export_stems <- c(
+    if (!is.null(s$summary)) "mummichog_summary",
+    if (!is.null(s$table))   "mummichog_pathway_table",
+    if (!is.null(s$gsea))    "mummichog_gsea_table",
+    if (!is.null(s$evidence)) c("mummichog_evidence_pathways",
+                                "mummichog_evidence_empirical_compounds",
+                                "mummichog_evidence_features"))
+  cat(sprintf("Complete result tables for this contrast. Each table has CSV / Excel buttons; the complete files are also written to `metabolomics/mummichog_pinned/` with the suffix `_%s` (%s, each as TSV and CSV).\n\n",
+              s$slug %||% contrast,
+              paste0("`", export_stems, "`", collapse = ", ")))
 
   if (!is.null(s$table)) {
     advanced_block("Full Mummichog ORA table", function() {
@@ -2825,7 +2835,7 @@ if (length(mummi_sections) > 0) {
 if (any(vapply(mummi_sections, function(s) !is.null(s$summary), logical(1)))) {
   files_tbl <- rbind(files_tbl, data.frame(
     File = "metabolomics/mummichog_pinned/mummichog_summary_*",
-    Description = "Mummichog Summary per contrast: nominal ORA/GSEA pathways with identified-metabolite support, contribution and evidence counts (TSV/CSV)",
+    Description = "Mummichog Summary per contrast: the top-ranked pathways by min(ORA p, GSEA p), including rows without a nominal signal (flagged), with identified-metabolite support, contribution and evidence counts (TSV/CSV)",
     stringsAsFactors = FALSE))
 }
 if (has_gsea) {

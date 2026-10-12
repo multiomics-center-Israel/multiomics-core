@@ -292,7 +292,9 @@ test_that("the mummichog section renders with GSEA and evidence", {
   expect_match(ev_tab, "feat_1")
   expect_false(grepl("E2 — Match", ev_tab, fixed = TRUE))
 
-  # Advanced keeps every full table.
+  # Advanced keeps every full table, and names the exports that were written.
+  expect_match(html, "`mummichog_gsea_table`|<code>mummichog_gsea_table</code>")
+  expect_match(html, "<code>mummichog_evidence_features</code>", fixed = TRUE)
   expect_match(html, "Full Mummichog ORA table", fixed = TRUE)
   expect_match(html, "Full Mummichog GSEA table", fixed = TRUE)
   expect_match(html, "Pathway evidence summary (all pathways)", fixed = TRUE)
@@ -336,6 +338,10 @@ test_that("the mummichog section renders without GSEA or evidence", {
 
   # Evidence is simply absent, and the methodology says why GSEA is.
   expect_false(grepl('id="pathway-evidence"', html, fixed = TRUE))
+  # Advanced names only exports that exist for this contrast.
+  expect_match(html, "<code>mummichog_summary</code>", fixed = TRUE)
+  expect_false(grepl("mummichog_gsea_table", html, fixed = TRUE))
+  expect_false(grepl("mummichog_evidence_", html, fixed = TRUE))
   expect_match(html, "has no results in this report")
   # It must NOT assert a cause: a NULL GSEA result means either that the
   # analysis could not run or that it ran and found nothing.
