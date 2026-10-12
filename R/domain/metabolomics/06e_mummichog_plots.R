@@ -387,6 +387,48 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
   sections
 }
 
+#' Clear GSEA exports belonging to contrasts that produced no report section
+#'
+#' `save_mummichog_exports()` clears a contrast's stale GSEA files by name, but
+#' it only runs for contrasts that HAVE a section. A contrast the mummichog
+#' stage ran whose ORA table is absent or unplottable produces no section, so
+#' nothing clears its GSEA exports and a previous run's table survives on disk
+#' reading as current.
+#'
+#' Deliberately narrow: it removes only the four GSEA files, only for contrasts
+#' with no live section, and never a slug a live section owns. Where two
+#' contrasts sanitise to the same slug it skips rather than guesses, so the
+#' failure mode is a leftover file, never a deleted live one. Whether such a
+#' contrast should get a GSEA analysis at all is a separate question about the
+#' section contract, tracked rather than decided here.
+#'
+#' @param files    Flat character vector of every mummichog output file.
+#' @param sections The sections from `build_mummichog_report_sections()`.
+#' @param out_dir  Metabolomics mode output directory.
+#' @return Character vector of the files removed (may be empty).
+clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
+  if (length(files) == 0) return(character(0))
+  groups <- group_mummichog_files_by_contrast(files)
+  if (length(groups) == 0) return(character(0))
+
+  live <- vapply(sections, function(s) s$slug %||% NA_character_, character(1),
+                 USE.NAMES = FALSE)
+  live <- live[!is.na(live)]
+  # Same sanitise the slugs are built from, so the two sides are comparable.
+  orphans <- setdiff(gsub("[^A-Za-z0-9]+", "_", names(groups)), live)
+  if (length(orphans) == 0) return(character(0))
+
+  dest_dir <- file.path(out_dir, "mummichog_pinned")
+  paths <- unlist(lapply(orphans, function(slug) c(
+    file.path(dest_dir, paste0("mummichog_gsea_table_", slug, c(".tsv", ".csv"))),
+    file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf")))
+  )), use.names = FALSE)
+
+  gone <- paths[file.exists(paths)]
+  unlink(gone)
+  gone
+}
+
 #' Save the mummichog report plot and table as standalone files
 #'
 #' Writes the presentation exports for the pinned mummichog stage into the

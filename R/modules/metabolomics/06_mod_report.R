@@ -166,6 +166,14 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
                                                   evidence  = s$evidence))
     }
 
+    # A contrast the stage ran but that produced no section never reaches the
+    # loop above, so the by-name GSEA clearing inside save_mummichog_exports()
+    # never runs for it and a previous run's table would survive. Clearing is
+    # safe for those contrasts because there is nothing of theirs to keep;
+    # whether they should get a GSEA analysis at all is a section-contract
+    # question, tracked separately.
+    clear_orphan_mummichog_gsea_exports(mummichog_files, mummi_sections, out_dir)
+
     render_params <- list(
 
         pre                = pre,

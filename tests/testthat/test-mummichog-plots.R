@@ -391,3 +391,51 @@ test_that("the evidence and GSEA cleanups coexist in one call", {
   expect_false(file.exists(gs_tsv))
   expect_true(file.exists(path_tsv))
 })
+
+test_that("a contrast with no section still loses its stale GSEA exports", {
+  root <- withr::local_tempdir()
+  out  <- withr::local_tempdir()
+  dest <- file.path(out, "mummichog_pinned")
+  dir.create(dest, recursive = TRUE, showWarnings = FALSE)
+
+  f <- build_gsea_fixture(root)          # one contrast: HL_vs_LL
+
+  # A previous run's GSEA exports for that contrast, left behind because this
+  # run produced no section for it (no plottable ORA table, so the section
+  # loop never visits it and never clears them by name).
+  stale <- file.path(dest, c("mummichog_gsea_table_HL_vs_LL.tsv",
+                             "mummichog_gsea_table_HL_vs_LL.csv",
+                             "mummichog_gsea_scatter_HL_vs_LL.png",
+                             "mummichog_gsea_scatter_HL_vs_LL.pdf"))
+  file.create(stale)
+  # Exports of other kinds, and of other contrasts, must survive.
+  keep <- file.path(dest, c("mummichog_pathway_table_HL_vs_LL.tsv",
+                            "mummichog_evidence_pathways_HL_vs_LL.tsv",
+                            "mummichog_gsea_table_OTHER.tsv"))
+  file.create(keep)
+
+  gone <- clear_orphan_mummichog_gsea_exports(f$files, list(), out)
+
+  expect_setequal(gone, stale)
+  expect_false(any(file.exists(stale)))
+  expect_true(all(file.exists(keep)))
+})
+
+test_that("a live section's GSEA exports are never cleared as orphans", {
+  root <- withr::local_tempdir()
+  out  <- withr::local_tempdir()
+  dest <- file.path(out, "mummichog_pinned")
+  dir.create(dest, recursive = TRUE, showWarnings = FALSE)
+
+  f <- build_gsea_fixture(root)
+  live <- file.path(dest, "mummichog_gsea_table_HL_vs_LL.tsv")
+  file.create(live)
+
+  # The same contrast DOES have a section this run, so its exports are the
+  # section's to manage -- deleting them here would remove a current result.
+  gone <- clear_orphan_mummichog_gsea_exports(
+    f$files, list(HL_vs_LL = list(slug = "HL_vs_LL")), out)
+
+  expect_length(gone, 0L)
+  expect_true(file.exists(live))
+})
