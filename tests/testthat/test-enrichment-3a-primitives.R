@@ -15,6 +15,7 @@ test_that("empty manifest/index have the canonical column schema", {
     expect_s3_class(m, "data.frame")
     expect_equal(nrow(m), 0L)
     expect_identical(colnames(m), c("analysis", "database", "group", "item",
+                                    "subgroup", "group_type", "group_label",
                                     "evaluated", "status", "n_significant",
                                     "has_simplify", "storage_key"))
 
@@ -29,9 +30,10 @@ test_that("empty manifest/index have the canonical column schema", {
 # .build_ora_manifest_rows — three-state granularity
 # ===========================================================================
 
-test_that("partition manifest has one row per evaluated cluster, incl. n_significant = 0", {
-    # Evaluated clusters 1, 2, 3 (from the gene-list); the result table only has
-    # significant terms for clusters 1 and 2 -> cluster 3 must appear with 0.
+test_that("partition manifest has one row per evaluated cluster + a Compare row", {
+    # §17 R2: Evaluated clusters 1, 2, 3 (from the gene-list); the result table
+    # only has significant terms for clusters 1 and 2 -> cluster 3 appears with 0.
+    # With >= 2 evaluated clusters a "compare" row (whole table) is also emitted.
     clusters <- setNames(c(1, 1, 2, 2, 3, 3), paste0("g", 1:6))
     main_df  <- data.frame(
         Cluster     = c("1", "1", "2"),
@@ -44,21 +46,37 @@ test_that("partition manifest has one row per evaluated cluster, incl. n_signifi
         main_df = main_df, has_simplify = TRUE, clusters = clusters,
         storage_key = "GO_BP_partition_k_ora")
 
-    expect_setequal(rows$item, c("1", "2", "3"))
+    expect_setequal(rows$item, c("1", "2", "3", "compare"))
     expect_true(all(rows$analysis == "ORA"))
     expect_true(all(rows$group == "partition"))
+    expect_true(all(rows$group_type == "partition"))
+    expect_true(all(is.na(rows$subgroup)))      # partition has no subgroup level
     expect_true(all(rows$evaluated))
     expect_true(all(rows$has_simplify))
     expect_equal(rows$n_significant[rows$item == "1"], 2L)
     expect_equal(rows$n_significant[rows$item == "2"], 1L)
     expect_equal(rows$n_significant[rows$item == "3"], 0L)  # evaluated-but-empty
+    expect_equal(rows$n_significant[rows$item == "compare"], 3L)  # whole table
+    expect_equal(rows$group_label[rows$item == "1"], "Cluster 1")
+    expect_equal(rows$group_label[rows$item == "compare"], "Compare Clusters")
     expect_true(all(rows$storage_key == "GO_BP_partition_k_ora"))
     # ORA is always a successful evaluation: "significant" / "empty", never "failed"
     expect_equal(rows$status[rows$item == "1"], "significant")
     expect_equal(rows$status[rows$item == "3"], "empty")
 })
 
-test_that("binary_patterns manifest has one row per evaluated pattern", {
+test_that("partition with a single evaluated cluster emits NO compare row", {
+    clusters <- setNames(c(1, 1), c("g1", "g2"))
+    main_df  <- data.frame(Cluster = "1", ID = "path1", stringsAsFactors = FALSE)
+    rows <- .build_ora_manifest_rows(
+        collection = "partition", round = "k", db_name = "GO_BP",
+        main_df = main_df, has_simplify = TRUE, clusters = clusters,
+        storage_key = "GO_BP_partition_k_ora")
+    expect_equal(rows$item, "1")           # only the single cluster
+    expect_false("compare" %in% rows$item) # compare needs >= 2 groups
+})
+
+test_that("binary_patterns manifest has one row per pattern + a Compare row", {
     clusters <- setNames(c("01", "01", "10", "11"), paste0("g", 1:4))
     main_df  <- data.frame(Cluster = c("01"), ID = "path1", stringsAsFactors = FALSE)
     rows <- .build_ora_manifest_rows(
@@ -66,31 +84,73 @@ test_that("binary_patterns manifest has one row per evaluated pattern", {
         main_df = main_df, has_simplify = FALSE, clusters = clusters,
         storage_key = "KEGG_binary_patterns_best_ora")
 
-    expect_setequal(rows$item, c("01", "10", "11"))
+    expect_setequal(rows$item, c("01", "10", "11", "compare"))
+    expect_true(all(rows$group_type == "pattern"))
+    expect_true(all(is.na(rows$subgroup)))
     expect_equal(rows$n_significant[rows$item == "01"], 1L)
     expect_equal(rows$n_significant[rows$item == "10"], 0L)
     expect_equal(rows$n_significant[rows$item == "11"], 0L)
+    expect_equal(rows$n_significant[rows$item == "compare"], 1L)  # whole table
+    expect_equal(rows$group_label[rows$item == "01"], "Pattern 01")
+    expect_equal(rows$group_label[rows$item == "compare"], "Compare Patterns")
     expect_false(any(rows$has_simplify))
 })
 
-test_that("contrasts / all_DE manifest is a single row keyed by the round", {
+test_that("contrasts manifest expands to Up / Down / Up+Down subgroups", {
+    # §17 R2 LOCKED: contrasts -> group='contrasts', item=<contrast>, three
+    # subgroups. up = Cluster=='up', down = Cluster=='down', up_down = whole table.
     main_df <- data.frame(Cluster = c("up", "down", "up"),
                           ID = c("a", "b", "c"), stringsAsFactors = FALSE)
-    r1 <- .build_ora_manifest_rows(
+    rows <- .build_ora_manifest_rows(
         collection = "contrasts", round = "M_HFD.vs.NC", db_name = "GO_BP",
         main_df = main_df, has_simplify = TRUE, clusters = NULL,
         storage_key = "GO_BP_contrasts_M_HFD.vs.NC_ora")
-    expect_equal(nrow(r1), 1L)
-    expect_equal(r1$item, "M_HFD.vs.NC")
-    expect_equal(r1$n_significant, 3L)   # total rows across up/down
 
-    r2 <- .build_ora_manifest_rows(
+    expect_equal(nrow(rows), 3L)
+    expect_true(all(rows$group == "contrasts"))
+    expect_true(all(rows$item == "M_HFD.vs.NC"))     # contrast in `item`, not overloaded
+    expect_true(all(rows$group_type == "direction"))
+    expect_setequal(rows$subgroup, c("up", "down", "up_down"))
+    expect_equal(rows$n_significant[rows$subgroup == "up"], 2L)
+    expect_equal(rows$n_significant[rows$subgroup == "down"], 1L)
+    expect_equal(rows$n_significant[rows$subgroup == "up_down"], 3L)  # whole table
+    expect_equal(rows$group_label[rows$subgroup == "up_down"], "Up + Down")
+    expect_true(all(rows$storage_key == "GO_BP_contrasts_M_HFD.vs.NC_ora"))
+})
+
+test_that("contrasts_wo_direction is the 'all' subgroup of the SAME contrast, distinct key", {
+    # §17 R2 LOCKED: All == existing contrasts_wo_direction result; up_down != all
+    # (different storage_keys — with- vs without-direction tables).
+    main_df <- data.frame(Cluster = c("all", "all", "all", "all"),
+                          ID = letters[1:4], stringsAsFactors = FALSE)
+    rows <- .build_ora_manifest_rows(
+        collection = "contrasts_wo_direction", round = "M_HFD.vs.NC",
+        db_name = "GO_BP", main_df = main_df, has_simplify = TRUE,
+        clusters = NULL, storage_key = "GO_BP_contrasts_wo_direction_M_HFD.vs.NC_ora")
+
+    expect_equal(nrow(rows), 1L)
+    expect_equal(rows$group, "contrasts")          # merged under the contrast group
+    expect_equal(rows$item, "M_HFD.vs.NC")
+    expect_equal(rows$subgroup, "all")
+    expect_equal(rows$group_type, "direction")
+    expect_equal(rows$group_label, "All")
+    expect_equal(rows$n_significant, 4L)
+    # the wo_direction table has its OWN storage_key, != the up_down (with-dir) key
+    expect_equal(rows$storage_key, "GO_BP_contrasts_wo_direction_M_HFD.vs.NC_ora")
+    expect_false(identical(rows$storage_key, "GO_BP_contrasts_M_HFD.vs.NC_ora"))
+})
+
+test_that("all_DE manifest is a single subgroup-less row keyed by the round", {
+    r <- .build_ora_manifest_rows(
         collection = "all_DE", round = "any_contrast", db_name = "KEGG",
         main_df = NULL, has_simplify = FALSE, clusters = NULL,
         storage_key = "KEGG_all_DE_any_contrast_ora")
-    expect_equal(nrow(r2), 1L)
-    expect_equal(r2$item, "any_contrast")
-    expect_equal(r2$n_significant, 0L)   # evaluated but empty
+    expect_equal(nrow(r), 1L)
+    expect_equal(r$item, "any_contrast")
+    expect_true(is.na(r$subgroup))
+    expect_true(is.na(r$group_type))
+    expect_equal(r$group_label, "All DE")
+    expect_equal(r$n_significant, 0L)   # evaluated but empty
 })
 
 # ===========================================================================

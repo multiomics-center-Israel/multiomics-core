@@ -41,13 +41,19 @@ make_pathway_res_3c <- function() {
             GO_BP_partition_k_ora_simplify = ora_go),
         c1 = list(KEGG_gsea_fc = gsea_kegg))
     manifest <- rbind(
-        data.frame(analysis="GSEA",database="KEGG",group="fc",item="c1",evaluated=TRUE,
+        data.frame(analysis="GSEA",database="KEGG",group="fc",item="c1",
+                   subgroup=NA_character_,group_type=NA_character_,group_label=NA_character_,
+                   evaluated=TRUE,
                    status="significant",n_significant=2L,has_simplify=FALSE,
                    storage_key="KEGG_gsea_fc",stringsAsFactors=FALSE),
-        data.frame(analysis="GSEA",database="GO_MF",group="fc",item="c1",evaluated=FALSE,
+        data.frame(analysis="GSEA",database="GO_MF",group="fc",item="c1",
+                   subgroup=NA_character_,group_type=NA_character_,group_label=NA_character_,
+                   evaluated=FALSE,
                    status="failed",n_significant=NA_integer_,has_simplify=FALSE,
                    storage_key="GO_MF_gsea_fc",stringsAsFactors=FALSE),
-        data.frame(analysis="ORA",database="GO_BP",group="partition",item="2",evaluated=TRUE,
+        data.frame(analysis="ORA",database="GO_BP",group="partition",item="2",
+                   subgroup=NA_character_,group_type="partition",group_label="Cluster 2",
+                   evaluated=TRUE,
                    status="significant",n_significant=1L,has_simplify=TRUE,
                    storage_key="GO_BP_partition_k_ora",stringsAsFactors=FALSE))
     index <- rbind(
