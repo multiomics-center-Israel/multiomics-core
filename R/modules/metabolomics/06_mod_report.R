@@ -77,9 +77,10 @@ mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
 #' @param out_dir         Output directory for this mode.
 #' @param mummichog_files Flat character vector of every mummichog output file
 #'   across all contrasts (`metab_mummichog_report_files`). Supplying it
-#'   activates the supporting-evidence layer, which reads the EmpiricalCompound
-#'   tables the pathway tables alone do not carry; omit it and the report shows
-#'   the ORA plot and table only.
+#'   activates the supporting-evidence layer and the complementary GSEA, both of
+#'   which read the EmpiricalCompound tables the pathway tables alone do not
+#'   carry; omit it and the report shows the ORA plot and table only. GSEA
+#'   additionally needs `de_res`, whose `method` decides the ranking statistic.
 #' @return Character path to the rendered HTML file.
 mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     clustering_res = NULL,
@@ -139,13 +140,17 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
     # `mummichog_files` and pre$row_data additionally activate the supporting-
     # evidence layer (06f); without either, sections carry evidence = NULL and
     # the report simply omits that tab.
+    # `de_res` activates the complementary GSEA (06g): it supplies both the
+    # ranking statistic and the DE method that decides which column that is.
     mummi_sections <- build_mummichog_report_sections(
         mummichog_pathways, config,
         files    = mummichog_files,
-        row_data = pre$row_data)
+        row_data = pre$row_data,
+        de_res   = de_res)
 
-    # Save standalone presentation exports per contrast (PNG + PDF plot, TSV +
-    # CSV table, plus the three evidence tables when built) into
+    # Save standalone presentation exports per contrast (plots as PNG + PDF,
+    # tables as TSV + CSV: the ORA bubble and pathway table, the GSEA scatter
+    # and table, and the three evidence tables when built) into
     # mummichog_pinned/, named by the section's de-duplicated
     # slug (so labels that collapse to the same token don't overwrite each
     # other), in addition to embedding them in the HTML. The engine's mcg_*
@@ -156,7 +161,9 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         mummi_exports <- c(mummi_exports,
                            save_mummichog_exports(s$plot, s$table, out_dir,
                                                   contrast_label = s$slug,
-                                                  evidence = s$evidence))
+                                                  gsea      = s$gsea,
+                                                  gsea_plot = s$gsea_plot,
+                                                  evidence  = s$evidence))
     }
 
     render_params <- list(
