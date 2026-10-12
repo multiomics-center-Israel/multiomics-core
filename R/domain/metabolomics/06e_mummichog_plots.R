@@ -340,7 +340,14 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
             # THE critical argument: without it the engine will not trust the
             # generic `statistic` column and every limma run silently ranks on
             # logFC. See mmc_gsea_rank_metric().
-            de_method = de_res$method,
+            #
+            # Guarded on the shape: in the bare-data.frame fallback above,
+            # `de_res$method` would be a COLUMN if one happened to be named
+            # `method`, and the engine would take its first value as the DE
+            # method. A legacy table carries no method, so NULL is both the
+            # honest answer and the safe one -- the engine then ranks on logFC
+            # and says why.
+            de_method = if (is.data.frame(de_res)) NULL else de_res$method,
             # MetaboAnalyst-equivalent defaults unless the config overrides
             # them, in which case run_mummichog_gsea() records the deviation.
             n_perm   = mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm,
@@ -356,9 +363,12 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
         )
       }
     }
+    # Same cutoff the ORA plot and the report's figure legends use: the legend
+    # states the value from config, so a scatter drawn at the function default
+    # would put its dashed line somewhere the caption does not claim.
     gsea_plot <- if (is.null(gsea)) NULL else
       plot_mummichog_gsea_scatter(gsea$table, title = ttl$title,
-                                  subtitle = ttl$subtitle)
+                                  subtitle = ttl$subtitle, p_cutoff = p_cut)
 
     sections[[contrast]] <- list(title = ttl$title, subtitle = ttl$subtitle,
                                  plot = plot, table = tbl,

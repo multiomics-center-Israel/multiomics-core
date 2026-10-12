@@ -341,3 +341,28 @@ test_that("save_mummichog_exports writes and then clears the GSEA files", {
   expect_false(file.exists(gsea_tsv))
   expect_true(file.exists(pathway_tsv))
 })
+
+test_that("the GSEA scatter is drawn at the configured p cutoff", {
+  skip_unless_gsea_deps()
+  fx <- gsea_wiring_fixture(withr::local_tempdir())
+  fx$config$modes$metabolomics$enrichment$mummichog$p_cutoff <- 0.2
+
+  s <- build_mummichog_report_sections(
+    fx$pathways, fx$config, files = fx$files, de_res = fx$de_res,
+    model = fx$model)[["HL_vs_LL"]]
+
+  # The report's figure legend quotes the cutoff from config, so a scatter
+  # drawn at the function default would caption a line it did not draw.
+  ref <- plot_mummichog_gsea_scatter(s$gsea$table, title = s$title,
+                                     subtitle = s$subtitle, p_cutoff = 0.2)
+  other <- plot_mummichog_gsea_scatter(s$gsea$table, title = s$title,
+                                       subtitle = s$subtitle, p_cutoff = 0.05)
+  yint <- function(p) {
+    vapply(p$layers, function(l) {
+      v <- l$data$yintercept
+      if (is.null(v)) NA_real_ else as.numeric(v)[1]
+    }, numeric(1))
+  }
+  expect_equal(yint(s$gsea_plot), yint(ref))
+  expect_false(isTRUE(all.equal(yint(s$gsea_plot), yint(other))))
+})
