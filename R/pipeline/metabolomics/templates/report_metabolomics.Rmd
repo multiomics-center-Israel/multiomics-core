@@ -2451,7 +2451,12 @@ cat(sprintf("- **ORA (mummichog)** tests the features that clear the significanc
 if (has_gsea) {
   cat("- **GSEA (MS peaks-to-pathways)** uses the **complete ranked EmpiricalCompound list with no significance cutoff** and asks whether a pathway's ECs sit systematically at one end of that ranking. It reports ES / NES / raw p-value / BH-adjusted p-value, and can reach pathways whose ECs shift coherently without any single feature clearing the cutoff.\n\n")
 } else {
-  cat("- **GSEA (MS peaks-to-pathways)** did not run for this report. It needs `fgsea`, a readable metabolic model (`model_ref` / `model_json`) and a DE table for the contrast; it is also switchable via `gsea_enabled`. Only the ORA analysis is shown.\n\n")
+  # Deliberately does NOT assert a cause. A NULL GSEA result means either that
+  # the analysis could not run (missing fgsea, model, DE table, or the switch
+  # off) OR that it ran and no pathway passed the size filter -- a legitimate
+  # negative result. The section cannot tell them apart, so it names both
+  # rather than reporting a finding about the data as a setup omission.
+  cat("- **GSEA (MS peaks-to-pathways)** has no results in this report. Either it could not run -- it needs `fgsea`, a readable metabolic model (`model_ref` / `model_json`) and a DE table for the contrast, and is switchable via `gsea_enabled` -- or it ran and no pathway passed the size filter. The console log for the run distinguishes the two. Only the ORA analysis is shown.\n\n")
 }
 
 cat("**Parameters:**\n\n")
@@ -2460,16 +2465,36 @@ cat(sprintf("- Mass tolerance: %d ppm\n", ppm))
 cat(sprintf("- Permutations: %d\n\n", n_perm))
 
 if (has_gsea) {
+  # Provenance is per RESULT, not per config: the ranking statistic can fall
+  # back for one contrast and not another, and deviations like the
+  # single-permutable-pathway branch are data-dependent. Describing every
+  # contrast from mummi_gsea[[1]] would state a provenance the others may not
+  # share, so every distinct value is listed and anything that varies is
+  # labelled as varying.
+  distinct_of <- function(f) unique(unlist(lapply(mummi_gsea, f),
+                                           use.names = FALSE))
+
+  metrics <- distinct_of(function(g) g$metric_label)
+  cat(sprintf("- GSEA ranking statistic: %s\n",
+              if (length(metrics) == 1L) metrics else
+                paste0("varies by contrast — ", paste(metrics, collapse = "; "),
+                       " (each contrast's GSEA tab names its own)")))
+
   g1 <- mummi_gsea[[1]]
-  cat(sprintf("- GSEA ranking statistic: %s\n", g1$metric_label))
   cat(sprintf("- GSEA engine: MetaboAnalystR Peaks-to-Pathways semantics (%s @ `%s`), EmpiricalCompound-space gene sets\n",
               g1$reference$repo, g1$reference$commit))
-  cat(sprintf("- GSEA settings: minSize = %s, maxSize = %s, %s permutations, seed %s\n",
-              g1$params$min_size, g1$params$max_size,
-              g1$params$n_perm, g1$params$seed))
-  if (length(g1$deviations) > 0) {
+
+  # Settings come from one config, so they are shared -- but say so from the
+  # results rather than assuming it.
+  settings <- distinct_of(function(g) sprintf(
+    "minSize = %s, maxSize = %s, %s permutations, seed %s",
+    g$params$min_size, g$params$max_size, g$params$n_perm, g$params$seed))
+  cat(sprintf("- GSEA settings: %s\n", paste(settings, collapse = " | ")))
+
+  devs <- distinct_of(function(g) g$deviations)
+  if (length(devs) > 0) {
     cat(sprintf("- **GSEA deviations from the reference implementation:** %s\n",
-                paste(g1$deviations, collapse = "; ")))
+                paste(devs, collapse = "; ")))
   }
   cat("\n")
   cat("**Reading NES.** ", g1$nes_note, "\n\n", sep = "")
@@ -2509,6 +2534,15 @@ for (contrast in names(mummi_sections)) {
     cat(sprintf("GSEA over the **complete** ranked list of %d EmpiricalCompounds (no significance cutoff), ranked by the %s. `P.Value` is the raw permutation p-value and `padj` its Benjamini-Hochberg adjustment over the %d tested pathways.\n\n",
                 s$gsea$n_ec, s$gsea$metric_label, s$gsea$n_pathways))
     cat("**Reading NES.** ", s$gsea$nes_note, "\n\n", sep = "")
+
+    # This contrast's own departures from the reference defaults. Some are
+    # data-dependent (the single-permutable-pathway branch, pathways tested
+    # but not permuted), so they can differ between contrasts of one run and
+    # belong here rather than only in the shared methodology block.
+    if (length(s$gsea$deviations) > 0) {
+      cat(sprintf("**Deviations from the reference implementation for this contrast:** %s\n\n",
+                  paste(s$gsea$deviations, collapse = "; ")))
+    }
 
     if (!is.null(s$gsea_plot)) {
       safe_print_plot(s$gsea_plot)

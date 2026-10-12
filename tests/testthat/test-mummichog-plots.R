@@ -366,3 +366,28 @@ test_that("the GSEA scatter is drawn at the configured p cutoff", {
   expect_equal(yint(s$gsea_plot), yint(ref))
   expect_false(isTRUE(all.equal(yint(s$gsea_plot), yint(other))))
 })
+
+test_that("the evidence and GSEA cleanups coexist in one call", {
+  out <- withr::local_tempdir()
+  dest <- file.path(out, "mummichog_pinned")
+
+  tbl  <- data.frame(Pathway = "P", stringsAsFactors = FALSE)
+  evid <- list(pathway_summary = tbl, ec_table = tbl, feature_table = tbl)
+  gsea <- list(table = tbl)
+
+  first <- save_mummichog_exports(NULL, tbl, out, contrast_label = "C",
+                                  gsea = gsea, evidence = evid)
+  ev_tsv   <- file.path(dest, "mummichog_evidence_pathways_C.tsv")
+  gs_tsv   <- file.path(dest, "mummichog_gsea_table_C.tsv")
+  path_tsv <- file.path(dest, "mummichog_pathway_table_C.tsv")
+  expect_true(all(file.exists(ev_tsv, gs_tsv, path_tsv)))
+  expect_true(all(c(ev_tsv, gs_tsv) %in% first))
+
+  # A rerun with neither must clear BOTH sets. Adding the GSEA cleanup once
+  # replaced the evidence one instead of sitting beside it, which left stale
+  # evidence tables on disk reading as current; this pins that they coexist.
+  save_mummichog_exports(NULL, tbl, out, contrast_label = "C")
+  expect_false(file.exists(ev_tsv))
+  expect_false(file.exists(gs_tsv))
+  expect_true(file.exists(path_tsv))
+})

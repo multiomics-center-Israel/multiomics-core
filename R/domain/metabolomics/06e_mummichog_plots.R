@@ -450,6 +450,8 @@ save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL,
                  "mummichog_evidence_empirical_compounds",
                  "mummichog_evidence_features"), each = 2),
            suffix, c(".tsv", ".csv")))
+  unlink(evidence_exports[file.exists(evidence_exports)])
+
   # Same reasoning, same by-name discipline, for this contrast's GSEA exports:
   # GSEA can legitimately vanish from a rerun (switched off, no DE table for the
   # contrast, no pathway through the size filter) and the stale table would read
