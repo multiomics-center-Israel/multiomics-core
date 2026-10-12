@@ -182,3 +182,162 @@ test_that("build_mummichog_report_sections returns empty list on NULL/empty inpu
   expect_length(build_mummichog_report_sections(list(), cfg), 0)
   expect_length(build_mummichog_report_sections(list(a = NULL), cfg), 0)
 })
+
+
+# ---- GSEA integration (06g wired into the 06e section/export machinery) ----
+#
+# These exercise the wiring, not the statistics: that the engine is called with
+# the right arguments, that its results travel on the section without changing
+# what was already there, and that each way of not running it is distinguishable
+# from the others. The engine's own behaviour is covered by test-mummichog-gsea.R.
+
+# The shared fixture builds a faithful v2 result tree plus a matching model and
+# DE table; read the pathway tables back the way the pipeline does.
+gsea_wiring_fixture <- function(root, method = "limma") {
+  f <- build_gsea_fixture(root)
+  list(
+    pathways = read_mummichog_pathways_by_contrast(f$files),
+    files    = f$files,
+    model    = f$model,
+    de_res   = list(de_tables = list(HL_vs_LL = f$de_table), method = method),
+    config   = list(modes = list(metabolomics = list(
+      enrichment = list(mummichog = list(enabled = TRUE, p_cutoff = 0.05)))))
+  )
+}
+
+skip_unless_gsea_deps <- function() {
+  for (pkg in c("fgsea", "fastmatch", "data.table", "BiocParallel")) {
+    skip_if_not_installed(pkg)
+  }
+}
+
+test_that("GSEA is attached per contrast without disturbing the ORA fields", {
+  skip_unless_gsea_deps()
+  fx <- gsea_wiring_fixture(withr::local_tempdir())
+
+  secs <- build_mummichog_report_sections(
+    fx$pathways, fx$config, files = fx$files, de_res = fx$de_res,
+    model = fx$model)
+
+  s <- secs[["HL_vs_LL"]]
+  expect_false(is.null(s$gsea))
+  expect_false(is.null(s$gsea_plot))
+  expect_s3_class(s$gsea_plot, "ggplot")
+
+  # `plot` is still the ORA bubble, not the GSEA scatter: the Shiny payload
+  # carries this field and its meaning must not change.
+  expect_s3_class(s$plot, "ggplot")
+  bubble <- plot_mummichog_bubble(fx$pathways[["HL_vs_LL"]], title = s$title,
+                                  subtitle = s$subtitle, p_cutoff = 0.05)
+  expect_identical(s$plot$labels, bubble$labels)
+  expect_false(identical(s$plot$labels, s$gsea_plot$labels))
+
+  # And the ORA table is untouched by GSEA running.
+  expect_identical(s$table, build_mummichog_pathway_table(fx$pathways[["HL_vs_LL"]]))
+})
+
+test_that("the DE method decides the ranking statistic, not the column name", {
+  skip_unless_gsea_deps()
+  root <- withr::local_tempdir()
+
+  # limma puts a SIGNED moderated t in `statistic`, so GSEA ranks on it.
+  lim <- gsea_wiring_fixture(file.path(root, "limma"), method = "limma")
+  s_lim <- build_mummichog_report_sections(
+    lim$pathways, lim$config, files = lim$files, de_res = lim$de_res,
+    model = lim$model)[["HL_vs_LL"]]
+  expect_identical(s_lim$gsea$metric, "t_statistic")
+  expect_identical(s_lim$gsea$de_method, "limma")
+
+  # wilcoxon puts an UNSIGNED rank-sum W in the SAME column, so ranking on it
+  # would order by magnitude with no direction while claiming a t statistic.
+  wil <- gsea_wiring_fixture(file.path(root, "wilcox"), method = "wilcoxon")
+  s_wil <- build_mummichog_report_sections(
+    wil$pathways, wil$config, files = wil$files, de_res = wil$de_res,
+    model = wil$model)[["HL_vs_LL"]]
+  expect_identical(s_wil$gsea$metric, "logFC")
+  expect_match(s_wil$gsea$metric_label, "unsigned rank-sum")
+
+  # The fixtures differ only in de_res$method, so this is the method deciding.
+  expect_false(identical(s_lim$gsea$metric, s_wil$gsea$metric))
+})
+
+test_that("omitting de_res skips GSEA but keeps ORA and evidence", {
+  skip_unless_gsea_deps()
+  fx <- gsea_wiring_fixture(withr::local_tempdir())
+
+  # The unwired default: no DE table at all means no trustworthy ranking.
+  s <- build_mummichog_report_sections(
+    fx$pathways, fx$config, files = fx$files, model = fx$model)[["HL_vs_LL"]]
+
+  expect_null(s$gsea)
+  expect_null(s$gsea_plot)
+  expect_s3_class(s$plot, "ggplot")
+  expect_false(is.null(s$table))
+})
+
+test_that("gsea_enabled = FALSE runs the ORA alone", {
+  skip_unless_gsea_deps()
+  fx <- gsea_wiring_fixture(withr::local_tempdir())
+  fx$config$modes$metabolomics$enrichment$mummichog$gsea_enabled <- FALSE
+
+  s <- build_mummichog_report_sections(
+    fx$pathways, fx$config, files = fx$files, de_res = fx$de_res,
+    model = fx$model)[["HL_vs_LL"]]
+
+  expect_null(s$gsea)
+  expect_s3_class(s$plot, "ggplot")
+
+  # Absent key means ON, so configs written before GSEA existed keep working.
+  fx$config$modes$metabolomics$enrichment$mummichog$gsea_enabled <- NULL
+  on <- build_mummichog_report_sections(
+    fx$pathways, fx$config, files = fx$files, de_res = fx$de_res,
+    model = fx$model)[["HL_vs_LL"]]
+  expect_false(is.null(on$gsea))
+})
+
+test_that("a contrast with no matching DE table is named, not silently skipped", {
+  skip_unless_gsea_deps()
+  fx <- gsea_wiring_fixture(withr::local_tempdir())
+  # Two tables, neither named for this contrast: picking one would rank the
+  # contrast on another contrast's statistics, so the engine is not called.
+  fx$de_res$de_tables <- list(OTHER_A = fx$de_res$de_tables[[1]],
+                              OTHER_B = fx$de_res$de_tables[[1]])
+
+  expect_message(
+    secs <- build_mummichog_report_sections(
+      fx$pathways, fx$config, files = fx$files, de_res = fx$de_res,
+      model = fx$model),
+    "HL_vs_LL")
+
+  s <- secs[["HL_vs_LL"]]
+  expect_null(s$gsea)
+  expect_s3_class(s$plot, "ggplot")   # ORA unaffected
+  expect_false(is.null(s$table))
+})
+
+test_that("save_mummichog_exports writes and then clears the GSEA files", {
+  skip_unless_gsea_deps()
+  root <- withr::local_tempdir()
+  fx   <- gsea_wiring_fixture(root)
+  out  <- withr::local_tempdir()
+
+  s <- build_mummichog_report_sections(
+    fx$pathways, fx$config, files = fx$files, de_res = fx$de_res,
+    model = fx$model)[["HL_vs_LL"]]
+
+  written <- save_mummichog_exports(s$plot, s$table, out, contrast_label = s$slug,
+                                    gsea = s$gsea, gsea_plot = s$gsea_plot)
+  gsea_tsv <- file.path(out, "mummichog_pinned",
+                        "mummichog_gsea_table_HL_vs_LL.tsv")
+  expect_true(file.exists(gsea_tsv))
+  expect_true(gsea_tsv %in% written)
+
+  # A rerun that comes back without GSEA must not leave the old table behind
+  # reading as current -- and must not touch the pathway exports beside it.
+  pathway_tsv <- file.path(out, "mummichog_pinned",
+                           "mummichog_pathway_table_HL_vs_LL.tsv")
+  expect_true(file.exists(pathway_tsv))
+  save_mummichog_exports(s$plot, s$table, out, contrast_label = s$slug)
+  expect_false(file.exists(gsea_tsv))
+  expect_true(file.exists(pathway_tsv))
+})
