@@ -348,6 +348,13 @@ rf_res         <- params$rf_res
 plsda_res      <- params$plsda_res
 enrichment_res <- params$enrichment_res
 mummi_sections <- params$mummichog_sections %||% list()
+# Which contrasts got the complementary GSEA (06g). Resolved here, beside the
+# sections, because the output-file manifest further down needs it too and that
+# chunk runs whether or not the mummichog section is shown. Read from the
+# sections rather than the config: the switch being on is not evidence the
+# stage ran, and these blocks describe what happened.
+mummi_gsea <- Filter(Negate(is.null), lapply(mummi_sections, `[[`, "gsea"))
+has_gsea   <- length(mummi_gsea) > 0
 
 n_features <- if (!is.null(pre)) nrow(pre$expr_work) else NA
 n_samples  <- if (!is.null(pre)) ncol(pre$expr_work) else NA
@@ -2439,16 +2446,45 @@ cat("## Methodology\n\n")
 cat("[**Mummichog**](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) performs pathway enrichment analysis directly from mass-spectrometry features (m/z values) without requiring prior metabolite identification. ")
 cat("By testing whether significant m/z features map to pathway members more often than expected by chance, it bypasses the identification bottleneck of traditional approaches. Each contrast below is an INDEPENDENT mummichog run over all features (that contrast's own p-values define its significant set).\n\n")
 
+cat("Two complementary analyses are reported per contrast:\n\n")
+cat(sprintf("- **ORA (mummichog)** tests the features that clear the significance cutoff (p < %s) against the pathways their m/z values map to. This is the primary analysis and the one plotted.\n", p_cut))
+if (has_gsea) {
+  cat("- **GSEA (MS peaks-to-pathways)** uses the **complete ranked EmpiricalCompound list with no significance cutoff** and asks whether a pathway's ECs sit systematically at one end of that ranking. It reports ES / NES / raw p-value / BH-adjusted p-value, and can reach pathways whose ECs shift coherently without any single feature clearing the cutoff.\n\n")
+} else {
+  cat("- **GSEA (MS peaks-to-pathways)** did not run for this report. It needs `fgsea`, a readable metabolic model (`model_ref` / `model_json`) and a DE table for the contrast; it is also switchable via `gsea_enabled`. Only the ORA analysis is shown.\n\n")
+}
+
 cat("**Parameters:**\n\n")
 cat(sprintf("- Significance cutoff: p < %s\n", p_cut))
 cat(sprintf("- Mass tolerance: %d ppm\n", ppm))
 cat(sprintf("- Permutations: %d\n\n", n_perm))
 
+if (has_gsea) {
+  g1 <- mummi_gsea[[1]]
+  cat(sprintf("- GSEA ranking statistic: %s\n", g1$metric_label))
+  cat(sprintf("- GSEA engine: MetaboAnalystR Peaks-to-Pathways semantics (%s @ `%s`), EmpiricalCompound-space gene sets\n",
+              g1$reference$repo, g1$reference$commit))
+  cat(sprintf("- GSEA settings: minSize = %s, maxSize = %s, %s permutations, seed %s\n",
+              g1$params$min_size, g1$params$max_size,
+              g1$params$n_perm, g1$params$seed))
+  if (length(g1$deviations) > 0) {
+    cat(sprintf("- **GSEA deviations from the reference implementation:** %s\n",
+                paste(g1$deviations, collapse = "; ")))
+  }
+  cat("\n")
+  cat("**Reading NES.** ", g1$nes_note, "\n\n", sep = "")
+}
+
 cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123.*\n\n")
+if (has_gsea) {
+  cat("*GSEA reference: Pang Z, Chong J, Zhou G, et al. MetaboAnalyst 5.0. Nucleic Acids Res. 2021;49(W1):W388-W396 (MS Peaks-to-Pathways).*\n\n")
+}
 ```
 
 ```{r mummichog-per-contrast, results='asis', fig.width=11, fig.height=8}
-# One tab per contrast, each with a Bubble Plot + Results Table sub-tab.
+# One tab per contrast: Bubble Plot | Results Table | GSEA (when it ran) |
+# Supporting Evidence (when it could be built). The bubble plot stays the
+# section's primary view; GSEA is additive and never replaces it.
 for (contrast in names(mummi_sections)) {
   s     <- mummi_sections[[contrast]]
   label <- gsub("_vs_", " vs ", contrast, fixed = TRUE)
@@ -2463,6 +2499,34 @@ for (contrast in names(mummi_sections)) {
     # print() forces the DT widget to render inside the loop.
     print(htmltools::tagList(
       make_dt(s$table, caption = sprintf("Mummichog Pathway Enrichment — %s", label))))
+  }
+
+  # ---- GSEA ---------------------------------------------------------------
+  # Present only when the complementary GSEA ran for this contrast. It needs
+  # fgsea, a readable model, a DE table for the contrast, and gsea_enabled.
+  if (!is.null(s$gsea)) {
+    cat("\n\n### GSEA\n\n")
+    cat(sprintf("GSEA over the **complete** ranked list of %d EmpiricalCompounds (no significance cutoff), ranked by the %s. `P.Value` is the raw permutation p-value and `padj` its Benjamini-Hochberg adjustment over the %d tested pathways.\n\n",
+                s$gsea$n_ec, s$gsea$metric_label, s$gsea$n_pathways))
+    cat("**Reading NES.** ", s$gsea$nes_note, "\n\n", sep = "")
+
+    if (!is.null(s$gsea_plot)) {
+      safe_print_plot(s$gsea_plot)
+      figure_legend(sprintf("Mummichog GSEA over the full ranked EmpiricalCompound list (%s), in the style of MetaboAnalyst's MS Peaks-to-Pathways summary. Each point is a pathway: x = NES, y = -log10(raw GSEA p-value), colour = NES on a diverging scale centred at 0, point size = sqrt(-log10 p) — the same quantity as the y axis, which is MetaboAnalyst's own size mapping and carries no additional information. The dashed line marks p = %g, the vertical line marks NES = 0, and the most significant pathways are labelled. %s", label, p_cut, s$gsea$nes_note))
+    }
+
+    # Rows whose ES was supplied by the reference implementation's fallback
+    # rather than computed. Stated here because such a row still consumes a
+    # test in the BH adjustment, so it affects every other pathway's padj.
+    if (isTRUE(s$gsea$n_es_defaulted > 0)) {
+      cat(sprintf("\n\n*%d pathway(s) took the reference implementation's ES = 0 fallback (%s). Those rows carry ES = 0, NES = 0 and p = 1 by construction, and they still count toward the BH denominator.*\n\n",
+                  s$gsea$n_es_defaulted,
+                  paste(s$gsea$es_fallback_reasons, collapse = "; ")))
+    }
+
+    print(htmltools::tagList(
+      make_dt(s$gsea$table,
+              caption = sprintf("Mummichog GSEA (MS peaks-to-pathways) — %s", label))))
   }
 
   # ---- Supporting Evidence ------------------------------------------------
@@ -2573,6 +2637,12 @@ if (length(mummi_sections) > 0) {
   files_tbl <- rbind(files_tbl, data.frame(
     File = "metabolomics/mummichog_pinned/",
     Description = "Mummichog pathway analysis: input, v2 result tree, and pathway tables",
+    stringsAsFactors = FALSE))
+}
+if (has_gsea) {
+  files_tbl <- rbind(files_tbl, data.frame(
+    File = "metabolomics/mummichog_pinned/mummichog_gsea_*",
+    Description = "MS peaks-to-pathways GSEA per contrast: summary scatter (PNG/PDF) and the complete result table (TSV/CSV)",
     stringsAsFactors = FALSE))
 }
 
