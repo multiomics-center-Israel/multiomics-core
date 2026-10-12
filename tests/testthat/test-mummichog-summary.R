@@ -8,7 +8,7 @@
 
 # Section-shaped inputs for one contrast.
 #   P1  ORA nominal, GSEA nominal  -> evidence present
-#   P2  ORA not nominal, GSEA nominal (GSEA-only)
+#   P2  ORA not nominal, GSEA nominal (GSEA-only), yet with an ORA evidence row
 #   P3  ORA nominal only           -> evidence present
 #   P4  nominal nowhere            -> excluded
 #   P5  GSEA nominal, no model id  -> not comparable
@@ -24,13 +24,13 @@ summary_fixture <- function() {
     "padj"    = c(0.30, 0.03, 0.80, 0.30))
   evidence <- list(pathway_summary = data.frame(
     check.names = FALSE, stringsAsFactors = FALSE,
-    "Pathway"             = c("Path one", "Path three"),
-    "Supporting ECs"      = c(3, 1),
-    "Supporting features" = c(5, 1),
-    "ECs Match"           = c(1, 0),
-    "ECs Conflict"        = c(2, 0),
-    "ECs Mixed"           = c(0, 0),
-    "ECs Not assessed"    = c(0, 1)))
+    "Pathway"             = c("Path one", "Path three", "Path two"),
+    "Supporting ECs"      = c(3, 1, 2),
+    "Supporting features" = c(5, 1, 2),
+    "ECs Match"           = c(1, 0, 2),
+    "ECs Conflict"        = c(2, 0, 0),
+    "ECs Mixed"           = c(0, 0, 0),
+    "ECs Not assessed"    = c(0, 1, 0)))
   ids <- c("Path one" = "xx00010", "Path two" = "xx00020",
            "Path three" = "xx00030", "Path four" = "xx00040",
            "Path five" = NA_character_)
@@ -131,9 +131,12 @@ test_that("the compact p-value, evidence and agreement cells", {
   expect_identical(row_of(s, "Path three")$`Supporting evidence`, "1 EC / 1 feature")
   expect_identical(row_of(s, "Path three")$`Annotation agreement`, "1 Not assessed")
 
+  # GSEA-only: its ORA evidence row is not shown as support for the signal.
   two <- row_of(s, "Path two")
   expect_identical(two$`Supporting evidence`, "Not available — GSEA-only signal")
   expect_identical(two$`Annotation agreement`, "—")
+  expect_true(is.na(two$`Supporting ECs`))
+  expect_true(is.na(two$`Supporting features`))
   expect_identical(row_of(s, "Path five")$`Mummichog ORA`, "Not tested")
   expect_identical(row_of(s, "Path three")$`Mummichog GSEA`, "Not tested")
 

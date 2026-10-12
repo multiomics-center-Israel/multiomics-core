@@ -2646,11 +2646,14 @@ for (contrast in names(mummi_sections)) {
     cat("**Annotation agreement** compares these Mummichog candidates with the dataset annotation: **Match** means they agree; **Conflict** means they disagree; **Mixed** means the EC contains both outcomes; and **Not assessed** means there is not enough annotation information to compare.\n\n")
     cat("These agreement labels are provided only to help interpret the pathway evidence. They do **not** change the Mummichog enrichment results or remove conflicting features. **Supporting features** is the number of distinct measured LC–MS features underlying the pathway evidence.\n\n")
 
-    # Summary pathways that carry ORA-derived evidence, in Summary order. With
-    # no Summary to follow, every pathway with evidence is shown.
+    # Summary pathways whose evidence the Summary shows (nominal in ORA, with an
+    # evidence row), in Summary order -- read from the Summary itself so the two
+    # tabs cannot disagree. With no Summary to follow, every pathway with
+    # evidence is shown.
     ev_pws <- s$evidence$pathway_summary$Pathway
     pws <- if (is.null(s$summary)) ev_pws else
-      s$summary$Pathway[s$summary$Pathway %in% ev_pws]
+      s$summary$Pathway[!is.na(s$summary[["Supporting ECs"]]) &
+                          s$summary$Pathway %in% ev_pws]
     shown <- utils::head(pws, MUMMI_EVIDENCE_MAX_PATHWAYS)
     if (length(shown) == 0) {
       cat("None of this contrast's Summary pathways has ORA-derived evidence. The evidence for every pathway is under **Advanced / Downloads**.\n\n")

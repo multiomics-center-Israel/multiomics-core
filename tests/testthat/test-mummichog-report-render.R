@@ -35,7 +35,7 @@ extract_chunk <- function(lines, label) {
 # returns, so the harness exercises the template's rendering contract without
 # needing fgsea or a mummichog run.
 render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE,
-                                    nominal = TRUE) {
+                                    nominal = TRUE, gsea_only = FALSE) {
   pw <- data.frame(
     check.names = FALSE, stringsAsFactors = FALSE,
     pathway      = c("Fatty acid degradation", "Glycolysis"),
@@ -56,7 +56,10 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE,
       "Tested size"                     = c(2, 2),
       "ES"                              = c(0.8, -0.4),
       "NES"                             = c(1.9, -1.1),
-      "P.Value"                         = if (nominal) c(0.002, 0.400) else c(0.2, 0.4),
+      # gsea_only: Glycolysis becomes nominal in GSEA while its ORA p stays 0.30,
+      # although an ORA evidence row exists for it.
+      "P.Value"                         = if (!nominal) c(0.2, 0.4) else
+                                            c(0.002, if (gsea_only) 0.010 else 0.400),
       "padj"                            = c(0.004, 0.400),
       "Leading-edge EmpiricalCompounds" = c("E196; E3", "E2"),
       "ES defaulted by reference implementation" = c(FALSE, FALSE),
@@ -333,6 +336,22 @@ test_that("the mummichog section renders without GSEA or evidence", {
   # It must NOT assert a cause: a NULL GSEA result means either that the
   # analysis could not run or that it ran and found nothing.
   expect_match(html, "no pathway passed the size filter")
+})
+
+test_that("a GSEA-only pathway shows no ORA evidence as its support", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(render_fixture_sections(gsea_only = TRUE),
+                                   withr::local_tempdir())
+  # In the Summary, labelled as a GSEA-only signal ...
+  summary_tab <- tab_body(html, "summary", "ora-plot")
+  expect_match(summary_tab, "Glycolysis", fixed = TRUE)
+  expect_match(summary_tab, "GSEA-only signal", fixed = TRUE)
+  # ... and absent from the default Pathway Evidence view, though its evidence
+  # row still exists under Advanced.
+  ev_tab <- tab_body(html, "pathway-evidence", "advanced-downloads")
+  expect_match(ev_tab, "Fatty acid degradation", fixed = TRUE)
+  expect_false(grepl("Glycolysis", ev_tab, fixed = TRUE))
 })
 
 test_that("a contrast with no nominal pathway says so and lists none", {

@@ -187,6 +187,9 @@ mmc_nominal_sentence <- function(p, p_cutoff, analysis, padj = NULL,
 #'   `.MMC_SUMMARY_DISPLAY_COLS` labels followed by the values behind them
 #'   (`Pathway ID`, `ORA p.value`, `GSEA P.Value`, `GSEA padj`,
 #'   `Supporting ECs`, `Supporting features`, `Identified methods tested`).
+#'   The evidence cells, agreement and counts are filled only for pathways
+#'   nominal in ORA; a GSEA-only pathway reads `Not available — GSEA-only
+#'   signal` even when an ORA evidence row exists for it.
 #'   Zero rows when no pathway qualifies.
 build_mummichog_summary <- function(ora_table, gsea_table = NULL,
                                     evidence = NULL, pathway_ids = NULL,
@@ -243,9 +246,17 @@ build_mummichog_summary <- function(ora_table, gsea_table = NULL,
   ps <- evidence$pathway_summary
   ev_rows <- if (is.data.frame(ps)) ps[match(pw, ps$Pathway), , drop = FALSE] else
     NULL
-  has_ev  <- if (is.null(ev_rows)) rep(FALSE, n) else !is.na(ev_rows$Pathway)
+  # The evidence cell is support for the ORA signal, so it is shown only for
+  # pathways nominal in ORA. A GSEA-only pathway can still have an evidence row
+  # (its ORA overlap exists even when ORA p is not nominal); showing it here
+  # would read as ORA support it does not have. It stays in the full evidence
+  # tables under Advanced.
+  has_ev  <- if (is.null(ev_rows)) rep(FALSE, n) else
+    !is.na(ev_rows$Pathway) & ora_nom
   n_ec    <- if (is.null(ev_rows)) rep(NA_real_, n) else ev_rows[["Supporting ECs"]]
   n_feat  <- if (is.null(ev_rows)) rep(NA_real_, n) else ev_rows[["Supporting features"]]
+  n_ec[!has_ev]   <- NA_real_
+  n_feat[!has_ev] <- NA_real_
   plural  <- function(k, word) sprintf("%d %s%s", as.integer(k), word,
                                        ifelse(k == 1, "", "s"))
   ev_label <- rep("Not available", n)
