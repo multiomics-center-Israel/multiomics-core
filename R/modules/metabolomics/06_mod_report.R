@@ -171,7 +171,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
     }
 
     # A contrast the stage ran but that produced no section never reaches the
-    # loop above, so the by-name GSEA clearing inside save_mummichog_exports()
+    # loop above, so the by-name GSEA and Summary clearing inside
+    # save_mummichog_exports()
     # never runs for it and a previous run's table would survive. Clearing is
     # safe for those contrasts because there is nothing of theirs to keep;
     # whether they should get a GSEA analysis at all is a section-contract

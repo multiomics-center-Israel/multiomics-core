@@ -402,16 +402,17 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
   sections
 }
 
-#' Clear GSEA exports belonging to contrasts that produced no report section
+#' Clear GSEA and Summary exports belonging to contrasts with no report section
 #'
-#' `save_mummichog_exports()` clears a contrast's stale GSEA files by name, but
-#' it only runs for contrasts that HAVE a section. A contrast the mummichog
-#' stage ran whose ORA table is absent or unplottable produces no section, so
-#' nothing clears its GSEA exports and a previous run's table survives on disk
-#' reading as current.
+#' `save_mummichog_exports()` clears a contrast's stale GSEA and Summary files
+#' by name, but it only runs for contrasts that HAVE a section. A contrast the
+#' mummichog stage ran whose ORA table is absent or unplottable produces no
+#' section, so nothing clears those exports and a previous run's tables survive
+#' on disk reading as current.
 #'
-#' Deliberately narrow: it removes only the four GSEA files, only for contrasts
-#' with no live section, and never a slug a live section owns. Whether such a
+#' Deliberately narrow: it removes only the four GSEA files and the two Summary
+#' files, only for contrasts with no live section, and never a slug a live
+#' section owns. Whether such a
 #' contrast should get a GSEA analysis at all is a separate question about the
 #' section contract, tracked rather than decided here.
 #'
@@ -445,7 +446,8 @@ clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
   dest_dir <- file.path(out_dir, "mummichog_pinned")
   paths <- unlist(lapply(orphans, function(slug) c(
     file.path(dest_dir, paste0("mummichog_gsea_table_", slug, c(".tsv", ".csv"))),
-    file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf")))
+    file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf"))),
+    file.path(dest_dir, paste0("mummichog_summary_", slug, c(".tsv", ".csv")))
   )), use.names = FALSE)
 
   gone <- paths[file.exists(paths)]
