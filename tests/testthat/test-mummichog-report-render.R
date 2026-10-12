@@ -278,7 +278,7 @@ test_that("the mummichog section renders with GSEA and evidence", {
 
   # Pathway Evidence: Summary pathways only, Pathway -> EC -> features.
   ev_tab <- tab_body(html, "pathway-evidence", "advanced-downloads")
-  expect_match(ev_tab, "Pathway-matching candidate")
+  expect_match(ev_tab, "pathway-matching candidate", fixed = TRUE)
   expect_match(ev_tab, "<details>")
   expect_match(ev_tab, "E196 — Match", fixed = TRUE)
   expect_match(ev_tab, "Mummichog pathway candidate", fixed = TRUE)
