@@ -154,8 +154,8 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
             NULL
         }
     )
+    vst_label <- "DESeq2 VST (blind)"
     if (!is.null(mat_vst)) {
-        vst_label <- "DESeq2 VST (blind)"
         f_vst_all <- file.path(out_qc, "PCA_vst_all.png")
         tryCatch({
             p_vst_all <- qc_pca_scatter(mat_vst, meta, cfg_temp, pcs = c(1, 2), out_file = NULL) +
@@ -173,6 +173,9 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, top_vst$files)
         plots <- c(plots, top_vst$plots)
     }
+    vst_written <- any(grepl("^PCA_vst_", basename(files)))
+    files <- c(files, write_rna_pca_transform_labels(out_qc, work_label,
+                                                     vst_label = if (vst_written) vst_label))
 
     # ---------- Density (primary color only) ----------
     cfg_temp <- cfg
@@ -375,6 +378,24 @@ write_rna_pca_top_panels <- function(mat, meta, cfg, out_qc, prefix, transform_l
         })
     }
     list(files = files, plots = plots)
+}
+
+#' Record which transform each RNA QC PCA panel was drawn on
+#'
+#' The report titles the PCA panels from this file rather than guessing the
+#' transform from which normalized matrix happens to sit in Datasets/. It is
+#' rewritten on every run, so a VST row from an earlier run cannot outlive the
+#' VST panels it described.
+#'
+#' @param out_qc Diagnostic plots directory.
+#' @param work_label Transform of the working-matrix panels.
+#' @param vst_label Transform of the VST panels, or NULL when none were written.
+#' @return Path of the written \code{pca_transform_labels.tsv}.
+write_rna_pca_transform_labels <- function(out_qc, work_label, vst_label = NULL) {
+    labels <- data.frame(panel = c("work", if (!is.null(vst_label)) "vst"),
+                         label = c(work_label, vst_label),
+                         stringsAsFactors = FALSE)
+    save_tsv(labels, out_qc, "pca_transform_labels.tsv")
 }
 
 #' Reader-facing name of the transform behind the RNA working matrix

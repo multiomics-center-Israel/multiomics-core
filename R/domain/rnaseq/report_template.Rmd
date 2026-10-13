@@ -837,15 +837,9 @@ transform computed blind to the design.
 # list_rna_pca_panels() in R/domain/rnaseq/08_report.R pairs the two
 # transforms per gene set and sets the dropdown order.
 pca_panels <- list_rna_pca_panels(diag_dir)
-# Name the left panel from the matrix that was written, not the config alone:
+# Panel titles come from the transform the QC module recorded, not the config:
 # preprocessed input and a VST fallback do not produce TMMlogCPM.
-pca_work_label <- if (file.exists(file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv"))) {
-    log_offset$label
-} else if (file.exists(file.path(datasets_dir, "rna_norm_VST.tsv"))) {
-    "DESeq2 VST (blind)"
-} else {
-    "Normalized expression"
-}
+pca_labels <- read_rna_pca_transform_labels(diag_dir)
 to_uri <- function(path) if (is.na(path)) "" else knitr::image_uri(path)
 pca_data_map <- list()
 for (i in seq_len(nrow(pca_panels))) {
@@ -883,8 +877,8 @@ pca_panel_html <- function(id, title, uri) {
 if (nrow(pca_panels) > 0) {
     first <- pca_data_map[[pca_panels$key[1]]]
     cat('<div id="pca_plot_container" style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;">')
-    cat(pca_panel_html("pca_img_cpm", htmltools::htmlEscape(pca_work_label), first$cpm))
-    cat(pca_panel_html("pca_img_vst", "DESeq2 VST (blind)", first$vst))
+    cat(pca_panel_html("pca_img_cpm", htmltools::htmlEscape(pca_labels[["work"]]), first$cpm))
+    cat(pca_panel_html("pca_img_vst", htmltools::htmlEscape(pca_labels[["vst"]]), first$vst))
     cat('</div>')
 } else {
     cat('<p><em>PCA plot not available.</em></p>')
