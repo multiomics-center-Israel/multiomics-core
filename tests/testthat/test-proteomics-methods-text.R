@@ -1107,3 +1107,90 @@ test_that("the complete-case claim needs the PCA section, not just the file", {
     # show_pca_section is defined well before this chunk, so the reference resolves.
     expect_lt(grep("^show_pca_section <-", lines)[1], start)
 })
+
+
+# =============================================================================
+# Pooled-ranking enrichment
+# =============================================================================
+
+# A pooled_ranking directory as run_proteomics_pooled_enrichment() leaves it,
+# with only the files named. Values are synthetic.
+pooled_dir_with <- function(dir, m = 5, fgsea = TRUE, camerapr = TRUE) {
+    d <- file.path(dir, "Enrichment", "pooled_ranking")
+    dir.create(d, recursive = TRUE)
+    utils::write.csv(data.frame(FeatureID = "G1", m = m, z_pooled = 1.2),
+                     file.path(d, "pooled_ranking_A_vs_B.csv"), row.names = FALSE)
+    if (fgsea) utils::write.csv(data.frame(pathway = "S1", NES = 1.1),
+                                file.path(d, "pathway_A_vs_B_DB_fgsea.csv"), row.names = FALSE)
+    if (camerapr) utils::write.csv(data.frame(pathway = "S1", PValue = 0.2, inter_gene_cor = 0.01),
+                                   file.path(d, "pathway_A_vs_B_DB_camerapr.csv"), row.names = FALSE)
+    d
+}
+
+pooled_downstream <- function(pooled_dir, ...) {
+    build_proteomics_methods_text(cfg_for(...), de_method = "limma",
+                                  pooled_dir = pooled_dir)$downstream
+}
+
+test_that("the pooled-ranking sentences are gated on its files, not the flag", {
+    tmp <- withr::local_tempdir()
+    # Flag on, nothing written: no claim.
+    on_cfg <- list(pathway = list(enabled = FALSE, pooled_ranking = list(enabled = TRUE)))
+    txt <- do.call(pooled_downstream,
+                   c(list(pooled_dir = file.path(tmp, "absent")), on_cfg))
+    expect_false(grepl("Rubin", txt %||% "", fixed = TRUE))
+
+    d <- pooled_dir_with(tmp)
+    txt <- pooled_downstream(d)
+    expect_match(txt, "Rubin's rules", fixed = TRUE)
+    expect_match(txt, "Barnard-Rubin degrees of freedom", fixed = TRUE)
+    expect_match(txt, "each of the 5 imputation draws", fixed = TRUE)
+    expect_match(txt, "(fgsea)", fixed = TRUE)
+    expect_match(txt, "inter-gene correlation of 0.01", fixed = TRUE)
+})
+
+test_that("each method is named only when its tables exist", {
+    tmp <- withr::local_tempdir()
+    txt <- pooled_downstream(pooled_dir_with(tmp, fgsea = FALSE, camerapr = FALSE))
+    expect_match(txt, "Rubin's rules", fixed = TRUE)
+    expect_false(grepl("fgsea", txt, fixed = TRUE))
+    expect_false(grepl("cameraPR", txt, fixed = TRUE))
+})
+
+test_that("the pooled-ranking text makes no inference or comparability claim", {
+    tmp <- withr::local_tempdir()
+    txt <- pooled_downstream(pooled_dir_with(tmp))
+    expect_false(grepl("multiple[- ]imputation inference", txt, ignore.case = TRUE))
+    expect_false(grepl("accounts? for imputation uncertainty", txt, ignore.case = TRUE))
+    expect_match(txt, "does not account for uncertainty in the imputation model", fixed = TRUE)
+    expect_false(grepl("comparab", txt, ignore.case = TRUE))
+})
+
+test_that("a deterministic imputation or one draw is described as such", {
+    tmp <- withr::local_tempdir()
+    d <- pooled_dir_with(tmp)
+    det <- pooled_downstream(d, imputation = list(method = "minval"))
+    expect_match(det, "draws are identical", fixed = TRUE)
+    expect_false(grepl("between-draw term reflects", det, fixed = TRUE))
+
+    tmp1 <- withr::local_tempdir()
+    one <- pooled_downstream(pooled_dir_with(tmp1, m = 1))
+    expect_match(one, "single imputation draw", fixed = TRUE)
+    expect_false(grepl("Barnard-Rubin", one, fixed = TRUE))
+})
+
+test_that("the report's pooled section keeps to the agreed wording", {
+    rmd <- readLines(file.path(root_dir, "R", "domain", "proteomics",
+                               "report_template_proteomics.Rmd"), warn = FALSE)
+    start <- grep("^# Enrichment on a Pooled Ranking", rmd)
+    end <- grep("^# PPI Network Analysis", rmd)
+    expect_length(start, 1L)
+    expect_true(end > start)
+    sec <- paste(rmd[start:end], collapse = "\n")
+    expect_false(grepl("multiple[- ]imputation inference", sec, ignore.case = TRUE))
+    expect_match(sec, "combined across imputation draws with Rubin's rules", fixed = TRUE)
+    expect_match(sec, "are not comparable", fixed = TRUE)
+    expect_match(sec, "proteomics_pooled_enrichment_dir(prot_dir)", fixed = TRUE)
+    # No bold emphasis inside this section's prose.
+    expect_false(grepl("\\*\\*", sec))
+})
