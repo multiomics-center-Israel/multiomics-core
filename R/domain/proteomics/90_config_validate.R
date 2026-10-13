@@ -189,6 +189,23 @@ validate_proteomics_config <- function(cfg) {
         if (!is.null(cfg$pathway$pathway_volcano)) {
             assert_scalar_bool(cfg$pathway$pathway_volcano, "pathway$pathway_volcano", allow_null = TRUE)
         }
+        pr <- cfg$pathway$pooled_ranking
+        if (!is.null(pr)) {
+            assert_named_list(pr, "pathway$pooled_ranking")
+            assert_scalar_bool(pr$enabled, "pathway$pooled_ranking$enabled", allow_null = TRUE)
+            cam <- pr$camerapr
+            if (!is.null(cam)) {
+                assert_named_list(cam, "pathway$pooled_ranking$camerapr")
+                rho <- cam$inter_gene_cor
+                if (!is.null(rho) &&
+                    (!is.numeric(rho) || length(rho) != 1L || is.na(rho) || abs(rho) >= 1)) {
+                    stop("'pathway$pooled_ranking$camerapr$inter_gene_cor' must be one number ",
+                         "strictly between -1 and 1 (default 0.01)", call. = FALSE)
+                }
+                assert_scalar_bool(cam$use_ranks, "pathway$pooled_ranking$camerapr$use_ranks",
+                                   allow_null = TRUE)
+            }
+        }
     }
 
 

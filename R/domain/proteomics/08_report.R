@@ -452,6 +452,76 @@ methods_de_phrase <- function(de_cfg, method) {
     sprintf("Differential abundance was assessed using the %s method.", method)
 }
 
+#' Methods sentences for the pooled-ranking enrichment
+#'
+#' Gated on the artefacts, not on \code{pathway.pooled_ranking.enabled}: the
+#' module skips itself (pathway disabled, a DE method other than limma) with a
+#' message, so only the files show it ran. The number of draws and the cameraPR
+#' correlation are read from the written tables for the same reason.
+#'
+#' @param pooled_dir Directory written by run_proteomics_pooled_enrichment(), or NULL.
+#' @param imp_cfg The \code{imputation} config block.
+#' @return A character scalar, or NULL when no pooled ranking was written.
+methods_pooled_ranking_text <- function(pooled_dir, imp_cfg) {
+    if (is.null(pooled_dir) || !dir.exists(pooled_dir)) return(NULL)
+    rank_files <- list.files(pooled_dir, pattern = "^pooled_ranking_.*\\.csv$", full.names = TRUE)
+    if (length(rank_files) == 0) return(NULL)
+    m <- tryCatch(utils::read.csv(rank_files[1], nrows = 1)$m, error = function(e) NULL)
+    m_known <- length(m) == 1 && is.finite(m)
+    if (m_known && m == 1) {
+        txt <- paste0(
+            "As a separate analysis, proteins were ranked by the z-score of the limma ",
+            "moderated t-statistic from the single imputation draw, collapsed to one protein ",
+            "per gene, keeping the protein with the most observed values and then the highest ",
+            "average expression. With one draw there is no between-draw variance to combine.")
+        return(methods_pooled_enrichment_sentences(pooled_dir, txt))
+    }
+    m_txt <- if (m_known) sprintf("each of the %d", as.integer(m)) else "each"
+
+    txt <- sprintf(paste0(
+        "As a separate analysis, limma was fitted to %s imputation draws; per protein, ",
+        "the coefficients were averaged and the variances combined with Rubin's rules ",
+        "(within-draw moderated variance plus (1 + 1/m) times the between-draw variance), ",
+        "with Barnard-Rubin degrees of freedom (Rubin 1987; Barnard and Rubin 1999), ",
+        "following the approach of Baker et al. (2024). The complete-data degrees of ",
+        "freedom were the mean of the per-draw moderated degrees of freedom. The pooled ",
+        "t-statistics were converted to z-scores and collapsed to one protein per gene, ",
+        "keeping the protein with the most observed values and then the highest average ",
+        "expression."), m_txt)
+    txt <- paste(txt, if (methods_imputation_is_deterministic(imp_cfg)) {
+        paste0("The imputation is deterministic, so the draws are identical and the ",
+               "statistic reduces to the single-fit moderated t-statistic.")
+    } else {
+        paste0("The between-draw term reflects variability of the random imputation draws ",
+               "only; it does not account for uncertainty in the imputation model.")
+    })
+
+    methods_pooled_enrichment_sentences(pooled_dir, txt)
+}
+
+#' Append the fgsea and cameraPR sentences for the pooled ranking
+#'
+#' @param pooled_dir Directory of the pooled-ranking enrichment.
+#' @param txt Text describing the ranking.
+#' @return \code{txt} with one sentence per method whose tables exist.
+methods_pooled_enrichment_sentences <- function(pooled_dir, txt) {
+    has_fgsea <- length(list.files(pooled_dir, pattern = "^pathway_.*_fgsea\\.csv$")) > 0
+    cam_files <- list.files(pooled_dir, pattern = "^pathway_.*_camerapr\\.csv$", full.names = TRUE)
+    if (has_fgsea) {
+        txt <- paste(txt, "Gene-set enrichment analysis (fgsea) was run on this ranking.")
+    }
+    if (length(cam_files) > 0) {
+        rho <- tryCatch(utils::read.csv(cam_files[1], nrows = 1)$inter_gene_cor,
+                        error = function(e) NULL)
+        txt <- paste(txt, sprintf(paste0(
+            "The cameraPR test from limma was run on the same ranking and the same filtered gene sets%s."),
+            if (length(rho) == 1 && is.finite(rho)) {
+                sprintf(", with an assumed inter-gene correlation of %s", format(rho))
+            } else ""))
+    }
+    txt
+}
+
 #' Reader-facing Methods blocks for the proteomics report
 #'
 #' Builds every Methods paragraph from the configuration and from the DE mode
@@ -473,6 +543,9 @@ methods_de_phrase <- function(de_cfg, method) {
 #' @param hier_file Path to the hierarchical clustering heatmap, or NULL. The
 #'   clustering sentence needs this as well as the enable flags, for the same
 #'   reason.
+#' @param pooled_dir Directory of the pooled-ranking enrichment
+#'   (proteomics_pooled_enrichment_dir()), or NULL. Its sentences are emitted
+#'   only when its tables exist.
 #' @return Named list of character scalars: \code{data_processing},
 #'   \code{missing_values}, \code{differential}, \code{consensus},
 #'   \code{quality_control}, \code{downstream}, \code{software},
@@ -480,7 +553,8 @@ methods_de_phrase <- function(de_cfg, method) {
 #'   apply are NULL.
 build_proteomics_methods_text <- function(config, de_method = "limma",
                                           n_included = NA_integer_, run_dir = NULL,
-                                          pca_cc_file = NULL, hier_file = NULL) {
+                                          pca_cc_file = NULL, hier_file = NULL,
+                                          pooled_dir = NULL) {
     cfg <- config$modes$proteomics %||% list()
     de_cfg <- cfg$de %||% list()
     imp_cfg <- cfg$imputation %||% list()
@@ -760,6 +834,8 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                                 paste(cfg$pathway$databases %||% c("GO", "KEGG", "Reactome"),
                                       collapse = ", ")))
     }
+    pooled_txt <- methods_pooled_ranking_text(pooled_dir, imp_cfg)
+    if (!is.null(pooled_txt)) down <- c(down, pooled_txt)
     if (isTRUE(cfg$ppi$enabled)) {
         down <- c(down, paste0("Protein-protein interaction networks were constructed using ",
                                "the STRING database."))

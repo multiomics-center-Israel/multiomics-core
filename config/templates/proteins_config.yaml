@@ -267,6 +267,14 @@ modes:
       gsea_ranking: "stat"    # "stat" | "abs_lfc" | "lfc"
       pathway_volcano: true   # produce pathway-colored volcano data for report
       cluster_threshold: 0.7  # semantic similarity threshold for term clustering (0-1, lower = more merging)
+      # Additional enrichment on a ranking combined across imputation draws with
+      # Rubin's rules (limma only); fgsea and cameraPR on the same gene sets.
+      # Written to Enrichment/pooled_ranking/; the analysis above is unchanged.
+      pooled_ranking:
+        enabled: false
+        camerapr:
+          inter_gene_cor: 0.01  # assumed inter-gene correlation, strictly between -1 and 1
+          use_ranks: false      # rank-based cameraPR
 
     # --------------------------------------------------------
     # PPI network analysis
