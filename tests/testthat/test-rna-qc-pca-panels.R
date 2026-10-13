@@ -71,3 +71,49 @@ test_that("compute_rna_qc_vst skips preprocessed input and an expr_work that is 
     attr(pre_vst$expr_work, "method") <- "VST"
     expect_null(compute_rna_qc_vst(pre_vst))
 })
+
+test_that("write_rnaseq_datasets_legacy removes a normalized matrix left by another method", {
+    d <- withr::local_tempdir()
+    dirs <- create_legacy_output_dirs(d)
+    file.create(file.path(dirs$datasets, "rna_norm_TMMlogCPM.tsv"))
+    pre <- synthetic_pre(n_genes = 20)
+    attr(pre$expr_work, "method") <- "VST"
+
+    write_rnaseq_datasets_legacy(pre, config = list(), dirs = dirs)
+
+    expect_identical(list.files(dirs$datasets, pattern = "^rna_norm_"), "rna_norm_VST.tsv")
+    expect_true(file.exists(file.path(dirs$datasets, "rna_counts_filtered.tsv")))
+})
+
+test_that("write_rna_pca_transform_labels records the work and VST transforms", {
+    d <- withr::local_tempdir()
+    cfg <- list(normalization = list(method = "TMMlogCPM"))
+    work <- matrix(0, 2, 2)
+    attr(work, "method") <- "TMMlogCPM"
+
+    write_rna_pca_transform_labels(d, rna_qc_transform_label(work, cfg),
+                                   vst_label = "DESeq2 VST (blind)")
+
+    labels <- read_rna_pca_transform_labels(d)
+    expect_identical(labels[["work"]], "log2(TMM CPM + 1)")
+    expect_identical(labels[["vst"]], "DESeq2 VST (blind)")
+})
+
+test_that("a rerun on VST rewrites the labels and drops the earlier VST row", {
+    d <- withr::local_tempdir()
+    write_rna_pca_transform_labels(d, "log2(TMM CPM + 1)", vst_label = "DESeq2 VST (blind)")
+    work <- matrix(0, 2, 2)
+    attr(work, "method") <- "VST"
+
+    write_rna_pca_transform_labels(d, rna_qc_transform_label(work, list()))
+
+    tbl <- utils::read.delim(file.path(d, "pca_transform_labels.tsv"), stringsAsFactors = FALSE)
+    expect_identical(tbl$panel, "work")
+    expect_identical(read_rna_pca_transform_labels(d)[["work"]], "DESeq2 VST (blind)")
+})
+
+test_that("read_rna_pca_transform_labels falls back when the file is missing", {
+    labels <- read_rna_pca_transform_labels(withr::local_tempdir())
+    expect_identical(labels[["work"]], "Normalized expression")
+    expect_identical(labels[["vst"]], "DESeq2 VST (blind)")
+})

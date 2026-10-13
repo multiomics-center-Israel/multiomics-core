@@ -140,3 +140,23 @@ list_rna_pca_panels <- function(diag_dir) {
     )
     panels[!is.na(panels$cpm_path) | !is.na(panels$vst_path), , drop = FALSE]
 }
+
+#' Transform names for the RNA-seq report's PCA panels
+#'
+#' Reads \code{pca_transform_labels.tsv}, written by the QC module next to the
+#' PCA images, so the panel titles name the transform that was run.
+#'
+#' @param diag_dir Directory holding the RNA-seq diagnostic plots.
+#' @return Named character vector with elements \code{work} and \code{vst}.
+#'   Without the file, \code{work} is "Normalized expression"; \code{vst} is
+#'   "DESeq2 VST (blind)", the only transform the VST panels are drawn on.
+read_rna_pca_transform_labels <- function(diag_dir) {
+    labels <- c(work = "Normalized expression", vst = "DESeq2 VST (blind)")
+    path <- file.path(diag_dir, "pca_transform_labels.tsv")
+    if (!file.exists(path)) return(labels)
+
+    tbl <- readr::read_tsv(path, col_types = readr::cols(.default = "c"))
+    known <- tbl[tbl$panel %in% names(labels) & !is.na(tbl$label), , drop = FALSE]
+    labels[known$panel] <- known$label
+    labels
+}
