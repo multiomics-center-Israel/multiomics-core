@@ -12,8 +12,14 @@ write_rnaseq_datasets_legacy <- function(pre, config, dirs ) {
     norm_df <- cbind(gene = rownames(norm_df), norm_df, stringsAsFactors = FALSE)
     rownames(norm_df) <- NULL
 
+    norm_file <- sprintf("rna_norm_%s.tsv", attr(pre$expr_work, "method") %||% "norm")
+    # A matrix left by an earlier run with another method would be read as this
+    # run's (the report and fact sheet look rna_norm_* files up by name).
+    stale_norm <- setdiff(list.files(dirs$datasets, pattern = "^rna_norm_.*\\.tsv$"), norm_file)
+    if (length(stale_norm) > 0) file.remove(file.path(dirs$datasets, stale_norm))
+
     files <- c(files, save_tsv(counts_filt_df, dirs$datasets, "rna_counts_filtered.tsv"))
-    files <- c(files, save_tsv(norm_df, dirs$datasets, sprintf("rna_norm_%s.tsv", attr(pre$expr_work, "method") %||% "norm")))
+    files <- c(files, save_tsv(norm_df, dirs$datasets, norm_file))
 
     unique(files)
 }
