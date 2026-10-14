@@ -251,6 +251,18 @@ modes:
         enabled: false
         top_n: 15
 
+      # --- KEGG pathway coverage per layer ---
+      # Tells, in the KEGG figures and tables, a layer that could not test a
+      # pathway (KEGG lists no features of that omics type in it, none were
+      # measured, or fewer than the minimum: a grey cell with a cross) from one
+      # that tested it and reported no result (a white cell). Labels only; no
+      # test or p-value changes. Metabolomics reads the cached compound table;
+      # the gene layers read the organism's KEGG gene-pathway links, downloaded
+      # once into cross_enrichment/kegg_cache when not cached.
+      # Written as kegg_pathway_coverage.csv and _summary.tsv.
+      pathway_coverage:
+        enabled: true
+
       # --- Pathway enrichment of DIABLO loadings and MOFA2 weights ---
       # "gsea": every feature of a view ranked by its signed loading (DIABLO) or
       #   weight (MOFA2) on each component/factor, then GSEA. Each pathway gets
