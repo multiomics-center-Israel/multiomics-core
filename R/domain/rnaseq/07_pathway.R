@@ -108,3 +108,57 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
   volcano_df$pathways <- pathway_memberships
   volcano_df
 }
+
+# ==============================================================================
+# GSEA SETTINGS
+# ==============================================================================
+
+#' GSEA engines the offline RNA path can run
+#' @noRd
+.RNA_GSEA_ENGINES <- c("fgsea", "clusterProfiler")
+
+#' Resolve the RNA GSEA settings
+#'
+#' The one reader of the RNA GSEA engine, gene-set size limits and seed; the
+#' online and offline enrichment paths both call it.
+#'
+#' - `engine`: `modes.rna.enrichment.gsea_engine`, default "fgsea". "fgsea"
+#'   runs the shared fgsea call (run_fgsea_core()) and keeps every tested set;
+#'   "clusterProfiler" reproduces earlier offline runs (clusterProfiler::GSEA,
+#'   minGSSize 4, maxGSSize = all annotated genes, non-significant sets
+#'   dropped). Only the offline path has a choice; the online path always
+#'   uses fgsea.
+#' - `min_size` / `max_size`: `modes.rna.enrichment.gsea.min_size` /
+#'   `max_size`, falling back to the online path's `modes.rna.pathway.min_size`
+#'   / `max_size`, then 10 / 500. Ignored by the clusterProfiler engine.
+#' - `seed`: `params.seed`, default 1.
+#'
+#' @param config Full pipeline config.
+#' @return list(engine, min_size, max_size, seed).
+resolve_rna_gsea_settings <- function(config) {
+  rna  <- config$modes$rna %||% list()
+  enr  <- rna$enrichment %||% list()
+  # [[ ]] not $: enr$gsea would partially match enr$gsea_engine when the
+  # gsea block is absent and hand back the engine string.
+  gsea <- enr[["gsea", exact = TRUE]] %||% list()
+  pw   <- rna[["pathway", exact = TRUE]] %||% list()
+
+  engine <- enr$gsea_engine %||% "fgsea"
+  # Case-insensitive, as validate_rna_config() accepts it.
+  hit <- if (is.character(engine) && length(engine) == 1L) {
+    match(tolower(engine), tolower(.RNA_GSEA_ENGINES))
+  } else NA_integer_
+  if (is.na(hit)) {
+    stop("modes.rna.enrichment.gsea_engine must be one of: ",
+         paste(.RNA_GSEA_ENGINES, collapse = ", "), " (got: ",
+         paste(format(engine), collapse = ", "), ").", call. = FALSE)
+  }
+  engine <- .RNA_GSEA_ENGINES[hit]
+
+  list(
+    engine   = engine,
+    min_size = gsea$min_size %||% pw$min_size %||% 10,
+    max_size = gsea$max_size %||% pw$max_size %||% 500,
+    seed     = config$params$seed %||% 1L
+  )
+}
