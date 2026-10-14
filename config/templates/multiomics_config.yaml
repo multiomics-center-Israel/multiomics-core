@@ -91,6 +91,9 @@ modes:
       method: "perseus_like"
       width: 0.2
       downshift: 1.6
+      multi_imputation: true   # false = single imputation (no consensus filter)
+      no_repetitions: 10       # imputation runs for the consensus DE call
+      min_no_passed: 8         # runs a feature must pass in
 
     de:
       method: "limma"
