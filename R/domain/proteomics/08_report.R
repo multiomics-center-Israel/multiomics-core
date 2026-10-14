@@ -617,6 +617,10 @@ methods_pooled_enrichment_sentences <- function(pooled_dir, txt) {
 #' @param pooled_dir Directory of the pooled-ranking enrichment
 #'   (proteomics_pooled_enrichment_dir()), or NULL. Its sentences are emitted
 #'   only when its tables exist.
+#' @param go_simplify_summary_file Path to the GO simplification summary
+#'   (\code{Enrichment/simplified/go_simplification_summary.csv}), or NULL. The
+#'   simplification sentence is emitted only when this file records a table that
+#'   was simplified.
 #' @return Named list of character scalars: \code{data_processing},
 #'   \code{missing_values}, \code{differential}, \code{consensus},
 #'   \code{quality_control}, \code{downstream}, \code{software},
@@ -625,7 +629,8 @@ methods_pooled_enrichment_sentences <- function(pooled_dir, txt) {
 build_proteomics_methods_text <- function(config, de_method = "limma",
                                           n_included = NA_integer_, run_dir = NULL,
                                           pca_cc_file = NULL, hier_file = NULL,
-                                          pooled_dir = NULL) {
+                                          pooled_dir = NULL,
+                                          go_simplify_summary_file = NULL) {
     cfg <- config$modes$proteomics %||% list()
     de_cfg <- cfg$de %||% list()
     imp_cfg <- cfg$imputation %||% list()
@@ -904,6 +909,8 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                                 pw_desc,
                                 paste(cfg$pathway$databases %||% c("GO", "KEGG", "Reactome"),
                                       collapse = ", ")))
+        go_simplify_text <- describe_go_simplification(go_simplify_summary_file)
+        if (!is.null(go_simplify_text)) down <- c(down, go_simplify_text)
     }
     pooled_on <- isTRUE(((cfg$pathway %||% list())$pooled_ranking %||% list())$enabled)
     pooled_txt <- if (pooled_on) methods_pooled_ranking_text(pooled_dir, imp_cfg)

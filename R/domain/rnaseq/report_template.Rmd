@@ -3174,6 +3174,10 @@ format(as.numeric(n_de), big.mark = ",")
 ))
 
 cat(pathway_methods_text, "\n\n")
+# Gated on the summary the simplification step wrote, not on the config flag.
+go_simplify_text <- describe_go_simplification(
+    file.path(enrich_dir, "simplified", "go_simplification_summary.csv"))
+if (!is.null(go_simplify_text)) cat(go_simplify_text, "\n\n")
 
 cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
