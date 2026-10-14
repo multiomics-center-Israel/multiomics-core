@@ -114,7 +114,6 @@ modes:
     # How to interpret your DE summary output table (for get_de_features / clustering / QC_post)
     de_table:
       id_col: "FeatureID"
-      pass_any_col: "pass_any_contrast"
 
     # QC_post (if you want the same behavior as proteomics)
     qc_post:
@@ -124,8 +123,6 @@ modes:
       plots:
         volcano: true
         ma: true
-      outputs:
-        write_de_tables: true
 
     # Optional clustering (off by default)
     clustering:
