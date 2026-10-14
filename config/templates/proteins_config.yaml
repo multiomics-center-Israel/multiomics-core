@@ -187,7 +187,6 @@ modes:
     # Report customization
     # --------------------------------------------------------
     report:
-      project_id: ""                       # Shown in report title (e.g. "EP-2025-001")
       introduction_text: ""                # Main introduction paragraph
       introduction_background: ""          # Optional: Background subsection
       introduction_aim: ""                 # Optional: Aim subsection
