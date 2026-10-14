@@ -167,11 +167,7 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
               paste(names(row_data), collapse = ", "))
   }
   if (!"feature_id" %in% names(row_data)) {
-    row_data$feature_id <- if ("Metabolite" %in% names(row_data)) {
-      row_data$Metabolite
-    } else {
-      rownames(row_data)
-    }
+    row_data$feature_id <- mmc_feature_ids(row_data)
   }
 
   # -- Resolve the set of contrasts to run ------------------------------------

@@ -2071,7 +2071,6 @@ function generateRNAYaml() {
 
   yaml += '\n    normalization:\n';
   yaml += '      method: ' + yamlStr(v('rna_norm')) + '\n';
-  yaml += '      prior.count: 1\n';
 
   yaml += '\n    filtering:\n';
   yaml += '      group_col: ' + yamlStr(groupCol) + '\n';

@@ -61,7 +61,7 @@ run_cosmos_causal_network <- function(mae, de_results = NULL, config,
 
     # Check for a solver backend
     has_solver <- requireNamespace("lpSolve", quietly = TRUE) ||
-                  requireNamespace("cbc", quietly = TRUE)
+      nzchar(Sys.which("cbc"))
     if (!has_solver) {
         message("  No ILP solver found. Install lpSolve: install.packages('lpSolve')")
         return(NULL)

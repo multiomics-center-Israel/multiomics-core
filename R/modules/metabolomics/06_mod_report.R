@@ -75,6 +75,12 @@ mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
 #' @param enrichment_res  List from mod_metabolomics_enrichment() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
+#' @param mummichog_files Flat character vector of every mummichog output file
+#'   across all contrasts (`metab_mummichog_report_files`). Supplying it
+#'   activates the supporting-evidence layer and the complementary GSEA, both of
+#'   which read the EmpiricalCompound tables the pathway tables alone do not
+#'   carry; omit it and the report shows the ORA plot and table only. GSEA
+#'   additionally needs `de_res`, whose `method` decides the ranking statistic.
 #' @return Character path to the rendered HTML file.
 mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     clustering_res = NULL,
@@ -85,7 +91,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     qc_comparison_file = NULL,
                                     qc_suite_files     = NULL,
                                     commentary_file    = NULL,
-                                    mummichog_pathways = NULL) {
+                                    mummichog_pathways = NULL,
+                                    mummichog_files    = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
         return(character(0))
@@ -130,10 +137,21 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
     # Build per-contrast mummichog report sections (06e) from the per-contrast
     # pathway tables. Empty list when mummichog is disabled or no contrast has a
     # result, which keeps the report section hidden.
-    mummi_sections <- build_mummichog_report_sections(mummichog_pathways, config)
+    # `mummichog_files` and pre$row_data additionally activate the supporting-
+    # evidence layer (06f); without either, sections carry evidence = NULL and
+    # the report simply omits that tab.
+    # `de_res` activates the complementary GSEA (06g): it supplies both the
+    # ranking statistic and the DE method that decides which column that is.
+    mummi_sections <- build_mummichog_report_sections(
+        mummichog_pathways, config,
+        files    = mummichog_files,
+        row_data = pre$row_data,
+        de_res   = de_res)
 
-    # Save standalone presentation exports per contrast (PNG + PDF plot, TSV +
-    # CSV table) into mummichog_pinned/, named by the section's de-duplicated
+    # Save standalone presentation exports per contrast (plots as PNG + PDF,
+    # tables as TSV + CSV: the ORA bubble and pathway table, the GSEA scatter
+    # and table, and the three evidence tables when built) into
+    # mummichog_pinned/, named by the section's de-duplicated
     # slug (so labels that collapse to the same token don't overwrite each
     # other), in addition to embedding them in the HTML. The engine's mcg_*
     # result files are untouched. Paths are returned so the file target tracks them.
@@ -142,8 +160,19 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         s <- mummi_sections[[contrast]]
         mummi_exports <- c(mummi_exports,
                            save_mummichog_exports(s$plot, s$table, out_dir,
-                                                  contrast_label = s$slug))
+                                                  contrast_label = s$slug,
+                                                  gsea      = s$gsea,
+                                                  gsea_plot = s$gsea_plot,
+                                                  evidence  = s$evidence))
     }
+
+    # A contrast the stage ran but that produced no section never reaches the
+    # loop above, so the by-name GSEA clearing inside save_mummichog_exports()
+    # never runs for it and a previous run's table would survive. Clearing is
+    # safe for those contrasts because there is nothing of theirs to keep;
+    # whether they should get a GSEA analysis at all is a section-contract
+    # question, tracked separately.
+    clear_orphan_mummichog_gsea_exports(mummichog_files, mummi_sections, out_dir)
 
     render_params <- list(
 

@@ -181,6 +181,38 @@
   NULL
 }
 
+#' Resolve the feature id of every row of a metabolomics feature table
+#'
+#' One rule for every consumer of the ids the mummichog stage works with: an
+#' explicit `feature_id` column, else `Metabolite`, else the row names. The stage
+#' (05b) sends these ids to mummichog as `CompoundID_from_user`, and the evidence
+#' layer (06f) keys the dataset's annotations by the same ids to join them back,
+#' so both must resolve them the same way.
+#'
+#' @param row_data Feature annotation table (`pre$row_data`).
+#' @return Vector of feature ids, one per row of `row_data`.
+mmc_feature_ids <- function(row_data) {
+  src <- mmc_feature_id_source(row_data)
+  if (is.na(src)) rownames(row_data) else row_data[[src]]
+}
+
+#' Name the column the mummichog feature ids come from
+#'
+#' The single place the id precedence of `mmc_feature_ids()` is written down:
+#' `feature_id`, else `Metabolite`, else the row names. Consumers that must
+#' know *where* the ids came from (e.g. to avoid reading the id column back as
+#' an annotation) ask this instead of re-deriving the order.
+#'
+#' @param row_data Feature annotation table (`pre$row_data`).
+#' @return `"feature_id"` or `"Metabolite"`, or `NA_character_` when the ids
+#'   are the row names.
+mmc_feature_id_source <- function(row_data) {
+  for (cl in c("feature_id", "Metabolite")) {
+    if (cl %in% names(row_data)) return(cl)
+  }
+  NA_character_
+}
+
 #' Validate a statistics table for mummichog input
 #'
 #' Coerces the requested columns to numeric and enforces mummichog's sanity
@@ -706,10 +738,10 @@ read_mummichog_pathways <- function(files) {
 #'
 #' The per-contrast stage writes each contrast's outputs under
 #' `mummichog_pinned/<contrast>/...` and tracks every file in one flat
-#' `format = "file"` target. This regroups that flat list by contrast directory
-#' — the path segment directly under `mummichog_pinned/` — and reads each
-#' contrast's pathway table, so the report can render one section per contrast
-#' without the stage having to hold the tables in memory.
+#' `format = "file"` target. This regroups that flat list by contrast — via
+#' `group_mummichog_files_by_contrast()`, which the evidence layer shares — and
+#' reads each contrast's pathway table, so the report can render one section per
+#' contrast without the stage having to hold the tables in memory.
 #'
 #' @param files Character vector of mummichog output files across all contrasts.
 #' @return A named list keyed by the original contrast label (recovered from the
@@ -720,6 +752,37 @@ read_mummichog_pathways <- function(files) {
 #'   `mummichog_pinned/`. A pathway table that exists but cannot be parsed
 #'   raises (rather than being silently dropped as if the contrast had no result).
 read_mummichog_pathways_by_contrast <- function(files) {
+  groups <- group_mummichog_files_by_contrast(files)
+  out <- list()
+  for (label in names(groups)) {
+    grp <- groups[[label]]
+    # Distinguish "this contrast produced no pathway table" (expected — skip it
+    # quietly so the report just omits the section) from "the table exists but
+    # cannot be read" (a corrupt/truncated output). Only the former is suppressed;
+    # a genuine parse error surfaces via read_mummichog_pathways() rather than
+    # silently dropping a contrast whose results are actually broken.
+    if (!any(grepl("^mcg_pathwayanalysis.*\\.tsv$", basename(grp)))) next
+    out[[label]] <- read_mummichog_pathways(grp)
+  }
+  out
+}
+
+
+#' Group a flat mummichog file list by contrast
+#'
+#' The per-contrast stage tracks every file across all contrasts in ONE
+#' `format = "file"` target. This regroups that flat list by contrast directory
+#' — the path segment directly under `mummichog_pinned/` — and restores the
+#' original DE contrast labels from the stage's `contrasts.tsv` map. The pathway
+#' read-back above and the supporting-evidence layer (06f) both need that
+#' grouping, so it lives in exactly one place.
+#'
+#' @param files Character vector of mummichog output files across all contrasts.
+#' @return A named list keyed by the original contrast label (falling back to the
+#'   sanitised subdir name when the map is absent), each the character vector of
+#'   that contrast's files. Empty list when `files` is empty or nothing lives
+#'   under `mummichog_pinned/`.
+group_mummichog_files_by_contrast <- function(files) {
   if (length(files) == 0) return(list())
   # Tolerate Windows backslash separators (some paths come from normalizePath(),
   # which uses "\\" there): match on a "/"-normalised copy, read from originals.
@@ -748,14 +811,7 @@ read_mummichog_pathways_by_contrast <- function(files) {
 
   out <- list()
   for (dir in unique(contrast)) {
-    grp <- keep[contrast == dir]
-    # Distinguish "this contrast produced no pathway table" (expected — skip it
-    # quietly so the report just omits the section) from "the table exists but
-    # cannot be read" (a corrupt/truncated output). Only the former is suppressed;
-    # a genuine parse error surfaces via read_mummichog_pathways() rather than
-    # silently dropping a contrast whose results are actually broken.
-    if (!any(grepl("^mcg_pathwayanalysis.*\\.tsv$", basename(grp)))) next
-    out[[label_of(dir)]] <- read_mummichog_pathways(grp)
+    out[[label_of(dir)]] <- keep[contrast == dir]
   }
   out
 }
@@ -788,10 +844,15 @@ read_mummichog_user_input <- function(files) {
 #'
 #' userInput_to_EmpiricalCompounds.tsv links each empirical compound (EID, the
 #' unit mummichog reports in pathway/module tables) to the input feature and the
-#' feature id we sent (CompoundID_from_user).
+#' feature id we sent (CompoundID_from_user). It also echoes back each feature's
+#' input row, m/z, retention time, p-value and statistic, and the EC's
+#' `str_row_ion` string; those are returned too, as read, so the evidence layer
+#' (06f) can use this one reader instead of parsing the file a second time.
 #'
 #' @param files Character vector of mummichog output files.
-#' @return A tibble with columns EID, feature_id, compounds, compound_names.
+#' @return A data.frame with character columns EID, feature_id, compounds,
+#'   compound_names, input_row, mz, retention_time, p_value, statistic,
+#'   str_row_ion. Optional columns absent from the file are `NA`.
 read_mummichog_empirical_map <- function(files) {
   f <- files[basename(files) == "userInput_to_EmpiricalCompounds.tsv"]
   if (length(f) == 0) .mmc_stop("No userInput_to_EmpiricalCompounds.tsv found among mummichog outputs.")
@@ -804,11 +865,27 @@ read_mummichog_empirical_map <- function(files) {
     .mmc_stop("userInput_to_EmpiricalCompounds.tsv missing column(s): ",
               paste(miss, collapse = ", "))
   }
+  # One NA per row (not a bare NA) so a header-only file still yields a
+  # zero-row frame instead of a length mismatch.
+  opt <- function(nm) {
+    if (nm %in% names(raw)) as.character(raw[[nm]]) else rep(NA_character_, nrow(raw))
+  }
+  # mummichog writes `input_row` twice (once itself, once inside the feature's
+  # own output block); readr renames the duplicate, so take the first — the
+  # EC-side key that `str_row_ion` refers to.
+  row_col <- grep("^input_row", names(raw), value = TRUE)
   data.frame(
-    EID           = raw[["EID"]],
-    feature_id    = raw[["CompoundID_from_user"]],
-    compounds     = if ("compounds" %in% names(raw)) raw[["compounds"]] else NA_character_,
-    compound_names = if ("compound_names" %in% names(raw)) raw[["compound_names"]] else NA_character_,
+    EID            = raw[["EID"]],
+    feature_id     = raw[["CompoundID_from_user"]],
+    compounds      = opt("compounds"),
+    compound_names = opt("compound_names"),
+    input_row      = if (length(row_col) > 0) as.character(raw[[row_col[[1]]]]) else
+                       rep(NA_character_, nrow(raw)),
+    mz             = opt("m/z"),
+    retention_time = opt("retention_time"),
+    p_value        = opt("p_value"),
+    statistic      = opt("statistic"),
+    str_row_ion    = opt("str_row_ion"),
     stringsAsFactors = FALSE
   )
 }
