@@ -150,10 +150,15 @@
 #'
 #' Returns list(gsea, gsea_leading_edge). The heavy `core_enrichment` gene string
 #' is encoded to integer indices (order-preserving) and REMOVED from each table
-#' only AFTER a successful lossless encode; the short `leading_edge` summary
-#' string is kept. All significant rows are preserved (no top-N).
+#' only AFTER a successful lossless encode, together with fgsea's comma-joined
+#' `leadingEdge` copy of the same genes; the short `leading_edge` summary
+#' string is kept. All significant rows are preserved (no top-N). The fgsea
+#' engine stores every tested set, so tables are cut to the rows at
+#' `sig_cutoff` here, which leaves the payload as it was with the
+#' clusterProfiler engine (whose tables hold only those rows already).
+#' @param sig_cutoff Adjusted-p cutoff (the configured GSEA cutoff).
 #' @noRd
-.restructure_gsea <- function(pathway_res, gene_index) {
+.restructure_gsea <- function(pathway_res, gene_index, sig_cutoff = 0.05) {
     idx <- pathway_res$enrichment_index
     pw  <- pathway_res$pathway_results
     gsea <- list(); le <- list()
@@ -163,6 +168,7 @@
         db       <- r$database; rk <- r$group; contrast <- r$item
         tab      <- pw[[r$container]][[r$storage_key]]
         if (is.null(tab)) next
+        if ("padj" %in% names(tab)) tab <- .gsea_significant_rows(tab, sig_cutoff)
         if ("core_enrichment" %in% names(tab)) {
             ids <- as.character(tab$ID)
             enc <- lapply(tab$core_enrichment, function(s)
@@ -171,6 +177,7 @@
             names(enc) <- ids
             le[[db]][[rk]][[contrast]] <- enc
             tab$core_enrichment <- NULL   # strip only after successful encode
+            tab$leadingEdge     <- NULL
         }
         gsea[[db]][[rk]][[contrast]] <- tab
     }
@@ -261,12 +268,14 @@ build_enrichment_payload <- function(pathway_res, gene_universe = NULL, config =
 
     gene_index <- .build_gene_index(pathway_res, gene_universe)
 
-    gsea_split <- .restructure_gsea(pathway_res, gene_index)
+    enr_config <- .build_enrichment_config(pathway_res, config)
+    gsea_split <- .restructure_gsea(pathway_res, gene_index,
+                                    sig_cutoff = enr_config$gsea_pvalue_cutoff)
 
     enrichment <- list(
         available          = TRUE,
         gene_index         = gene_index,
-        config             = .build_enrichment_config(pathway_res, config),
+        config             = enr_config,
         manifest           = pathway_res$enrichment_manifest %||% .empty_enrichment_manifest(),
         ora                = .restructure_ora(pathway_res),
         gsea               = gsea_split$gsea,

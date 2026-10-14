@@ -218,8 +218,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # 5. Run fGSEA / ORA per contrast
     # ------------------------------------------------------------------
     pw_method  <- pw_cfg$method   %||% "fgsea"
-    pw_min     <- pw_cfg$min_size %||% 10
-    pw_max     <- pw_cfg$max_size %||% 500
+    gsea_set   <- resolve_rna_gsea_settings(config)
 
     # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
     # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
@@ -234,9 +233,9 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         gene_sets          = gene_sets,
         annotation         = annotation_df,
         method             = pw_method,
-        min_size           = pw_min,
-        max_size           = pw_max,
-        seed               = config$params$seed %||% 1L,
+        min_size           = gsea_set$min_size,
+        max_size           = gsea_set$max_size,
+        seed               = gsea_set$seed,
         p_cutoff           = rna_de_cfg$p_cutoff %||% rna_de_cfg$padj_cutoff %||% 0.05,
         lfc_cutoff         = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)
     )
@@ -290,6 +289,12 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 #' shape as mod_rnaseq_pathway: list(annotation, pathway_results, plot_files),
 #' with pathway_results a (possibly empty) named list of data.frames carrying a
 #' padj column for downstream compatibility.
+#'
+#' GSEA runs on the engine resolve_rna_gsea_settings() selects. With fgsea (the
+#' default) every tested set is kept, and the pval_with_direction table of each
+#' contrast and database is also written as
+#' Enrichment/pathway_<contrast>_<db>_fgsea.csv, the file the online path
+#' writes and the RNA report reads.
 #'
 #' @param de_tables Named list of per-contrast DE tables.
 #' @param feature_ids All unique feature IDs (for the overlap guard).
@@ -373,7 +378,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # truth for enrichment RNG. Threaded into run_enrichment_jobs() as an explicit
     # future.seed, it makes GSEA identical across worker counts AND independent
     # rebuilds. Falls back to 1L if params$seed is unset.
-    enr_seed    <- config$params$seed %||% 1L
+    gsea_set    <- resolve_rna_gsea_settings(config)
+    enr_seed    <- gsea_set$seed
     # Enrichment output toggles. Rich-by-default: all default TRUE except the
     # high-volume per-pathway heatmaps (opt-in). Set any to false to disable.
     #   modes.rna.enrichment.plots.<name> and .gsea.per_pathway_artifacts
@@ -604,8 +610,25 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         gene_context          = gene_context,
         expr_mat              = heatmap_expr,
         annotation_col        = annotation_col,
-        seed                  = enr_seed
+        seed                  = enr_seed,
+        engine                = gsea_set$engine,
+        min_size              = gsea_set$min_size,
+        max_size              = gsea_set$max_size
     )
+
+    # Flat fgsea files, named and laid out as the online path writes them, so
+    # the RNA report and other readers of pathway_<contrast>_<db>_fgsea.csv
+    # see offline results too. Files from an earlier run are removed first:
+    # a switch to the clusterProfiler engine, or a dropped contrast, would
+    # otherwise leave them to be read as current.
+    old_flat <- list.files(enrich_dir, pattern = "^pathway_.*_fgsea\\.csv$",
+                           full.names = TRUE)
+    if (length(old_flat) > 0) unlink(old_flat)
+    if (identical(gsea_set$engine, "fgsea")) {
+        flat <- lapply(gsea_out$results, function(x) x[grepl("_fgsea$", names(x))])
+        flat <- lapply(flat, function(x) lapply(x, .online_fgsea_columns))
+        save_pathway_results(flat[lengths(flat) > 0], enrich_dir)
+    }
 
     for (contrast in names(gsea_out$results)) {
         if (is.null(pathway_results[[contrast]])) {
@@ -641,7 +664,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
     # GSEA pathway membership: significant-pathway union per db from the exact
     # local TERM2GENE tables GSEA used.
-    pathway_membership <- .build_gsea_pathway_membership(gsea_out$results, local_tables)
+    pathway_membership <- .build_gsea_pathway_membership(
+        gsea_out$results, local_tables, sig_cutoff = gsea_pval)
 
     message("\n=== Local enrichment complete ===")
     if (length(gene_lists) == 0) message("  ORA: skipped (no gene lists available)")
@@ -744,14 +768,20 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 #'
 #' @param gsea_results The nested `contrast -> key -> data.frame` GSEA results.
 #' @param local_tables Output of load_local_pathway_tables() (per-db TERM2GENE).
+#' @param sig_cutoff Adjusted-p cutoff applied to tables that carry a `padj`
+#'   column (the fgsea engine keeps every tested set); NULL takes every row.
 #' @return list(database -> list(pathway_id -> character gene IDs)); empty list
 #'   when no GSEA pathways are significant.
 #' @noRd
-.build_gsea_pathway_membership <- function(gsea_results, local_tables) {
+.build_gsea_pathway_membership <- function(gsea_results, local_tables,
+                                           sig_cutoff = NULL) {
     ids_by_db <- list()
     for (contrast in names(gsea_results)) {
         for (key in names(gsea_results[[contrast]])) {
             df <- gsea_results[[contrast]][[key]]
+            if (!is.null(sig_cutoff) && is.data.frame(df) && "padj" %in% names(df)) {
+                df <- .gsea_significant_rows(df, sig_cutoff)
+            }
             if (is.null(df) || !all(c("ID", "database") %in% names(df)) ||
                 nrow(df) == 0) next
             db <- as.character(df$database[1])

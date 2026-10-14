@@ -954,6 +954,70 @@ run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) 
     out
 }
 
+#' Run fgsea on one ranked vector with the pipeline's shared settings
+#'
+#' The single fgsea call used by the online path (run_pathway_analysis()) and
+#' the offline RNA path (run_gsea_all() with engine "fgsea"), so both use the
+#' same multilevel settings, seed handling and output shape. Every gene set
+#' within the size limits is returned; no p-value cutoff is applied here, so
+#' filtering for display stays with the caller. padj is fgsea's
+#' Benjamini-Hochberg adjustment.
+#'
+#' @param ranks Named numeric vector of gene scores (names are gene IDs).
+#' @param gene_sets Named list of character vectors (one per gene set).
+#' @param min_size Minimum gene set size after matching to `ranks`.
+#' @param max_size Maximum gene set size after matching to `ranks`.
+#' @param seed Integer seed; fgseaMultilevel is stochastic, so without it terms
+#'   near the cutoff change between otherwise identical runs.
+#' @param n_perm_simple Number of permutations for the initial simple step.
+#' @param bpparam Optional BiocParallel backend passed to fgsea; NULL keeps
+#'   fgsea's default.
+#' @return data.frame with fgsea's columns (pathway, pval, padj, log2err, ES,
+#'   NES, size, leadingEdge), leadingEdge collapsed to a comma-separated
+#'   string; zero rows when no set passes the size limits.
+run_fgsea_core <- function(ranks, gene_sets, min_size = 10, max_size = 500,
+                           seed = 1L, n_perm_simple = 10000L, bpparam = NULL) {
+    args <- list(pathways = gene_sets, stats = ranks, minSize = min_size,
+                 maxSize = max_size, nPermSimple = n_perm_simple)
+    if (!is.null(bpparam)) args$BPPARAM <- bpparam
+    res <- withr::with_seed(seed, do.call(fgsea::fgsea, args))
+    df <- as.data.frame(res)
+    if (nrow(df) > 0) {
+        df$leadingEdge <- vapply(df$leadingEdge, paste, character(1), collapse = ",")
+    }
+    df
+}
+
+#' Convert a TERM2GENE / TERM2NAME pair into an fgsea gene-set list
+#'
+#' Sets are listed in order of first appearance in `term2gene` rather than
+#' sorted, because sorting depends on the locale and fgsea's random draws
+#' follow the order of the sets. Term names are attached as the
+#' `descriptions` attribute, the convention load_gene_sets() uses and
+#' add_pathway_names() reads.
+#'
+#' @param term2gene Data.frame whose first two columns are term ID and gene ID.
+#' @param term2name Optional data.frame whose first two columns are term ID and
+#'   term name.
+#' @return Named list of unique gene-ID vectors, with a named character
+#'   `descriptions` attribute when `term2name` is given.
+term2gene_to_gene_sets <- function(term2gene, term2name = NULL) {
+    terms <- as.character(term2gene[[1]])
+    genes <- as.character(term2gene[[2]])
+    keep  <- !is.na(terms) & !is.na(genes) & nzchar(terms) & nzchar(genes)
+    terms <- terms[keep]
+    genes <- genes[keep]
+    sets  <- lapply(split(genes, factor(terms, levels = unique(terms))), unique)
+
+    if (!is.null(term2name) && nrow(term2name) > 0) {
+        nm <- stats::setNames(as.character(term2name[[2]]), as.character(term2name[[1]]))
+        nm <- nm[!duplicated(names(nm))]
+        attr(sets, "descriptions") <- nm[intersect(names(sets), names(nm))]
+    }
+    sets
+}
+
+
 #' Run pathway analysis on DE results
 #'
 #' @param de_tables Named list of DE result data frames (from run_deseq2_de()$tables).
@@ -1012,17 +1076,13 @@ run_pathway_analysis <- function(de_tables,
                     # values rather than on the column being present.
                     ranks <- .build_fgsea_ranks(res)
 
-                    # fgseaMultilevel is stochastic: without a seed, terms near
-                    # the padj threshold flip between otherwise identical runs.
-                    fgsea_res <- withr::with_seed(seed, fgsea::fgsea(
-                        pathways = gs,
-                        stats = ranks,
-                        minSize = min_size,
-                        maxSize = max_size,
-                        nPermSimple = 10000
-                    ))
-
-                    fgsea_df <- as.data.frame(fgsea_res)
+                    fgsea_df <- run_fgsea_core(
+                        ranks     = ranks,
+                        gene_sets = gs,
+                        min_size  = min_size,
+                        max_size  = max_size,
+                        seed      = seed
+                    )
 
                     if (nrow(fgsea_df) == 0) {
                         message("    fgsea: no gene set overlap — skipping ", db_name)
@@ -1030,9 +1090,6 @@ run_pathway_analysis <- function(de_tables,
                         fgsea_df$contrast <- contrast_name
                         fgsea_df$database <- db_name
                         fgsea_df$method <- "fgsea"
-
-                        # Collapse leading edge to comma-separated string
-                        fgsea_df$leadingEdge <- sapply(fgsea_df$leadingEdge, paste, collapse = ",")
 
                         # Add pathway names (GO term names, etc.)
                         fgsea_df <- add_pathway_names(fgsea_df, db_name, gs)
@@ -1887,6 +1944,8 @@ build_ranked_gene_lists <- function(de_tables) {
 #'
 #' Wraps clusterProfiler::GSEA() with the legacy enrichment parameters.
 #' maxGSSize is set to the total number of unique genes in TERM2GENE (legacy behavior).
+#' Standalone helper for the clusterProfiler engine; the pipeline runs offline
+#' GSEA through run_gsea_all(), whose default engine is fgsea.
 #'
 #' @param ranked_genes Named numeric vector (gene IDs as names, ranking metric as values).
 #'   Must be sorted descending.
@@ -2141,42 +2200,64 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
 #' Build a pure-compute GSEA worker with a minimal captured environment
 #'
 #' Returns a `function(job)` that runs GSEA for one job. Defining it here (not
-#' nested inside run_gsea_all) bounds the closure's environment to just the two
-#' scalar arguments below — so future.apply serializes NOTHING large from the
+#' nested inside run_gsea_all) bounds the closure's environment to the scalar
+#' arguments below — so future.apply serializes NOTHING large from the
 #' closure. Everything the job needs travels IN the job: the per-job ranked
-#' vector (`job$ranked`) AND this job's single-database `job$term2gene` /
-#' `job$term2name` (both built in run_gsea_all). The worker never captures the
-#' whole multi-database `local_tables`, so future exports at most one database's
-#' tables per job. Pure computation only (no file I/O, no messages), fgsea forced
-#' serial via SerialParam. Analogous to .make_ora_worker().
+#' vector (`job$ranked`) AND this job's single-database annotation (built in
+#' run_gsea_all). The worker never captures the whole multi-database
+#' `local_tables`, so future exports at most one database per job. Pure
+#' computation only (no file I/O, no messages), fgsea forced serial via
+#' SerialParam. Analogous to .make_ora_worker().
 #'
-#' @param pvalueCutoff GSEA adjusted-p cutoff.
-#' @param pAdjustMethod P-value adjustment method.
+#' Two engines. "fgsea" (default) runs run_fgsea_core(), the call the online
+#' path also uses, on `job$gene_sets` and returns every tested set.
+#' "clusterProfiler" is the earlier clusterProfiler::GSEA() call on
+#' `job$term2gene` / `job$term2name` (minGSSize 4, maxGSSize = all annotated
+#' genes, sets above `pvalueCutoff` dropped, seeded only through the per-job
+#' RNG stream), kept so earlier offline runs can be reproduced.
+#'
+#' @param pvalueCutoff GSEA adjusted-p cutoff (clusterProfiler engine only).
+#' @param pAdjustMethod P-value adjustment method (clusterProfiler engine only).
+#' @param engine "fgsea" or "clusterProfiler".
+#' @param min_size Minimum gene-set size (fgsea engine only).
+#' @param max_size Maximum gene-set size (fgsea engine only).
+#' @param seed Integer seed passed to run_fgsea_core() (fgsea engine only).
 #' @return A function(job) -> list(ranking_method, contrast, db_name, gsea_result).
 #' @noRd
-.make_gsea_worker <- function(pvalueCutoff, pAdjustMethod) {
-    force(pvalueCutoff); force(pAdjustMethod)
+.make_gsea_worker <- function(pvalueCutoff, pAdjustMethod, engine = "fgsea",
+                              min_size = 10, max_size = 500, seed = 1L) {
+    force(pvalueCutoff); force(pAdjustMethod); force(engine)
+    force(min_size); force(max_size); force(seed)
     function(job) {
-        ranked    <- job$ranked
-        term2gene <- job$term2gene
-        term2name <- job$term2name
-
         res <- tryCatch({
-            clusterProfiler::GSEA(
-                geneList      = ranked,
-                TERM2GENE     = term2gene,
-                TERM2NAME     = term2name,
-                minGSSize     = 4,
-                maxGSSize     = length(unique(term2gene[, 2])),
-                pAdjustMethod = pAdjustMethod,
-                pvalueCutoff  = pvalueCutoff,
-                # Serial fgsea inside each job. Outer parallelism is future.apply
-                # over jobs (see run_enrichment_jobs); fgsea's default (Windows)
-                # SnowParam spawns a 14-worker SOCK cluster PER job, which is
-                # nested parallelism — the source of "error writing to
-                # connection" failures under RStudio — and redundant here.
-                BPPARAM       = BiocParallel::SerialParam()
-            )
+            if (identical(engine, "fgsea")) {
+                run_fgsea_core(
+                    ranks     = job$ranked,
+                    gene_sets = job$gene_sets,
+                    min_size  = min_size,
+                    max_size  = max_size,
+                    seed      = seed,
+                    # Serial inside each job; see the clusterProfiler branch.
+                    bpparam   = BiocParallel::SerialParam()
+                )
+            } else {
+                term2gene <- job$term2gene
+                clusterProfiler::GSEA(
+                    geneList      = job$ranked,
+                    TERM2GENE     = term2gene,
+                    TERM2NAME     = job$term2name,
+                    minGSSize     = 4,
+                    maxGSSize     = length(unique(term2gene[, 2])),
+                    pAdjustMethod = pAdjustMethod,
+                    pvalueCutoff  = pvalueCutoff,
+                    # Serial fgsea inside each job. Outer parallelism is future.apply
+                    # over jobs (see run_enrichment_jobs); fgsea's default (Windows)
+                    # SnowParam spawns a 14-worker SOCK cluster PER job, which is
+                    # nested parallelism — the source of "error writing to
+                    # connection" failures under RStudio — and redundant here.
+                    BPPARAM       = BiocParallel::SerialParam()
+                )
+            }
         }, error = function(e) {
             structure(list(message = e$message), class = "gsea_error")
         })
@@ -2189,19 +2270,150 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
     }
 }
 
+#' Shape one offline fgsea table for storage
+#'
+#' Orders rows by p-value, adds the identifying columns and pathway names, and
+#' adds clusterProfiler-named copies of the statistics (ID, Description,
+#' setSize, enrichmentScore, pvalue, p.adjust, core_enrichment with "/"
+#' separators). The copies keep the readers written for the earlier
+#' clusterProfiler tables working: the Shiny enrichment payload, the per-pathway
+#' writer and the pathway-membership builder. No statistic is recomputed.
+#'
+#' @param df Output of run_fgsea_core() (at least one row).
+#' @param gene_sets The gene-set list the job was scored on (carries the
+#'   `descriptions` attribute used for pathway names).
+#' @param db_name Database name.
+#' @param contrast Contrast (or `any_contrast`).
+#' @param ranking_method Ranking method the job used.
+#' @param method Value for the `method` column ("fgsea" for the primary ranking,
+#'   "fgsea_<ranking>" for the others).
+#' @return data.frame with the online fgsea columns plus `ranking_method` and
+#'   the clusterProfiler-named copies.
+#' @noRd
+.format_offline_fgsea <- function(df, gene_sets, db_name, contrast,
+                                  ranking_method, method) {
+    df <- df[order(df$pval, df$pathway), , drop = FALSE]
+    rownames(df) <- NULL
+    df$contrast       <- contrast
+    df$database       <- db_name
+    df$method         <- method
+    df$ranking_method <- ranking_method
+    df <- add_pathway_names(df, db_name, gene_sets)
+
+    named <- !is.na(df$pathway_name) & nzchar(df$pathway_name)
+    df$ID              <- df$pathway
+    df$Description     <- ifelse(named, df$pathway_name, df$pathway)
+    df$setSize         <- df$size
+    df$enrichmentScore <- df$ES
+    df$pvalue          <- df$pval
+    df$p.adjust        <- df$padj
+    df$core_enrichment <- gsub(",", "/", df$leadingEdge, fixed = TRUE)
+    df
+}
+
+#' Drop the clusterProfiler-named copies from an offline fgsea table
+#'
+#' Leaves the columns the online path writes (plus `ranking_method`), for the
+#' flat pathway_<contrast>_<db>_fgsea.csv files.
+#'
+#' @param df A table from .format_offline_fgsea().
+#' @return The same table without ID, Description, setSize, enrichmentScore,
+#'   pvalue, p.adjust and core_enrichment.
+#' @noRd
+.online_fgsea_columns <- function(df) {
+    copies <- c("ID", "Description", "setSize", "enrichmentScore", "pvalue",
+                "p.adjust", "core_enrichment")
+    df[, setdiff(names(df), copies), drop = FALSE]
+}
+
+#' Wrap significant offline fgsea rows in a gseaResult for the plot helpers
+#'
+#' enrichplot's dotplot/gseaplot2 and plot_gsea_ridgeplot() take a gseaResult.
+#' This builds one from rows that were already computed and filtered for
+#' display; nothing is re-scored. Returns NULL (plots are then skipped or fall
+#' back) when DOSE, which defines the class, is not available.
+#'
+#' @param sig_df Significant rows from .format_offline_fgsea().
+#' @param ranked The ranked vector the job was scored on.
+#' @param gene_sets The gene-set list the job was scored on.
+#' @param pvalue_cutoff Display cutoff, recorded in the params slot.
+#' @return A gseaResult object, or NULL.
+#' @noRd
+.fgsea_as_gsea_result <- function(sig_df, ranked, gene_sets, pvalue_cutoff = 0.05) {
+    if (is.null(sig_df) || nrow(sig_df) == 0) return(NULL)
+    if (!requireNamespace("DOSE", quietly = TRUE)) return(NULL)
+    cls <- tryCatch(methods::getClassDef("gseaResult", where = asNamespace("DOSE")),
+                    error = function(e) NULL)
+    if (is.null(cls)) return(NULL)
+
+    sig_df <- sig_df[order(sig_df$p.adjust, sig_df$pvalue, sig_df$ID), , drop = FALSE]
+    result <- data.frame(
+        ID              = sig_df$ID,
+        Description     = sig_df$Description,
+        setSize         = sig_df$setSize,
+        enrichmentScore = sig_df$enrichmentScore,
+        NES             = sig_df$NES,
+        pvalue          = sig_df$pvalue,
+        p.adjust        = sig_df$p.adjust,
+        core_enrichment = sig_df$core_enrichment,
+        row.names       = sig_df$ID,
+        stringsAsFactors = FALSE
+    )
+    slots <- list(
+        result   = result,
+        geneSets = unclass(gene_sets)[result$ID],
+        geneList = ranked,
+        organism = "UNKNOWN",
+        setType  = "UNKNOWN",
+        keytype  = "UNKNOWN",
+        readable = FALSE,
+        # gseaplot2 reads `exponent` (fgsea's gseaParam, 1 by default).
+        params   = list(pvalueCutoff = pvalue_cutoff, pAdjustMethod = "BH",
+                        exponent = 1)
+    )
+    slots <- slots[names(slots) %in% methods::slotNames(cls)]
+    tryCatch(do.call(methods::new, c(list(Class = cls), slots)),
+             error = function(e) {
+                 message("    could not build a gseaResult for plotting: ",
+                         conditionMessage(e))
+                 NULL
+             })
+}
+
 #' Run GSEA across all ranking methods, contrasts, and databases
 #'
-#' Orchestrator that runs run_gsea_local() for every combination of
-#' ranking method x contrast x database loaded from local tables.
-#' Jobs are independent and run in parallel when future.apply is available.
+#' Orchestrator that runs GSEA for every combination of ranking method x
+#' contrast x database loaded from local tables. Jobs are independent and run
+#' in parallel when future.apply is available.
+#'
+#' With engine "fgsea" (default) every job goes through run_fgsea_core(), the
+#' fgsea call the online path uses, and every tested gene set is stored; the
+#' significance cutoff only selects what is plotted and counted. The
+#' `primary_ranking` table of each contrast and database is stored under
+#' `<db>_fgsea` with `method = "fgsea"`, the key and value the online path and
+#' its readers use; the other rankings keep `<db>_gsea_<ranking>` with
+#' `method = "fgsea_<ranking>"`, so a reader looking for the fgsea table
+#' finds one table per contrast and database. With engine "clusterProfiler"
+#' the earlier clusterProfiler::GSEA() tables are produced unchanged (only
+#' significant sets, keys `<db>_gsea_<ranking>`).
 #'
 #' @param ranked_genes Output of build_ranked_gene_lists()
 #' @param local_tables Output of load_local_pathway_tables()
-#' @param pvalueCutoff Adjusted p-value cutoff
-#' @param pAdjustMethod P-value adjustment method
+#' @param pvalueCutoff Adjusted p-value cutoff (display and counts; with the
+#'   clusterProfiler engine also the filter applied by GSEA itself)
+#' @param pAdjustMethod P-value adjustment method (clusterProfiler engine; fgsea
+#'   always reports Benjamini-Hochberg)
 #' @param output_dir Directory for GSEA result CSVs
 #' @param workers Number of parallel workers (default 1 = sequential).
 #'   Parallelization uses future::plan(multisession) which is Windows-safe.
+#' @param per_pathway_artifacts,max_terms_in_dotplot,dotplot,ridgeplot,ridgeplot_all_genes,pathway_heatmaps
+#'   Output toggles (see .run_local_enrichment()).
+#' @param gene_context,expr_mat,annotation_col Optional inputs for the rich
+#'   per-pathway tables and heatmaps (serial stage only).
+#' @param seed Integer seed: the per-job RNG streams, and fgsea's own seed.
+#' @param engine "fgsea" or "clusterProfiler" (see resolve_rna_gsea_settings()).
+#' @param min_size,max_size Gene-set size limits for the fgsea engine.
+#' @param primary_ranking Ranking stored under `<db>_fgsea` (fgsea engine).
 #' @return Nested list compatible with downstream consumers:
 #'   contrast -> db_method_key -> data.frame with padj, NES, etc.
 run_gsea_all <- function(ranked_genes,
@@ -2219,16 +2431,30 @@ run_gsea_all <- function(ranked_genes,
                          gene_context = NULL,
                          expr_mat = NULL,
                          annotation_col = NULL,
-                         seed = 1L) {
+                         seed = 1L,
+                         engine = "fgsea",
+                         min_size = 10,
+                         max_size = 500,
+                         primary_ranking = "pval_with_direction") {
+
+    engine <- match.arg(engine, c("fgsea", "clusterProfiler"))
+    use_fgsea <- identical(engine, "fgsea")
 
     if (!is.null(output_dir)) {
         dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     }
 
+    # fgsea takes a named list of gene sets; convert each database's TERM2GENE
+    # once here rather than once per job.
+    gene_sets_by_db <- if (use_fgsea) {
+        lapply(local_tables, function(t) term2gene_to_gene_sets(t$TERM2GENE, t$TERM2NAME))
+    } else NULL
+
     # ------------------------------------------------------------------
     # 1. Build flat job list. Each job carries EVERYTHING it needs: its OWN
-    #    ranked vector (`ranked`) AND its OWN single database's TERM2GENE/
-    #    TERM2NAME (`term2gene`/`term2name`). Neither the whole `ranked_genes`
+    #    ranked vector (`ranked`) AND its OWN single database's annotation
+    #    (`gene_sets` for fgsea, `term2gene`/`term2name` for clusterProfiler).
+    #    Neither the whole `ranked_genes`
     #    structure nor the whole multi-database `local_tables` is captured by the
     #    worker closure, so future never broadcasts them as globals. The per-job
     #    payloads ride in the `jobs` iteration list (sent one-at-a-time to
@@ -2243,14 +2469,19 @@ run_gsea_all <- function(ranked_genes,
             if (length(ranked_genes[[ranking_method]][[contrast]]) == 0) next
 
             for (db_name in names(local_tables)) {
-                jobs[[length(jobs) + 1]] <- list(
+                job <- list(
                     ranking_method = ranking_method,
                     contrast       = contrast,
                     db_name        = db_name,
-                    ranked         = ranked_genes[[ranking_method]][[contrast]],
-                    term2gene      = local_tables[[db_name]]$TERM2GENE,
-                    term2name      = local_tables[[db_name]]$TERM2NAME
+                    ranked         = ranked_genes[[ranking_method]][[contrast]]
                 )
+                if (use_fgsea) {
+                    job$gene_sets <- gene_sets_by_db[[db_name]]
+                } else {
+                    job$term2gene <- local_tables[[db_name]]$TERM2GENE
+                    job$term2name <- local_tables[[db_name]]$TERM2NAME
+                }
+                jobs[[length(jobs) + 1]] <- job
             }
         }
     }
@@ -2271,11 +2502,13 @@ run_gsea_all <- function(ranked_genes,
     # inside run_gsea_all() would carry this whole execution frame — including
     # the large `jobs` list and `ranked_genes` — as its environment, and future
     # would serialize all of it. The factory bounds the worker's environment to
-    # only two scalar cutoffs; the ranked vector AND the single-database
-    # TERM2GENE/TERM2NAME ride in each `job` (the future_lapply iteration list,
+    # scalar settings; the ranked vector AND the single-database annotation
+    # ride in each `job` (the future_lapply iteration list,
     # sent per-job), so no multi-database `local_tables` is ever broadcast — the
     # fix for the >500 MiB future-globals failure exposed by the full Assaf run.
-    run_one_gsea_job <- .make_gsea_worker(pvalueCutoff, pAdjustMethod)
+    run_one_gsea_job <- .make_gsea_worker(pvalueCutoff, pAdjustMethod,
+                                          engine = engine, min_size = min_size,
+                                          max_size = max_size, seed = seed)
 
     # Dispatch pure GSEA compute through the generic parallel orchestration
     # layer. Assembly + all file I/O happen serially below (deterministic).
@@ -2310,7 +2543,9 @@ run_gsea_all <- function(ranked_genes,
         ranking_method <- jr$ranking_method
         contrast       <- jr$contrast
         res            <- jr$gsea_result
-        result_key     <- paste0(db_name, "_gsea_", ranking_method)
+        is_primary     <- use_fgsea && identical(ranking_method, primary_ranking)
+        result_key     <- if (is_primary) paste0(db_name, "_fgsea") else
+            paste0(db_name, "_gsea_", ranking_method)
 
         # TECHNICAL FAILURE: the worker caught an error (class "gsea_error"), or —
         # defensively — returned no result object at all. This is NOT a successful
@@ -2331,32 +2566,41 @@ run_gsea_all <- function(ranked_genes,
 
         # SUCCESSFUL but zero rows -> evaluated-but-empty (a real biological
         # outcome), distinct from the failures above.
+        # (With fgsea, zero rows means no gene set was within the size limits.)
         if (nrow(as.data.frame(res)) == 0) {
             message("  ", db_name, " | ", ranking_method, " | ", contrast,
-                    ": evaluated, 0 significant")
+                    if (use_fgsea) ": no gene set within the size limits"
+                    else ": evaluated, 0 significant")
             manifest_rows[[length(manifest_rows) + 1]] <- gsea_manifest_row("empty", 0L)
             next
         }
 
-        # Convert to data.frame for storage and downstream compatibility
-        res_df <- as.data.frame(res)
-        res_df$contrast <- contrast
-        res_df$database <- db_name
-        res_df$ranking_method <- ranking_method
+        if (use_fgsea) {
+            res_df <- .format_offline_fgsea(
+                res, gene_sets_by_db[[db_name]], db_name, contrast, ranking_method,
+                method = if (is_primary) "fgsea" else paste0("fgsea_", ranking_method))
+        } else {
+            # Convert to data.frame for storage and downstream compatibility
+            res_df <- as.data.frame(res)
+            res_df$contrast <- contrast
+            res_df$database <- db_name
+            res_df$ranking_method <- ranking_method
 
-        # Ensure downstream-required columns exist
-        if ("p.adjust" %in% colnames(res_df) && !"padj" %in% colnames(res_df)) {
-            res_df$padj <- res_df$p.adjust
-        }
-        if ("Description" %in% colnames(res_df) && !"pathway" %in% colnames(res_df)) {
-            res_df$pathway <- res_df$Description
+            # Ensure downstream-required columns exist
+            if ("p.adjust" %in% colnames(res_df) && !"padj" %in% colnames(res_df)) {
+                res_df$padj <- res_df$p.adjust
+            }
+            if ("Description" %in% colnames(res_df) && !"pathway" %in% colnames(res_df)) {
+                res_df$pathway <- res_df$Description
+            }
         }
 
         # Store in nested structure
         if (is.null(results[[contrast]])) results[[contrast]] <- list()
         results[[contrast]][[result_key]] <- res_df
 
-        n_sig <- nrow(.gsea_significant_rows(res_df, pvalueCutoff))
+        sig_df <- .gsea_significant_rows(res_df, pvalueCutoff)
+        n_sig  <- nrow(sig_df)
         message("  ", db_name, " | ", ranking_method, " | ", contrast,
                 ": ", n_sig, " significant (padj <= ", pvalueCutoff, ")")
 
@@ -2380,6 +2624,13 @@ run_gsea_all <- function(ranked_genes,
             csv_file <- file.path(gsea_sub_dir, "results.csv")
             write.csv(res_df, file = csv_file, row.names = FALSE)
 
+            # Object the plot helpers take: the clusterProfiler result itself,
+            # or, for fgsea, the significant rows wrapped as a gseaResult.
+            plot_obj <- if (!use_fgsea) res else if (n_sig > 0) {
+                .fgsea_as_gsea_result(sig_df, ranked_genes[[ranking_method]][[contrast]],
+                                      gene_sets_by_db[[db_name]], pvalueCutoff)
+            } else NULL
+
             # Generate dotplot if significant results exist (config-gated).
             # Primary: enrichplot::dotplot() on the gseaResult object.
             # Fallback: basic ggplot2 scatterplot (visual approximation only).
@@ -2391,9 +2642,9 @@ run_gsea_all <- function(ranked_genes,
                 plotted <- FALSE
 
                 # Primary: enrichplot::dotplot on gseaResult S4 object
-                if (requireNamespace("enrichplot", quietly = TRUE)) {
+                if (!is.null(plot_obj) && requireNamespace("enrichplot", quietly = TRUE)) {
                     tryCatch({
-                        p <- enrichplot::dotplot(res, showCategory = show_n)
+                        p <- enrichplot::dotplot(plot_obj, showCategory = show_n)
                         ggplot2::ggsave(plot_file, p, width = 10, height = 8)
                         plot_files[[plot_key]] <- plot_file
                         plotted <- TRUE
@@ -2406,8 +2657,8 @@ run_gsea_all <- function(ranked_genes,
                 # Fallback: basic ggplot2 scatterplot (not equivalent to dotplot)
                 if (!plotted) {
                     tryCatch({
-                        top <- head(res_df[order(res_df$padj), ], show_n)
-                        top$pathway_label <- substr(top$pathway, 1, 60)
+                        top <- head(sig_df[order(sig_df$padj), ], show_n)
+                        top$pathway_label <- substr(top$Description, 1, 60)
                         p <- ggplot2::ggplot(
                             top,
                             ggplot2::aes(x = NES, y = reorder(pathway_label, NES))
@@ -2445,7 +2696,7 @@ run_gsea_all <- function(ranked_genes,
             # ----------------------------------------------------------
             if (isTRUE(per_pathway_artifacts) || isTRUE(pathway_heatmaps)) {
                 save_gsea_per_pathway_artifacts(
-                    gsea_result    = res,
+                    gsea_result    = plot_obj,
                     res_df         = res_df,
                     output_dir     = file.path(gsea_sub_dir, "per_pathway"),
                     gene_context   = gene_context,
@@ -2461,12 +2712,12 @@ run_gsea_all <- function(ranked_genes,
             # Additive, config-gated, fail-soft; serial stage only (never in a
             # worker). Leading-edge -> ridgeplot/plot.png + data.csv; all-genes ->
             # ridgeplot/plot_all_genes.png + data_all_genes.csv (same dir).
-            if (isTRUE(ridgeplot) || isTRUE(ridgeplot_all_genes)) {
+            if (n_sig > 0 && (isTRUE(ridgeplot) || isTRUE(ridgeplot_all_genes))) {
                 ridge_key <- paste0(db_name, "_", ranking_method, "_", contrast)
                 ridge_dir <- file.path(gsea_sub_dir, "ridgeplot")
                 if (isTRUE(ridgeplot)) {
                     rp <- plot_gsea_ridgeplot(
-                        gsea_result     = res,
+                        gsea_result     = plot_obj,
                         out_dir         = ridge_dir,
                         show_category   = max_terms_in_dotplot,
                         x_axis_title    = paste0("ranking (", ranking_method, ")"),
@@ -2476,7 +2727,7 @@ run_gsea_all <- function(ranked_genes,
                 }
                 if (isTRUE(ridgeplot_all_genes)) {
                     rpa <- plot_gsea_ridgeplot(
-                        gsea_result     = res,
+                        gsea_result     = plot_obj,
                         out_dir         = ridge_dir,
                         show_category   = max_terms_in_dotplot,
                         x_axis_title    = paste0("ranking (", ranking_method, ")"),
@@ -2500,13 +2751,12 @@ run_gsea_all <- function(ranked_genes,
 
 #' Select the significant rows of a GSEA result at the effective cutoff
 #'
-#' clusterProfiler::GSEA() already filters its `@result` to rows with both
-#' `pvalue <= pvalueCutoff` AND `p.adjust <= pvalueCutoff`, so a valid GSEA
-#' data.frame's rows are all significant at the configured cutoff. This helper
-#' re-selects on the ADJUSTED p-value (`padj`) using the SAME configured cutoff
-#' (`gsea_pvalue_cutoff` if set, else `pvalue_cutoff`) so every downstream
-#' artifact decision (dotplot gate, per-pathway plots/tables/heatmaps, counts)
-#' tracks the config instead of a hard-coded 0.05. Uses `<=` to match GSEA's
+#' With the clusterProfiler engine, GSEA() already filters its `@result` to
+#' significant rows; with the fgsea engine every tested set is kept and this is
+#' the only significance filter. This helper selects on the ADJUSTED p-value
+#' (`padj`) using the SAME configured cutoff (`gsea_pvalue_cutoff` if set,
+#' else `pvalue_cutoff`) so every downstream artifact decision (dotplot gate,
+#' per-pathway plots/tables/heatmaps, counts) tracks the config instead of a hard-coded 0.05. Uses `<=` to match GSEA's
 #' filtering contract. NA `padj` rows are excluded.
 #'
 #' @param res_df GSEA result data.frame (must have a `padj` column).
