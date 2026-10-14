@@ -186,7 +186,11 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
       fr <- filter_features_optimized(norm_for_filter, meta2, sample_col, group_col, threshold = fixed_thr)
       fr$used_threshold <- fixed_thr
     } else {
-      plot_path <- file.path(config$paths$out, "rnaseq", "filtering_threshold_qc.png")
+      # Same directory as the rna_out_dir target, where the report looks for it.
+      # config$paths$out alone is relative to project$dir, so it used to land
+      # under R's working directory instead.
+      plot_path <- file.path(get_mode_out_dir(get_run_out_dir(config), "rna"),
+                             "filtering_threshold_qc.png")
       fr <- run_auto_filter_pipeline(
         norm_for_filter, meta2, sample_col, group_col,
         output_plot = plot_path,

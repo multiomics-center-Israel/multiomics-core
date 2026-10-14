@@ -189,9 +189,7 @@ run_omic_e2e <- function(config_fixture, stage_fn, target_names) {
   # Link (or copy) R/ and _targets.R into the sandbox and run tar_make() from there.
   # _targets.R sources R/ with paths relative to the working directory, so this
   # keeps the pipeline runnable while ALSO trapping any relative output path a
-  # stage writes (e.g. preprocess_rna()'s "outputs/rnaseq/filtering_threshold_qc.png",
-  # built from config$paths$out without project$dir) inside proj rather than the
-  # repository tree.
+  # stage might write inside proj rather than the repository tree.
   e2e_link_or_copy(file.path(repo_root, "R"), file.path(proj, "R"))
   e2e_link_or_copy(file.path(repo_root, "_targets.R"), file.path(proj, "_targets.R"))
 
