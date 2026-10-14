@@ -138,8 +138,10 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
 resolve_rna_gsea_settings <- function(config) {
   rna  <- config$modes$rna %||% list()
   enr  <- rna$enrichment %||% list()
-  gsea <- enr$gsea %||% list()
-  pw   <- rna$pathway %||% list()
+  # [[ ]] not $: enr$gsea would partially match enr$gsea_engine when the
+  # gsea block is absent and hand back the engine string.
+  gsea <- enr[["gsea", exact = TRUE]] %||% list()
+  pw   <- rna[["pathway", exact = TRUE]] %||% list()
 
   engine <- enr$gsea_engine %||% "fgsea"
   # Case-insensitive, as validate_rna_config() accepts it.
