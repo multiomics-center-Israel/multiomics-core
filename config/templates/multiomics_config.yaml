@@ -91,6 +91,9 @@ modes:
       method: "perseus_like"
       width: 0.2
       downshift: 1.6
+      multi_imputation: true   # false = single imputation (no consensus filter)
+      no_repetitions: 10       # imputation runs for the consensus DE call
+      min_no_passed: 8         # runs a feature must pass in
 
     de:
       method: "limma"
@@ -325,7 +328,6 @@ design:
   contrasts:
     - "treated - control"
   reference_level: "control"
-  batch_column: null
 
 # ==============================================================================
 # Global settings
@@ -338,7 +340,3 @@ global:
     # - metabolomics
   organism: "Homo sapiens"
   metadata: "data/metadata.csv"
-
-output:
-  output_dir: "outputs"
-  report_format: "html"

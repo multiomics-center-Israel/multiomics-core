@@ -187,7 +187,6 @@ modes:
     # Report customization
     # --------------------------------------------------------
     report:
-      project_id: ""                       # Shown in report title (e.g. "EP-2025-001")
       introduction_text: ""                # Main introduction paragraph
       introduction_background: ""          # Optional: Background subsection
       introduction_aim: ""                 # Optional: Aim subsection
@@ -275,6 +274,16 @@ modes:
         camerapr:
           inter_gene_cor: 0.01  # assumed inter-gene correlation, strictly between -1 and 1
           use_ranks: false      # rank-based cameraPR
+
+      # GO term simplification (optional). Groups semantically similar GO terms in
+      # the fgsea / ORA results and writes a reduced copy with one representative
+      # per group (lowest p-value) to Enrichment/simplified/, plus a map of which
+      # terms were grouped under which representative. The full result tables are
+      # not changed. Only GO identifiers with padj < 0.10 take part; other
+      # databases are not touched.
+      simplify_go: false            # true = also write simplified GO tables
+      simplify_threshold: 0.7       # 0-1 cut height on (1 - similarity); higher = more merging
+      simplify_measure: "Wang"      # "Wang" (GO graph only) | "Resnik" | "Lin" | "Jiang" | "Rel" (these need the organism OrgDb)
 
     # --------------------------------------------------------
     # PPI network analysis

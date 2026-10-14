@@ -2877,23 +2877,36 @@ run_cluster_ora <- function(clusters,
 #' when GO.db / GOSemSim are unavailable so callers can skip-and-warn.
 #'
 #' @param ont GO ontology: "BP", "MF", or "CC" (NULL -> "BP").
+#' @param orgdb Name of an organism OrgDb package, or NULL (default). NULL builds
+#'   the Wang (GO DAG only) data used by every existing caller. A name builds
+#'   information-content data from that OrgDb's GO annotations, which the
+#'   IC-based measures (Resnik, Lin, Jiang, Rel) need; it is still local, but
+#'   requires the OrgDb package to be installed.
 #' @return A `GOSemSimDATA` object, or NULL if it could not be built.
 #' @noRd
-.go_semdata <- function(ont) {
-    key <- as.character(ont %||% "BP")
+.go_semdata <- function(ont, orgdb = NULL) {
+    ont_key <- as.character(ont %||% "BP")
+    key <- if (is.null(orgdb)) ont_key else paste(ont_key, orgdb, sep = "|")
     cached <- .enrich_semdata_cache[[key]]
     if (!is.null(cached)) return(cached)
     if (!requireNamespace("GOSemSim", quietly = TRUE) ||
         !requireNamespace("GO.db", quietly = TRUE)) {
         return(NULL)
     }
+    if (!is.null(orgdb) && !requireNamespace(orgdb, quietly = TRUE)) {
+        return(NULL)
+    }
     sem <- tryCatch(
-        # computeIC = FALSE: Wang similarity uses only the GO DAG (GO.db) and needs
-        # NO information content, whereas IC requires an organism OrgDb. GOSemSim
-        # (>= 2.x, incl. the locked 2.36.0) defaults computeIC = TRUE, so godata(ont=)
-        # alone errors offline — silently disabling the "mandatory" GO simplify via
-        # this tryCatch. Passing computeIC = FALSE makes offline Wang simplify work.
-        GOSemSim::godata(ont = key, computeIC = FALSE),   # Wang: GO DAG from GO.db, no OrgDb
+        if (is.null(orgdb)) {
+            # computeIC = FALSE: Wang similarity uses only the GO DAG (GO.db) and needs
+            # NO information content, whereas IC requires an organism OrgDb. GOSemSim
+            # (>= 2.x, incl. the locked 2.36.0) defaults computeIC = TRUE, so godata(ont=)
+            # alone errors offline — silently disabling the "mandatory" GO simplify via
+            # this tryCatch. Passing computeIC = FALSE makes offline Wang simplify work.
+            GOSemSim::godata(ont = ont_key, computeIC = FALSE)   # Wang: GO DAG from GO.db, no OrgDb
+        } else {
+            GOSemSim::godata(OrgDb = orgdb, ont = ont_key, computeIC = TRUE)
+        },
         error = function(e) {
             message("    GOSemSim::godata(ont=", key, ") failed: ", e$message)
             NULL

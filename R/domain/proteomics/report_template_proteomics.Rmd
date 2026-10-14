@@ -4331,7 +4331,8 @@ methods_blocks <- build_proteomics_methods_text(
     config = cfg, de_method = .mt_method, n_included = .mt_n, run_dir = run_dir,
     pca_cc_file = if (isTRUE(show_pca_section)) file.path(diag_dir, "PCA_robust.png") else NULL,
     hier_file = file.path(clustering_dir, "Hierarchical", "Hierarchical_DE_heatmap.png"),
-    pooled_dir = proteomics_pooled_enrichment_dir(prot_dir))
+    pooled_dir = proteomics_pooled_enrichment_dir(prot_dir),
+    go_simplify_summary_file = file.path(enrich_dir, "simplified", "go_simplification_summary.csv"))
 
 cat("## Data processing\n\n")
 cat(methods_blocks$data_processing, "\n\n")
