@@ -144,3 +144,95 @@ compute_tpm <- function(counts, gene_lengths_bp) {
     rownames(tpm) <- common
     tpm
 }
+
+#' Resolve the normalization method that actually produced expr_work
+#'
+#' The one place downstream code asks "how was this run normalized?". It reads
+#' the method recorded on the matrix by normalize_counts() (or set to
+#' "preprocessed" by preprocess_rna()), not \code{normalization$method} from the
+#' config: the config is what was requested, while the attribute is what ran.
+#' The two differ when the config omits the key, and when VST on a count matrix
+#' falls back to TMMlogCPM.
+#'
+#' @param pre List returned by preprocess_rna().
+#' @return Character scalar, e.g. "VST", "TMMlogCPM", "preprocessed", or
+#'   "unknown" when neither the matrix nor \code{pre$info} records a method.
+resolve_rna_norm_method <- function(pre) {
+    m <- attr(pre$expr_work, "method") %||% pre$info$expr_work_method
+    if (is.null(m) || length(m) != 1 || is.na(m) || !nzchar(m)) return("unknown")
+    as.character(m)
+}
+
+#' Locate this run's normalized-expression export and the method it records
+#'
+#' write_rnaseq_datasets_legacy() names the file after the method that ran
+#' (\code{rna_norm_<method>.tsv}) and removes any other \code{rna_norm_*.tsv},
+#' so a single match is this run's matrix. Zero or several matches return NULL
+#' rather than guessing which file is current.
+#'
+#' @param datasets_dir Path to the run's \code{Datasets/} directory.
+#' @return \code{list(path, method)}, or NULL when there is not exactly one
+#'   \code{rna_norm_*.tsv} file.
+find_rna_norm_file <- function(datasets_dir) {
+    hits <- list.files(datasets_dir, pattern = "^rna_norm_.+\\.tsv$", full.names = TRUE)
+    if (length(hits) != 1) return(NULL)
+    list(path = hits, method = sub("^rna_norm_(.+)\\.tsv$", "\\1", basename(hits)))
+}
+
+#' Reader-facing wording for an RNA normalization method
+#'
+#' Shared by the report, pipeline summary, PowerPoint and commentary so they
+#' describe the same method the same way. Unrecognised methods get neutral
+#' wording instead of borrowing the TMMlogCPM description.
+#'
+#' @param method Method string, normally from resolve_rna_norm_method() or
+#'   find_rna_norm_file().
+#' @param prior_count Prior count used for logCPM; only quoted for TMMlogCPM.
+#' @return List with \code{label} (short name), \code{name} (name plus tool),
+#'   \code{value_label} (axis / column wording), \code{sentence} (one sentence
+#'   for Methods-style prose) and \code{tags} (short chips).
+describe_rna_norm_method <- function(method, prior_count = 1) {
+    method <- if (is.null(method) || length(method) != 1 || is.na(method) ||
+                  !nzchar(method)) "unknown" else as.character(method)
+    switch(method,
+        TMMlogCPM = list(
+            label       = "TMMlogCPM",
+            name        = "TMM + log2 CPM (edgeR)",
+            value_label = "log2 CPM (TMM)",
+            sentence    = sprintf(paste0(
+                "Expression values were normalized with edgeR TMM (Trimmed Mean of M-values) ",
+                "scaling factors followed by log2 counts-per-million (prior count = %s)."),
+                prior_count),
+            tags        = c("TMM scaling", "log2 CPM", sprintf("prior.count = %s", prior_count))
+        ),
+        VST = list(
+            label       = "VST",
+            name        = "VST (DESeq2)",
+            value_label = "VST (log2 scale)",
+            sentence    = paste0(
+                "Expression values were transformed with the DESeq2 variance-stabilizing ",
+                "transformation (VST, blind to the experimental design)."),
+            tags        = c("VST", "DESeq2", "blind = TRUE")
+        ),
+        preprocessed = list(
+            label       = "preprocessed",
+            name        = "none (preprocessed input used as supplied)",
+            value_label = "Expression (as supplied)",
+            sentence    = paste0(
+                "The input was supplied already normalized; the pipeline used the values ",
+                "as provided and applied no further normalization."),
+            tags        = c("preprocessed input", "no normalization")
+        ),
+        list(
+            label       = method,
+            name        = method,
+            value_label = "Normalized expression",
+            sentence    = if (identical(method, "unknown")) {
+                "The normalization method could not be determined from the run outputs."
+            } else {
+                sprintf("Expression values were normalized using %s.", method)
+            },
+            tags        = method
+        )
+    )
+}

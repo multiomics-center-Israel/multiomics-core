@@ -21,6 +21,8 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     # Use working expression matrix (normalized log-counts) for QC
     mat <- pre$expr_work
     meta <- pre$meta
+    norm_method <- resolve_rna_norm_method(pre)
+    norm_desc <- describe_rna_norm_method(norm_method)
 
     # --- Validate color/shape configuration ---
     validate_effects_config(cfg$effects)
@@ -173,7 +175,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     # Normalized boxplot
     f_box <- file.path(out_qc, "norm_boxplot.png")
     p_bp <- norm_boxplot(mat, meta, cfg_temp, out_file = f_box,
-                         title = "Normalized Expression (TMMlogCPM)")
+                         title = sprintf("Normalized Expression (%s)", norm_desc$label))
     files <- c(files, f_box)
     plots$boxplot <- p_bp
 
@@ -304,7 +306,9 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         pca_scores = assert_pca_scores(scores, context = "rnaseq QC"),
         var_expl = var_expl,
         color = eff_color,
-        shape = eff_shape
+        shape = eff_shape,
+        # Read by mod_rnaseq_commentary(), which does not receive `pre`
+        norm_method = norm_method
     )
 
     list(

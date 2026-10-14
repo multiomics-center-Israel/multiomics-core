@@ -47,7 +47,6 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
     # ---- Config extraction ----
     rna_cfg  <- config$modes$rna
     de_cfg   <- rna_cfg$de %||% list()
-    norm_cfg <- rna_cfg$normalization %||% list()
     diag_dir <- file.path(out_dir, "Diagnostic_plots")
     qc_post_dir <- file.path(diag_dir, "QC_post")
 
@@ -171,7 +170,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
     # ==================================================================
     # SLIDE 2: Study Design
     # ==================================================================
-    norm_method <- norm_cfg$method %||% "TMMlogCPM"
+    norm_method <- resolve_rna_norm_method(pre)
 
     design_context <- sprintf(
         "Study design. Organism: %s. %d samples, %s genes. Groups: %s. "

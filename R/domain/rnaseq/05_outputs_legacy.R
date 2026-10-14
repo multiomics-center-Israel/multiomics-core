@@ -13,7 +13,14 @@ write_rnaseq_datasets_legacy <- function(pre, config, dirs ) {
     rownames(norm_df) <- NULL
 
     files <- c(files, save_tsv(counts_filt_df, dirs$datasets, "rna_counts_filtered.tsv"))
-    files <- c(files, save_tsv(norm_df, dirs$datasets, sprintf("rna_norm_%s.tsv", attr(pre$expr_work, "method") %||% "norm")))
+
+    # The file name records the method that ran, and the report reads it back via
+    # find_rna_norm_file(). A rerun into the same directory with another method
+    # would otherwise leave the previous run's matrix beside this one.
+    norm_name <- sprintf("rna_norm_%s.tsv", resolve_rna_norm_method(pre))
+    stale <- setdiff(list.files(dirs$datasets, pattern = "^rna_norm_.+\\.tsv$"), norm_name)
+    if (length(stale) > 0) file.remove(file.path(dirs$datasets, stale))
+    files <- c(files, save_tsv(norm_df, dirs$datasets, norm_name))
 
     unique(files)
 }

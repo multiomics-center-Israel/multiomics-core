@@ -117,7 +117,12 @@ build_extra_data <- function(de_res, qc_pre_obj = NULL, config) {
     })
 
     # --- Normalization and DE methods ---
-    extra$norm_method <- rna_cfg$normalization$method %||% "TMM"
+    # The method that ran, recorded by mod_rnaseq_qc_pre(); the config key is
+    # only what was requested. Left unset without it, so the commentary uses
+    # neutral wording rather than naming a method.
+    if (!is.null(qc_pre_obj$objects$norm_method)) {
+        extra$norm_method <- describe_rna_norm_method(qc_pre_obj$objects$norm_method)$name
+    }
     extra$de_method <- paste0("DESeq2 (", rna_cfg$de$deseq_mode %||% "Wald", ")")
     extra$de_cutoffs <- list(
         p_cutoff  = rna_cfg$de$p_cutoff %||% 0.05,

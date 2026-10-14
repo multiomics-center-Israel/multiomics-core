@@ -61,13 +61,13 @@ discover_figures <- function(out_dir, config = NULL) {
 
     add_if_exists("norm_boxplot", "norm_boxplot.png", diag_dir,
                   "boxplot", "QC", "Normalized Expression Boxplot",
-                  "Per-sample normalized expression distribution (TMMlogCPM)",
-                  "Sample", "log2(CPM)")
+                  "Per-sample normalized expression distribution",
+                  "Sample", "Normalized expression")
 
     add_if_exists("density_plot", "rna_histograms_summary.png", diag_dir,
                   "density", "QC", "Expression Density Plot",
                   "Per-sample expression distribution as density curves after normalization",
-                  "Expression (log2 CPM)", "Density")
+                  "Normalized expression", "Density")
 
     add_if_exists("pca_plot", "PCA_PC1.vs.PC2.png", diag_dir,
                   "scatter", "QC", "PCA Plot — PC1 vs PC2",
@@ -925,7 +925,7 @@ generate_fallback_commentary <- function(fig, context, de_summary = NULL) {
 
     # --- Normalized boxplot ---
     } else if (pt == "boxplot") {
-        norm_str <- if (!is.null(context$norm_method)) context$norm_method else "TMM + log2 CPM"
+        norm_str <- if (!is.null(context$norm_method)) context$norm_method else "method not recorded"
         commentary$what_is_this <- sprintf("Per-sample boxplots of normalized expression values (%s).", norm_str)
         commentary$biological_interpretation <- paste0(
             "After normalization (", norm_str, "), all samples should show comparable expression distributions. ",
