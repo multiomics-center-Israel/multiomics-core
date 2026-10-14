@@ -109,3 +109,23 @@ test_that("QC plots carry the axis label they are given", {
     p_box <- norm_boxplot(mat, meta, cfg, y_label = lbl)
     expect_equal(p_box$labels$y, lbl)
 })
+
+test_that("the RNA report shows the density before and after normalization", {
+    candidates <- c(
+        testthat::test_path("..", "..", "R", "domain", "rnaseq", "report_template.Rmd"),
+        "R/domain/rnaseq/report_template.Rmd"
+    )
+    f <- candidates[file.exists(candidates)][1]
+    if (is.na(f)) stop("R/domain/rnaseq/report_template.Rmd not found from the test directory")
+    src <- readLines(f, warn = FALSE)
+    expect_true(any(grepl('"raw_density.png"', src, fixed = TRUE)))
+    expect_true(any(grepl('"rna_histograms_summary.png"', src, fixed = TRUE)))
+
+    # and the QC module writes the file the report looks for
+    qc_candidates <- c(
+        testthat::test_path("..", "..", "R", "modules", "rnaseq", "01_mod_qc_pre.R"),
+        "R/modules/rnaseq/01_mod_qc_pre.R"
+    )
+    qc_src <- readLines(qc_candidates[file.exists(qc_candidates)][1], warn = FALSE)
+    expect_true(any(grepl('file.path(out_qc, "raw_density.png")', qc_src, fixed = TRUE)))
+})

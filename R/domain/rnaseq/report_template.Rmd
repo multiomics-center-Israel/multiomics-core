@@ -824,13 +824,24 @@ render_commentary("norm_boxplot")
 
 ### Density Plot
 
-```{r histograms, fig.cap="Expression distribution histograms"}
+```{r density-raw, fig.cap="Per-sample expression density — before normalization (log2 raw counts + 1)"}
+dp_raw <- file.path(diag_dir, "raw_density.png")
+if (file.exists(dp_raw)) knitr::include_graphics(dp_raw)
+```
+
+```{r legend-density-raw, results='asis', echo=FALSE}
+if (file.exists(dp_raw)) {
+    figure_legend("Kernel density estimates of per-sample raw expression (log2 counts + 1) before normalization. Horizontal shifts between curves reflect differences in sequencing depth and library composition.")
+}
+```
+
+```{r histograms, fig.cap=sprintf("Per-sample expression density — after normalization (%s)", norm_info$label)}
 hp <- file.path(diag_dir, "rna_histograms_summary.png")
 if (file.exists(hp)) knitr::include_graphics(hp)
 ```
 
 ```{r legend-density, results='asis', echo=FALSE}
-figure_legend("Kernel density estimates of per-sample expression distributions. Overlapping curves indicate consistent expression profiles across samples after normalization. Deviating samples may warrant further investigation.")
+figure_legend(paste0("Kernel density estimates of per-sample normalized expression (", norm_info$label, "). Overlapping curves indicate consistent expression profiles across samples after normalization. Deviating samples may warrant further investigation."))
 ```
 
 ```{r commentary-density, results='asis'}

@@ -169,9 +169,22 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     f_box_raw <- file.path(out_qc, "raw_boxplot.png")
     raw_log2 <- log2(pre$expr_filt + 1)  # log2(counts + 1) for visualization
     p_bp_raw <- norm_boxplot(raw_log2, meta, cfg_temp, out_file = f_box_raw,
-                             title = "Raw Counts (log2 + 1) — Before Normalization")
+                             title = "Raw Counts (log2 + 1) — Before Normalization",
+                             y_label = "log2(counts + 1)")
     files <- c(files, f_box_raw)
     plots$boxplot_raw <- p_bp_raw
+
+    # Raw density, the "before" partner of rna_histograms_summary.png: same
+    # features and samples, so the two curves differ only by normalization
+    f_dens_raw <- file.path(out_qc, "raw_density.png")
+    p_dens_raw <- qc_omic_density(
+        raw_log2, meta, cfg_temp,
+        out_file = f_dens_raw,
+        title = "Density plot of raw counts (log2 + 1) — Before Normalization",
+        x_label = "log2(counts + 1)"
+    )
+    files <- c(files, f_dens_raw)
+    plots$density_raw <- p_dens_raw
 
     # Normalized boxplot
     f_box <- file.path(out_qc, "norm_boxplot.png")
