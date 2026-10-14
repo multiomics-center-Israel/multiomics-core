@@ -583,7 +583,9 @@ test_that("every legend with text from outside its call is checked", {
         # evaluated from the template below
         "loadings_gsea_legend", "diablo_loadings_caveat",
         # go_hierarchy_legend(); worst case checked in test-go-hierarchy.R
-        "go_legend")
+        "go_legend",
+        # every variant counted in test-pathway-coverage.R
+        "pathway_coverage_legend")
     used <- unique(unlist(strsplit(dyn$dynamic, ",", fixed = TRUE)))
     expect_identical(setdiff(used, known), character(0))
     # A name-filled legend leaves room for a name of three words.
