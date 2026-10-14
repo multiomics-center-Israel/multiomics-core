@@ -285,8 +285,21 @@ modes:
 
       # gsea_pvalue_cutoff: 0.05
       # Optional GSEA-only significance cutoff (defaults to pvalue_cutoff).
+      # It selects what is plotted and counted; with the fgsea engine every
+      # tested gene set stays in the result tables.
       # gsea_padj_method: "fdr"
       # Optional GSEA-only adjustment method (defaults to padj_method).
+      # clusterProfiler engine only; fgsea reports Benjamini-Hochberg padj.
+
+      gsea_engine: "fgsea"
+      # GSEA engine for the offline workflow (annotation_dir set).
+      # "fgsea" (default): the same fgsea call as the online workflow and the
+      #   proteomics pipeline; gene-set size limits from gsea.min_size/max_size,
+      #   seeded from params.seed, all tested gene sets kept. Also writes
+      #   Enrichment/pathway_<contrast>_<db>_fgsea.csv (pval_with_direction ranking).
+      # "clusterProfiler": the earlier clusterProfiler::GSEA call (min set size 4,
+      #   no upper limit, non-significant sets dropped). Use it to reproduce
+      #   offline results produced before the fgsea switch.
 
       max_terms_in_dotplot: 20
       # Max pathways shown in dotplots/ridgeplots. Display only; all results stay in the tables.
@@ -320,6 +333,11 @@ modes:
         per_pathway_artifacts: true
         # Generate per-pathway GSEA plots and detailed core-gene tables.
         # (Back-compat: the old flat key gsea_per_pathway_artifacts is still honored.)
+
+        min_size: 10
+        max_size: 500
+        # Gene-set size limits for fgsea (genes of the set present in the ranking).
+        # Used by the online workflow too; ignored by gsea_engine "clusterProfiler".
 
 params:
   seed: 1

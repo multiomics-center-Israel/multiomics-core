@@ -277,7 +277,8 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
 #' online path writes flat \code{pathway_<contrast>_<db>_fgsea.csv} files at the
 #' Enrichment root; the local path (\code{modes.rna.enrichment.annotation_dir})
 #' writes \code{GSEA/<db>/ranking_by_<method>/<contrast>/results.csv} and the
-#' matching nest under \code{ORA/}. Looking only for the flat names dropped the
+#' matching nest under \code{ORA/}, and with its default fgsea engine also the
+#' flat file for the pval_with_direction ranking. Looking only for the flat names dropped the
 #' whole enrichment section from local runs that had in fact produced results.
 #' @keywords internal
 .facts_rnaseq_enrichment <- function(enrich_dir, p_cut, contrast_names = character(0)) {
