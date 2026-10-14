@@ -72,11 +72,14 @@ test_that("RNA-protein tabs appear only with results, otherwise one top-level no
     }
     expect_true(any(grepl('`r if (has_rna_prot && show_translation_eff) "## Translation Efficiency',
                           src, fixed = TRUE)))
-    # Without results: the same top-level heading, no tabset, and one note that
-    # says whether the RNA layer is missing or the analysis produced nothing.
+    # With an RNA layer but no results: the heading without a tabset and one
+    # note. Without an RNA layer: no section at all, heading and rule included.
     expect_true(any(grepl(paste0('`r if (has_rna_prot) "# RNA-Protein Correlation {.tabset}" ',
-                                 'else "# RNA-Protein Correlation"`'), src, fixed = TRUE)))
-    expect_true(any(grepl("rna-prot-note, eval=!has_rna_prot", src, fixed = TRUE)))
+                                 'else if (has_transcriptomics) "# RNA-Protein Correlation"`'),
+                          src, fixed = TRUE)))
+    expect_true(any(grepl("rna-prot-note, eval=has_transcriptomics && !has_rna_prot", src, fixed = TRUE)))
+    expect_true(any(grepl('`r if (has_transcriptomics) "---"`', src, fixed = TRUE)))
+    expect_false(any(grepl("this study has no RNA-seq layer", src, fixed = TRUE)))
     expect_false(any(grepl("## RNA-Protein Analyses", src, fixed = TRUE)))
 })
 
@@ -659,9 +662,13 @@ test_that("the pairwise MultiGSEA figures show whenever there is no per-contrast
     expect_true(grepl('pattern = "^multigsea_.*\\\\.png$",\n                                         recursive = TRUE)) > 0',
                       joined, fixed = TRUE))
     expect_false(grepl('list.dirs(file.path(multigsea_dir, "per_contrast")', joined, fixed = TRUE))
-    expect_true(grepl("show_mg_per_contrast <- has_multigsea && has_mg_per_contrast && !single_contrast",
+    expect_true(grepl(paste0("show_mg_per_contrast <- show_multigsea_pairwise && has_multigsea && ",
+                             "has_mg_per_contrast &&\n    !single_contrast"),
                       joined, fixed = TRUE))
-    expect_true(grepl("show_mg_top_pairs <- has_multigsea && !show_mg_per_contrast",
+    expect_true(grepl("show_mg_top_pairs <- show_multigsea_pairwise && has_multigsea && !show_mg_per_contrast",
+                      joined, fixed = TRUE))
+    # The pairwise figures can be switched off per project.
+    expect_true(grepl('show_multigsea_pairwise <- show_section("multigsea_pairwise")',
                       joined, fixed = TRUE))
     expect_true(grepl('`r if (show_mg_top_pairs) combined_tab(2, "All Contrasts (Pooled)")`',
                       joined, fixed = TRUE))
