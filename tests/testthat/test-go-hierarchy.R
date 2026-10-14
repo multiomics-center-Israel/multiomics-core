@@ -270,3 +270,16 @@ test_that("the report section is gated on the resolver and reads the index", {
         expect_true(grepl("eval=show_go_hierarchy", line, fixed = TRUE), info = chunk)
     }
 })
+
+test_that("the GO hierarchy legend stays within 100 words in its worst case", {
+    n_words <- function(x) lengths(regmatches(x, gregexpr("[^[:space:]]+", x)))
+    # Longest note: both caps applied; a three-word arm name.
+    note <- go_hierarchy_note(n_significant = 500, n_requested = 30, n_shown = 12,
+                              max_nodes = 120)
+    txt <- go_hierarchy_legend("BP", 0.05, "positive",
+                               "higher in long arm name", note)
+    expect_lte(n_words(txt), 100)
+    tpl <- paste(readLines(file.path(root_dir, "R/domain/multiomics/report_template_multiomics.Rmd")),
+                 collapse = "\n")
+    expect_true(grepl("figure_legend(go_legend)", tpl, fixed = TRUE))
+})
