@@ -168,6 +168,21 @@ modes:
         # sample_concordance: false      # "Sample Concordance Across Omics" section
         # mechanistic: false             # "Mechanistic & Causal Inference" section
 
+    # --- GO hierarchy of GSEA results ---
+    # For the proteomics and RNA layers: the part of the GO graph above the GO
+    # terms that layer's own fgsea step found at padj < fdr, one figure per
+    # contrast, ontology and NES sign. Nothing is re-tested; ancestors come
+    # from GO.db (is_a and part_of) and are drawn for context only. Needs that
+    # layer's pathway enrichment to have run fgsea on GO gene sets (the RNA
+    # offline annotation_dir path runs a different GSEA and is not read).
+    # Written to multiomics/go_hierarchy/ and <mode>/Datasets/go_dag_edges.tsv.
+    go_hierarchy:
+      enabled: false
+      ontologies: ["GO_BP"]   # any of GO_BP, GO_MF, GO_CC
+      fdr: 0.05               # fgsea padj cutoff for a seed term
+      max_seed_terms: 30      # per direction, smallest padj first
+      max_nodes: 120          # seeds are dropped (largest padj first) to stay within this
+
     # --- Feature selection for integration ---
     feature_selection:
       method: "variance"  # "de", "variance", "combined"
