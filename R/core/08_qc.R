@@ -729,9 +729,20 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
 
 
 #' Density overlay of normalized expression
+#'
+#' @param expr_mat Expression matrix (features x samples).
+#' @param meta Sample metadata data.frame.
+#' @param cfg Mode config with effects$color, effects$samples.
+#' @param out_file Optional output PNG path.
+#' @param alpha Unused; kept for existing call sites.
+#' @param show_legend Whether to show the per-sample legend.
+#' @param title Plot title.
+#' @param x_label X-axis label, naming the scale the values are on.
+#' @return The ggplot object (invisibly).
 qc_omic_density <- function(expr_mat, meta, cfg, out_file = NULL,
                             alpha = 0.3, show_legend = TRUE,
-                            title = "Density plot of normalized intensities") {
+                            title = "Density plot of normalized intensities",
+                            x_label = "Intensity") {
   # Keeping prepare_qc_data here intentionally.
   d <- prepare_qc_data(expr_mat, meta, cfg)
   norm_expr_long <- to_long_format(d)
@@ -739,7 +750,7 @@ qc_omic_density <- function(expr_mat, meta, cfg, out_file = NULL,
   # Task 2: Density line only (no fill) - remove fill aesthetic, set alpha=1
   p <- ggplot2::ggplot(norm_expr_long, ggplot2::aes(x = value, colour = .data[["sample"]])) +
     ggplot2::geom_density(alpha = 1) +
-    ggplot2::labs(title = title, x = "Intensity", colour = d$color_col) +
+    ggplot2::labs(title = title, x = x_label, colour = d$color_col) +
     ggplot2::theme_minimal()
   
   if (!show_legend) {

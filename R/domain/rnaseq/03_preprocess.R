@@ -192,7 +192,8 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
         output_plot = plot_path,
         min_limit   = cfg$filtering$auto_filter$min      %||% 0.5,
         max_limit   = cfg$filtering$auto_filter$max      %||% 2.0,
-        fallback    = cfg$filtering$auto_filter$fallback %||% 1.0
+        fallback    = cfg$filtering$auto_filter$fallback %||% 1.0,
+        unit        = if (startsWith(norm_mode, "TPM")) "TPM" else "CPM"
       )
     }
   }

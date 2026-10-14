@@ -138,11 +138,25 @@ filter_features_optimized <- function(norm_mat, meta, sample_col, group_col, thr
 # ==============================================================================
 # 3. Main Pipeline Wrapper
 # ==============================================================================
+#' Pick an adaptive expression threshold, plot it, and filter features
+#'
+#' @param cpm_mat Feature x sample matrix on a linear per-million scale (CPM,
+#'   or TPM for tximport input).
+#' @param meta Sample metadata data.frame.
+#' @param sample_col Column in \code{meta} holding sample IDs.
+#' @param group_col Column in \code{meta} holding biological groups.
+#' @param output_plot Path of the threshold QC PNG, or NULL to skip it.
+#' @param min_limit,max_limit Range the threshold is chosen within.
+#' @param fallback Threshold used when no optimum is found.
+#' @param unit Name of the scale of \code{cpm_mat} ("CPM" or "TPM"), used in
+#'   the plot axis and messages so they match the values actually filtered.
+#' @return list(filtered_data, keep_vec, used_threshold).
 run_auto_filter_pipeline <- function(cpm_mat, meta, sample_col, group_col,
                                      output_plot = "threshold_qc.png",
                                      min_limit = 0.5,
                                      max_limit = 2.0,
-                                     fallback  = 1.0) {
+                                     fallback  = 1.0,
+                                     unit      = "CPM") {
     message("--- Starting Auto-Filtering Pipeline ---")
 
     # Step 1: Calculate Optimal Threshold
@@ -150,7 +164,7 @@ run_auto_filter_pipeline <- function(cpm_mat, meta, sample_col, group_col,
                                                min_limit = min_limit,
                                                max_limit = max_limit,
                                                fallback  = fallback)
-    message(sprintf("Optimal Threshold: %.3f CPM", auto_thresh))
+    message(sprintf("Optimal Threshold: %.3f %s", auto_thresh, unit))
 
     # Step 2: Generate QC Plot
     if (!is.null(output_plot)) {
@@ -163,12 +177,12 @@ run_auto_filter_pipeline <- function(cpm_mat, meta, sample_col, group_col,
         log_vals <- log_vals[!is.na(log_vals)]
         d <- density(log_vals)
 
-        plot(d, main = "Automated Threshold Selection", xlab = "log2(CPM)", lwd = 2)
+        plot(d, main = "Automated Threshold Selection", xlab = sprintf("log2(%s)", unit), lwd = 2)
         polygon(d, col = "gray90", border = "gray")
         abline(v = log2(auto_thresh), col = "red", lwd = 2)
         text(
             x = log2(auto_thresh), y = max(d$y) * 0.9,
-            labels = paste("Cutoff:", round(auto_thresh, 2)),
+            labels = paste("Cutoff:", round(auto_thresh, 2), unit),
             pos = 4, col = "red"
         )
 

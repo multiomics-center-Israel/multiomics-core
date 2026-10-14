@@ -158,7 +158,8 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     p_dens <- qc_omic_density(
         mat, meta, cfg_temp,
         out_file = f_hist,
-        title = "Density plot of normalized counts"
+        title = sprintf("Density plot of normalized counts (%s)", norm_desc$label),
+        x_label = norm_desc$value_label
     )
     files <- c(files, f_hist)
     plots$density <- p_dens
@@ -175,7 +176,8 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     # Normalized boxplot
     f_box <- file.path(out_qc, "norm_boxplot.png")
     p_bp <- norm_boxplot(mat, meta, cfg_temp, out_file = f_box,
-                         title = sprintf("Normalized Expression (%s)", norm_desc$label))
+                         title = sprintf("Normalized Expression (%s)", norm_desc$label),
+                         y_label = norm_desc$value_label)
     files <- c(files, f_box)
     plots$boxplot <- p_bp
 

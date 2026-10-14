@@ -93,3 +93,19 @@ test_that("the RNA report no longer hard-codes TMMlogCPM outside the TMM branch"
     expect_false(any(grepl("Expression (TMMlogCPM)", src, fixed = TRUE)))
     expect_false(any(grepl("normalization$method %||%", src, fixed = TRUE)))
 })
+
+test_that("QC plots carry the axis label they are given", {
+    mat <- matrix(c(5, 6, 7, 8, 5.5, 6.5, 7.5, 8.5), nrow = 4,
+                  dimnames = list(paste0("G", 1:4), c("S1", "S2")))
+    meta <- data.frame(SampleID = c("S1", "S2"), Group = c("A", "B"))
+    cfg <- list(effects = list(samples = "SampleID", color = "Group"))
+    lbl <- describe_rna_norm_method("VST")$value_label
+
+    p_dens <- qc_omic_density(mat, meta, cfg, x_label = lbl)
+    expect_equal(p_dens$labels$x, lbl)
+    # Default unchanged for the other omics
+    expect_equal(qc_omic_density(mat, meta, cfg)$labels$x, "Intensity")
+
+    p_box <- norm_boxplot(mat, meta, cfg, y_label = lbl)
+    expect_equal(p_box$labels$y, lbl)
+})
