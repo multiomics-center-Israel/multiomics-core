@@ -16,6 +16,7 @@ validate_config <- function(config) {
     if (is.null(config$modes)) stop("config$modes is missing")
     if (is.null(config$params)) stop("config$params is missing")
 
+    config <- apply_renamed_config_keys(config)
     warn_retired_config_keys(config)
 
     if (!is.null(config$modes$proteomics)) validate_proteomics_config(config$modes$proteomics)
@@ -60,7 +61,6 @@ validate_config <- function(config) {
         "modes.rna.clustering.steps.partition.x_axis_col",
         "modes.proteomics.clustering.steps.partition.x_axis_col",
         "modes.metabolomics.clustering.steps.partition.x_axis_col",
-        "modes.rna.id_columns.gene_id_col",
         "modes.lipidomics.commentary.retry_delay",
         "design.batch_column",
         "output.output_dir",
@@ -85,7 +85,6 @@ validate_config <- function(config) {
         "renamed to clustering.steps.partition.profile_x_axis_col",
         "renamed to clustering.steps.partition.profile_x_axis_col",
         "renamed to clustering.steps.partition.profile_x_axis_col",
-        "the RNA pipeline reads id_columns.gene_id",
         "the commentary scripts use a fixed retry delay",
         "no code reads it",
         "outputs are written under paths.out",
@@ -112,11 +111,35 @@ validate_config <- function(config) {
         "never read",
         "never read",
         "never read",
-        "never read",
         "never read"
     ),
     stringsAsFactors = FALSE
 )
+
+#' Move values from renamed config keys to their current names
+#'
+#' Older wizard and run.R configs wrote \code{modes.rna.id_columns.gene_id_col};
+#' the RNA code reads \code{id_columns.gene_id}. Until now the old name worked
+#' only through R's partial matching of \code{$}. Its value is copied to the
+#' current name (unless that is already set) and the old key is dropped, with
+#' one warning.
+#'
+#' @param config Full pipeline config.
+#' @return The config with renamed keys moved.
+apply_renamed_config_keys <- function(config) {
+    ids <- config$modes$rna$id_columns
+    if (is.list(ids) && "gene_id_col" %in% names(ids)) {
+        if (is.null(ids[["gene_id", exact = TRUE]])) {
+            ids[["gene_id"]] <- ids[["gene_id_col", exact = TRUE]]
+        }
+        ids[["gene_id_col"]] <- NULL
+        config$modes$rna$id_columns <- ids
+        warning("modes.rna.id_columns.gene_id_col is the old name of ",
+                "modes.rna.id_columns.gene_id; its value was used. Rename it.",
+                call. = FALSE)
+    }
+    config
+}
 
 #' Find retired config keys present in a config
 #'

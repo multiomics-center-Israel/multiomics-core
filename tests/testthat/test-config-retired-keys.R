@@ -67,3 +67,18 @@ test_that("the shipped templates validate without retired-key warnings", {
         expect_identical(w, character(0), info = basename(f))
     }
 })
+
+test_that("gene_id_col is moved to gene_id with one warning", {
+    cfg <- list(paths = list(out = "x"), params = list(seed = 1),
+                modes = list(rna = list(id_columns = list(gene_id_col = "ens", sample_col = "s"))))
+    expect_warning(out <- apply_renamed_config_keys(cfg), "old name of modes.rna.id_columns.gene_id")
+    expect_identical(out$modes$rna$id_columns$gene_id, "ens")
+    expect_false("gene_id_col" %in% names(out$modes$rna$id_columns))
+
+    cfg$modes$rna$id_columns$gene_id <- "keep"
+    out <- suppressWarnings(apply_renamed_config_keys(cfg))
+    expect_identical(out$modes$rna$id_columns$gene_id, "keep")
+
+    cfg$modes$rna$id_columns <- list(gene_id = "gene_id")
+    expect_silent(apply_renamed_config_keys(cfg))
+})
