@@ -614,7 +614,7 @@ modes:
       metadata: "%s"
       contrasts: "%s"
     id_columns:
-      gene_id_col: "%s"
+      gene_id: "%s"
       sample_col: "%s"
       map_from: "%s"
       map_to: "%s"
@@ -644,8 +644,6 @@ modes:
       plots:
         volcano: true
         ma: true
-      outputs:
-        write_de_tables: true
     annotation:
       organism: "%s"
       id_type: "auto"

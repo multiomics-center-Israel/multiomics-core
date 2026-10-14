@@ -351,7 +351,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
              "but the resolved annotation directory does not exist:\n  ",
              normalizePath(annotation_dir, winslash = "/", mustWork = FALSE), "\n",
              "Provide the local annotation tables at that path, or set ",
-             "modes.rna.enrichment.annotation_dir: \"\" to use the online ",
+             "modes.rna.enrichment.annotation_dir: null to use the online ",
              "enrichment workflow.", call. = FALSE)
     }
 
