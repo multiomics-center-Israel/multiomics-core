@@ -144,13 +144,13 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
 #' @return List with \code{type} ("cpm_pseudocount" or "prior_count"),
 #'   \code{value} (numeric) and \code{label} (reader-facing formula).
 resolve_rna_log_offset <- function(norm_cfg) {
-    prior <- norm_cfg$prior.count
-    if (is.null(prior)) {
-        pseudo <- as.numeric(norm_cfg$cpm_pseudocount %||% 1)
+    pseudo <- norm_cfg$cpm_pseudocount
+    if (!is.null(pseudo) || is.null(norm_cfg$prior.count)) {
+        pseudo <- as.numeric(pseudo %||% 1)
         return(list(type = "cpm_pseudocount", value = pseudo,
                     label = sprintf("log2(TMM CPM + %s)", format(pseudo))))
     }
-    prior <- as.numeric(prior)
+    prior <- as.numeric(norm_cfg$prior.count)
     list(type = "prior_count", value = prior,
          label = sprintf("edgeR log2 CPM, prior count %s reads (scaled by library size)",
                          format(prior)))
