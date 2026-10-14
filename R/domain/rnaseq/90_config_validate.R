@@ -97,6 +97,7 @@ validate_rna_config <- function(cfg) {
                 }
             }
         }
+        validate_go_simplify_config(p, "pathway")
     }
 
     # 8. Enrichment (the `enrichment` block — offline/online RNA pathway enrichment)

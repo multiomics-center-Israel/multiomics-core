@@ -268,6 +268,16 @@ modes:
       pathway_volcano: true   # produce pathway-colored volcano data for report
       cluster_threshold: 0.7  # semantic similarity threshold for term clustering (0-1, lower = more merging)
 
+      # GO term simplification (optional). Groups semantically similar GO terms in
+      # the fgsea / ORA results and writes a reduced copy with one representative
+      # per group (lowest p-value) to Enrichment/simplified/, plus a map of which
+      # terms were grouped under which representative. The full result tables are
+      # not changed. Only GO identifiers with padj < 0.10 take part; other
+      # databases are not touched.
+      simplify_go: false            # true = also write simplified GO tables
+      simplify_threshold: 0.7       # 0-1 cut height on (1 - similarity); higher = more merging
+      simplify_measure: "Wang"      # "Wang" (GO graph only) | "Resnik" | "Lin" | "Jiang" | "Rel" (these need the organism OrgDb)
+
     # --------------------------------------------------------
     # PPI network analysis
     # Species ID is derived from annotation.organism automatically.

@@ -216,6 +216,23 @@ modes:
       acknowledgment: ""
 
     # --------------------------------------------------------
+    # Online pathway step (fgsea / ORA via run_pathway_analysis), used when
+    # enrichment.annotation_dir below is null. Other pathway keys (method,
+    # databases, gmt_file, min_size, max_size) keep their defaults when omitted.
+    # --------------------------------------------------------
+    pathway:
+      # GO term simplification (optional). Groups semantically similar GO terms in
+      # the fgsea / ORA results and writes a reduced copy with one representative
+      # per group (lowest p-value) to Enrichment/simplified/, plus a map of which
+      # terms were grouped under which representative. The full result tables are
+      # not changed. Only GO identifiers with padj < 0.10 take part; other
+      # databases are not touched. Not used by the offline workflow, which
+      # simplifies its GO cluster ORA on its own (see enrichment below).
+      simplify_go: false            # true = also write simplified GO tables
+      simplify_threshold: 0.7       # 0-1 cut height on (1 - similarity); higher = more merging
+      simplify_measure: "Wang"      # "Wang" (GO graph only) | "Resnik" | "Lin" | "Jiang" | "Rel" (these need the organism OrgDb)
+
+    # --------------------------------------------------------
     # RNA pathway enrichment analysis (ORA + GSEA)
     # By default (annotation_dir: ""), enrichment uses the online workflow, so a
     # freshly configured project runs without provisioning any annotation tables.

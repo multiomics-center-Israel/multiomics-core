@@ -260,9 +260,6 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     min_size <- pw_cfg$min_size %||% 10
     max_size <- pw_cfg$max_size %||% 500
 
-    # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
-    # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
-    # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
     de_cfg <- cfg$de %||% list()
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
@@ -279,6 +276,11 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     # Save results and plots
     enrich_dir <- file.path(out_dir, "Enrichment")
     save_pathway_results(pathway_results, enrich_dir)
+
+    # Optional GO simplification (pathway.simplify_go): separate files under
+    # Enrichment/simplified/; pathway_results and the files above are unchanged.
+    run_go_simplification(pathway_results, pw_cfg, organism,
+                          file.path(enrich_dir, "simplified"))
 
     plots_dir <- file.path(enrich_dir, "plots")
     generate_pathway_plots(pathway_results, plots_dir)
