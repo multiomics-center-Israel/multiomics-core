@@ -257,6 +257,28 @@ go_hierarchy_note <- function(n_significant, n_requested, n_shown, max_nodes) {
     paste0(txt, ".")
 }
 
+#' Figure legend for one GO hierarchy figure
+#'
+#' Kept here rather than in the template so its worst-case length is tested
+#' (test-go-hierarchy.R) under the report's 100-word legend limit.
+#'
+#' @param ontology Ontology code, e.g. "BP".
+#' @param fdr Adjusted p cutoff for seed terms.
+#' @param direction "positive" or "negative".
+#' @param direction_label From go_direction_label().
+#' @param note From go_hierarchy_note().
+#' @return Character scalar.
+go_hierarchy_legend <- function(ontology, fdr, direction, direction_label, note) {
+    paste(
+        sprintf("GO %s terms with fgsea adjusted p < %s and %s NES",
+                ontology, format(fdr), direction),
+        sprintf("(%s), with their ancestors.", direction_label),
+        "Filled nodes: seed terms, shaded by adjusted p (darker is",
+        "smaller). Hollow grey nodes: context terms, not significant",
+        "or not tested. Solid lines: is_a; dashed: part_of. More",
+        "general terms are higher.", note)
+}
+
 #' Remove GO hierarchy outputs of an earlier run
 #'
 #' The report finds the figures through the index, so a run that draws nothing

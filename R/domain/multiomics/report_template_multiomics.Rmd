@@ -1394,14 +1394,9 @@ if (is.null(gh_idx) || nrow(gh_idx) == 0) {
                         next
                     }
                     cat(sprintf("![](%s)\n\n", u$png))
-                    figure_legend(paste(
-                        sprintf("GO %s terms with fgsea adjusted p < %s and %s NES",
-                                ont, format(go_hier_cfg$fdr), u$direction),
-                        sprintf("(%s), with their ancestors.", u$direction_label),
-                        "Filled nodes: seed terms, shaded by adjusted p (darker is",
-                        "smaller). Hollow grey nodes: context terms, not significant",
-                        "or not tested. Solid lines: is_a; dashed: part_of. More",
-                        "general terms are higher.", u$note))
+                    go_legend <- go_hierarchy_legend(ont, go_hier_cfg$fdr, u$direction,
+                                                     u$direction_label, u$note)
+                    figure_legend(go_legend)
                     seeds <- utils::read.csv(u$nodes_csv, stringsAsFactors = FALSE)
                     seeds <- seeds[seeds$is_seed, , drop = FALSE]
                     seeds <- seeds[order(seeds$padj), , drop = FALSE]
