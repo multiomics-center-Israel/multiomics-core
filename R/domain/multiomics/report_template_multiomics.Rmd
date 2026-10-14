@@ -672,6 +672,9 @@ if (length(pair_pngs) == 0) {
 } else {
     for (pp in pair_pngs) show_multigsea_pair(pp, "mg-sc")
     multigsea_pair_legend()
+    if (multigsea_has_coverage_marks(sub("\\.png$", ".csv", pair_pngs))) {
+        figure_legend(pathway_coverage_legend("multigsea"))
+    }
 }
 ```
 
@@ -698,6 +701,9 @@ for (cdir in contrast_dirs) {
         show_multigsea_pair(cp, paste0("mg-pc-", gsub("[^a-zA-Z0-9]", "", cname)))
     }
     multigsea_pair_legend()
+    if (multigsea_has_coverage_marks(sub("\\.png$", ".csv", cpngs))) {
+        figure_legend(pathway_coverage_legend("multigsea"))
+    }
 }
 ```
 
@@ -745,7 +751,10 @@ dotplot <- file.path(multi_ora_dir, "multi_ora_dotplot.png")
 if (file.exists(dotplot)) {
     cat("\n#### Pooled vs Per-Omics Comparison {.unnumbered}\n\n")
     cat(sprintf("![Multi-ORA Dot Plot](%s)\n\n", dotplot))
-    figure_legend("Multi-ORA dot plot comparing per-omics and pooled enrichment results. Each dot represents a pathway; x-axis is -log10(padj), dot size reflects gene count, and color indicates the source (pooled or individual omics). Red dashed line marks padj = 0.05.")
+    figure_legend("Multi-ORA dot plot comparing per-omics and pooled enrichment results. Each dot represents a pathway; x-axis is -log10(padj), dot size reflects gene count, and color indicates the source (pooled or individual omics). Red dashed line marks padj = 0.05. A layer with no result for a pathway has no dot.")
+    if (has_pathway_coverage(file.path(multi_ora_dir, "multi_ora_results.csv"))) {
+        figure_legend(pathway_coverage_legend("multi_ora"))
+    }
 }
 
 # Omics support barplot
@@ -770,14 +779,24 @@ if (file.exists(multi_ora_csv)) {
     cat("\n#### Top Multi-ORA Pathways {.unnumbered}\n\n")
     mora_df <- read.csv(multi_ora_csv, stringsAsFactors = FALSE)
     mora_show <- mora_df[seq_len(min(25, nrow(mora_df))), ]
+    # Measured over total KEGG compounds, where the run wrote coverage.
+    if (all(c("n_measured_metabolomics", "n_in_pathway_metabolomics") %in%
+            colnames(mora_show))) {
+        mora_show$metab_measured <- ifelse(
+            is.na(mora_show$n_in_pathway_metabolomics), NA_character_,
+            paste0(mora_show$n_measured_metabolomics, " / ",
+                   mora_show$n_in_pathway_metabolomics))
+    }
     # Both counts, named for their rule: the FDR-based one alone reads as "no
     # layer supports this" on a run where no layer's ORA clears FDR.
     display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count",
-                                "metabolomics_padj", "n_omics_support_pval",
+                                "metabolomics_padj", "metab_measured",
+                                "n_omics_support_pval",
                                 "n_omics_support"), colnames(mora_show))
     mora_show <- mora_show[, display_cols, drop = FALSE]
     col_labels <- c(pathway = "Pathway", pooled_padj = "Pooled padj", pooled_count = "Gene Count",
                     metabolomics_padj = "Metab padj",
+                    metab_measured = "Metabolites measured (n / N in pathway)",
                     n_omics_support_pval = "# layers reporting it, p<0.05",
                     n_omics_support = "# layers FDR<0.05")
     colnames(mora_show) <- col_labels[display_cols]
@@ -881,6 +900,26 @@ if (nrow(metab_df) > 0) {
         cat(sprintf(paste0("\nCompound-based over-representation analysis identified **%d** ",
                            "enriched KEGG pathways from significantly altered metabolites.\n\n"),
                     nrow(metab_df)))
+    }
+}
+```
+
+```{r metab-coverage-note, results='asis'}
+# What the metabolomics layer could test at all, as the coverage step wrote it.
+cov_summary_file <- file.path(enrichment_dir, "kegg_pathway_coverage_summary.tsv")
+if (file.exists(cov_summary_file)) {
+    cov_sum <- read.delim(cov_summary_file, stringsAsFactors = FALSE)
+    cov_met <- cov_sum[cov_sum$layer == "metabolomics", , drop = FALSE]
+    if (nrow(cov_met) == 1) {
+        cat(sprintf(paste0(
+            "\nKEGG coverage of the measured metabolites: %d of %d features mapped ",
+            "to a KEGG compound (%d distinct compounds). %d KEGG pathways contain at ",
+            "least one KEGG compound; %d of them have at least %d measured compounds ",
+            "and could be tested. Per-pathway counts are in ",
+            "kegg_pathway_coverage.csv.\n\n"),
+            cov_met$n_mapped_features, cov_met$n_features,
+            cov_met$n_distinct_ids, cov_met$n_pathways_with_members,
+            cov_met$n_pathways_testable, cov_met$n_min_required))
     }
 }
 ```
@@ -1066,6 +1105,10 @@ if (length(list.files(enrichment_dir, pattern = "^cross_omics_pathway_heatmap_.*
         "scored only with its other test is left out for that layer; the run log names",
         "it.",
         if (!single_contrast) "Each cell is the layer's smallest p across contrasts."))
+    if (has_pathway_coverage(file.path(enrichment_dir,
+                                       "cross_omics_pathways_meta_analysis.csv"))) {
+        figure_legend(pathway_coverage_legend("heatmap"))
+    }
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```
@@ -1101,6 +1144,10 @@ if (length(list.files(enrichment_dir, pattern = "^cross_omics_ora_heatmap_.*\\.p
         if (!single_contrast) paste("Each cell is the layer's smallest adjusted p across",
                                     "contrasts: a display choice, not an error rate",
                                     "controlled across contrasts.")))
+    if (has_pathway_coverage(file.path(enrichment_dir,
+                                       "cross_omics_pathways_meta_analysis.csv"))) {
+        figure_legend(pathway_coverage_legend("heatmap"))
+    }
     render_commentary("cross_omics_ora_heatmap")
 }
 ```
@@ -1149,6 +1196,11 @@ if (length(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.png$")) > 0)
         "\"ORA\" where that layer has only ORA there, a dash where it has none. The",
         "second heatmap keeps only pathways the other layer tested. P-values are",
         "nominal; a shared NES sign is not by itself biological agreement."))
+    lookup_has_cov <- any(vapply(
+        list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.tsv$", full.names = TRUE),
+        function(f) "target_coverage" %in% names(read.delim(f, nrows = 1)),
+        logical(1)))
+    if (lookup_has_cov) figure_legend(pathway_coverage_legend("lookup"))
 }
 ```
 
@@ -1159,7 +1211,8 @@ lookup_cols <- c("ranking", "rank", "pathway", "source_method",
                  "source_contrast", "source_NES", "source_p", "source_padj",
                  "target_status", "target_method", "target_contrast",
                  "target_NES", "target_p", "target_padj", "target_ora_p",
-                 "target_ora_padj")
+                 "target_ora_padj", "target_coverage",
+                 "target_n_measured_features", "target_n_in_pathway")
 for (tsv in lookup_tsvs) {
     tbl <- read.delim(tsv, stringsAsFactors = FALSE, check.names = FALSE)
     if (nrow(tbl) == 0) next
@@ -1295,6 +1348,10 @@ if (dir.exists(enrich_per_contrast_dir)) {
                                              "Cross-Omics Heatmap", "enr-pc-hm-")
         drew_ora <- show_collection_pngs("cross_omics_ora_heatmap",
                                          "Cross-Omics ORA Evidence", "enr-pc-ora-")
+        if ((drew_heatmap || drew_ora) &&
+            has_pathway_coverage(file.path(cdir, "cross_omics_pathways_meta_analysis.csv"))) {
+            figure_legend(pathway_coverage_legend("heatmap"))
+        }
 
         # Top-pathway lookups for this contrast; the "_tested" variants stay in
         # the directory beside them.
