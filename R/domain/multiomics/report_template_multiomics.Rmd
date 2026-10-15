@@ -1455,7 +1455,18 @@ if (is.null(gh_idx) || nrow(gh_idx) == 0) {
                         cat(sprintf("*%s*\n\n", u$note))
                         next
                     }
-                    cat(sprintf("![](%s)\n\n", u$png))
+                    # The static figure is small at page width; the HTML beside it can
+                    # be zoomed. Linked relative to the report, which sits in run_dir.
+                    has_html <- !is.na(u$html) && file.exists(u$html)
+                    if (has_html) {
+                        rel_html <- substring(u$html, nchar(run_dir) + 2)
+                        cat(sprintf('<a href="%s" target="_blank"><img src="%s" style="max-width:100%%;"></a>\n\n',
+                                    rel_html, knitr::image_uri(u$png)))
+                        cat(sprintf('<p><a href="%s" target="_blank">Open the interactive graph (zoom, pan, search terms)</a></p>\n\n',
+                                    rel_html))
+                    } else {
+                        cat(sprintf("![](%s)\n\n", u$png))
+                    }
                     go_legend <- go_hierarchy_legend(ont, go_hier_cfg$fdr, u$direction,
                                                      u$direction_label, u$note)
                     figure_legend(go_legend)

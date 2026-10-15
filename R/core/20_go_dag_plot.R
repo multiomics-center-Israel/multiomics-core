@@ -182,6 +182,18 @@ go_padj_bins <- function(padj, fdr = 0.05) {
     factor(bins, levels = rev(labels), ordered = TRUE)
 }
 
+#' Fill colours of the adjusted p bins
+#'
+#' One single-hue scale shared by the static and the interactive figure, so a
+#' colour means the same range in both.
+#'
+#' @param bin_levels Levels of go_padj_bins(), weakest bin first.
+#' @return Named character vector of colours, one per level.
+go_padj_palette <- function(bin_levels) {
+    blues <- c("#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c")
+    stats::setNames(utils::tail(blues, length(bin_levels)), bin_levels)
+}
+
 #' Shorten a label for display
 #'
 #' @param x Character vector.
@@ -223,8 +235,7 @@ plot_go_dag <- function(dag, fdr = 0.05, title = NULL, subtitle = NULL,
         directed = TRUE)
 
     bin_levels <- levels(nodes$padj_bin)
-    blues <- c("#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c")
-    fill_values <- setNames(utils::tail(blues, length(bin_levels)), bin_levels)
+    fill_values <- go_padj_palette(bin_levels)
 
     ggraph::ggraph(graph, layout = "sugiyama") +
         ggraph::geom_edge_link(ggplot2::aes(edge_linetype = relation),
@@ -263,6 +274,118 @@ plot_go_dag <- function(dag, fdr = 0.05, title = NULL, subtitle = NULL,
                        plot.title = ggplot2::element_text(size = 11),
                        plot.subtitle = ggplot2::element_text(size = 9, colour = "grey30"),
                        plot.margin = ggplot2::margin(8, 8, 8, 8))
+}
+
+#' Interactive GO sub-graph
+#'
+#' The same graph as plot_go_dag(), as a visNetwork widget that can be zoomed,
+#' panned and searched, for graphs too dense to read at page width. Layered
+#' top-down with general terms on top; every term is labelled in full (context
+#' terms in grey), and hovering a node shows its GO id and, for a seed, NES,
+#' adjusted p and set size. Fill, outline and line styles follow plot_go_dag().
+#'
+#' @param dag Output of build_go_dag(); seed nodes need a \code{padj} column.
+#' @param fdr The cutoff the seeds were selected with (sets the bins).
+#' @param title,subtitle Shown above the graph.
+#' @param footer Optional text shown below the graph, e.g. the figure legend.
+#' @param label_width Characters per line of a wrapped node label.
+#' @return A visNetwork htmlwidget.
+go_dag_widget <- function(dag, fdr = 0.05, title = NULL, subtitle = NULL,
+                          footer = NULL, label_width = 28) {
+    if (!requireNamespace("visNetwork", quietly = TRUE)) {
+        stop("go_dag_widget() needs the package visNetwork, which is not ",
+             "installed. Run renv::restore() to install the locked version.",
+             call. = FALSE)
+    }
+    nodes <- dag$nodes
+    is_seed <- nodes$is_seed
+    bins <- go_padj_bins(ifelse(is_seed, nodes$padj, NA_real_), fdr)
+    fill_values <- go_padj_palette(levels(bins))
+    fill <- ifelse(is_seed, unname(fill_values[as.character(bins)]), "#ffffff")
+    fill[is.na(fill)] <- "#ffffff"
+    esc <- function(x) htmltools::htmlEscape(as.character(x))
+    num <- function(col, digits) {
+        v <- if (col %in% colnames(nodes)) nodes[[col]] else rep(NA_real_, nrow(nodes))
+        ifelse(is.na(v), "NA", formatC(as.numeric(v), format = "g", digits = digits))
+    }
+    tip <- paste0("<b>", esc(nodes$term), "</b><br>", esc(nodes$go_id))
+    tip <- ifelse(is_seed,
+                  paste0(tip, "<br>NES ", num("NES", 3), ", adjusted p ",
+                         num("padj", 2), ", size ", num("size", 4)),
+                  paste0(tip, "<br>Context term (not significant or not tested)"))
+    wrap <- vapply(as.character(nodes$term), function(x)
+        paste(strwrap(x, width = label_width), collapse = "\n"), character(1))
+
+    vn_nodes <- data.frame(
+        id = nodes$go_id, label = unname(wrap), title = tip, shape = "dot",
+        size = ifelse(is_seed, 14, 8),
+        color.background = fill,
+        color.border = ifelse(is_seed, "#4d4d4d", "#b3b3b3"),
+        borderWidth = ifelse(is_seed, 1.5, 1),
+        font.color = ifelse(is_seed, "#262626", "#8c8c8c"),
+        font.size = ifelse(is_seed, 16, 13),
+        stringsAsFactors = FALSE)
+    edges <- dag$edges
+    # parent -> child, so the hierarchical layout puts general terms on top.
+    vn_edges <- data.frame(
+        from = edges$parent, to = edges$child,
+        dashes = edges$relation == "part_of",
+        title = ifelse(edges$relation == "part_of", "part_of", "is_a"),
+        color = "#b3b3b3", width = 1, stringsAsFactors = FALSE)
+
+    legend_nodes <- data.frame(
+        label = c(paste("Adjusted p", names(fill_values)), "Context term"),
+        shape = "dot", size = 10,
+        color.background = c(unname(fill_values), "#ffffff"),
+        color.border = c(rep("#4d4d4d", length(fill_values)), "#b3b3b3"),
+        stringsAsFactors = FALSE)
+    legend_edges <- data.frame(label = c("is_a", "part_of"), color = "#8c8c8c",
+                               dashes = c(FALSE, TRUE), arrows = "",
+                               stringsAsFactors = FALSE)
+
+    w <- visNetwork::visNetwork(vn_nodes, vn_edges, width = "100%", height = "85vh",
+                                main = list(text = title %||% "",
+                                            style = "font-family:sans-serif;font-size:16px;"),
+                                submain = list(text = subtitle %||% "",
+                                               style = "font-family:sans-serif;font-size:13px;color:#4d4d4d;"),
+                                footer = list(text = footer %||% "",
+                                              style = "font-family:sans-serif;font-size:12px;color:#4d4d4d;"))
+    w <- visNetwork::visHierarchicalLayout(w, direction = "UD", sortMethod = "directed",
+                                           levelSeparation = 150, nodeSpacing = 220,
+                                           treeSpacing = 220, blockShifting = TRUE,
+                                           edgeMinimization = TRUE, parentCentralization = TRUE)
+    w <- visNetwork::visPhysics(w, enabled = FALSE)
+    w <- visNetwork::visEdges(w, smooth = FALSE, arrows = list(to = list(enabled = FALSE)))
+    w <- visNetwork::visInteraction(w, navigationButtons = TRUE, hover = TRUE,
+                                    zoomView = TRUE, dragView = TRUE,
+                                    tooltipDelay = 100)
+    w <- visNetwork::visOptions(w, highlightNearest = list(enabled = TRUE, degree = 1,
+                                                           hover = FALSE),
+                                nodesIdSelection = list(enabled = TRUE,
+                                                        main = "Find a GO term"))
+    visNetwork::visLegend(w, useGroups = FALSE, addNodes = legend_nodes,
+                          addEdges = legend_edges, position = "right", width = 0.18,
+                          zoom = FALSE)
+}
+
+#' Save an interactive GO sub-graph as one HTML file
+#'
+#' Self-contained when pandoc is available, so the file opens on its own; else
+#' the JavaScript goes to a shared \code{lib/} folder beside it.
+#'
+#' @param widget Output of go_dag_widget().
+#' @param file Target .html path.
+#' @param title Browser tab title.
+#' @return \code{file}, invisibly.
+save_go_dag_widget <- function(widget, file, title = "GO hierarchy") {
+    file <- normalizePath(file, winslash = "/", mustWork = FALSE)
+    if (rmarkdown::pandoc_available()) {
+        htmlwidgets::saveWidget(widget, file, selfcontained = TRUE, title = title)
+    } else {
+        htmlwidgets::saveWidget(widget, file, selfcontained = FALSE, title = title,
+                                libdir = "lib")
+    }
+    invisible(file)
 }
 
 #' Figure size for a GO sub-graph
