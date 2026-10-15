@@ -167,7 +167,7 @@ modes:
         # harmonization: false           # "Data Harmonization" section, heading included
         # sample_concordance: false      # "Sample Concordance Across Omics" section
         # mechanistic: false             # "Mechanistic & Causal Inference" section
-        # multigsea_pairwise: false      # pairwise layer-vs-layer MultiGSEA scatter figures
+        # multigsea_pairwise: true       # pairwise layer-vs-layer MultiGSEA scatter figures (off unless true)
         # diablo_variable_plot: false    # DIABLO variable (correlation-circle) loadings plot
 
     # --- GO hierarchy of GSEA results ---

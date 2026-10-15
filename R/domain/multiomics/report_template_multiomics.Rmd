@@ -187,8 +187,11 @@ show_harmonization      <- show_section("harmonization")
 show_sample_concordance <- show_section("sample_concordance")
 show_mechanistic        <- show_section("mechanistic")
 # Pairwise MultiGSEA scatter figures (one layer's pathway significance against
-# another's) at the top of the MultiGSEA section; FALSE leaves them out.
-show_multigsea_pairwise <- show_section("multigsea_pairwise")
+# another's) at the top of the MultiGSEA section. Unlike the switches above these
+# are OFF unless a project sets `multigsea_pairwise: true`: the axes are nominal
+# significance over a union padded with zeros, which reads as layer agreement it
+# does not measure. MultiGSEA still writes the PNG/CSV pairs to its folder.
+show_multigsea_pairwise <- isTRUE(section_cfg[["multigsea_pairwise"]])
 # The DIABLO variable (correlation-circle) loadings plot; FALSE leaves it out.
 show_diablo_variable_plot <- show_section("diablo_variable_plot")
 
