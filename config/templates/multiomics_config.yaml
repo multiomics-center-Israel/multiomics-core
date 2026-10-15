@@ -168,6 +168,7 @@ modes:
         # sample_concordance: false      # "Sample Concordance Across Omics" section
         # mechanistic: false             # "Mechanistic & Causal Inference" section
         # multigsea_pairwise: false      # pairwise layer-vs-layer MultiGSEA scatter figures
+        # diablo_variable_plot: false    # DIABLO variable (correlation-circle) loadings plot
 
     # --- GO hierarchy of GSEA results ---
     # For the proteomics and RNA layers: the part of the GO graph above the GO

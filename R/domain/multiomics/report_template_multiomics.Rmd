@@ -189,6 +189,8 @@ show_mechanistic        <- show_section("mechanistic")
 # Pairwise MultiGSEA scatter figures (one layer's pathway significance against
 # another's) at the top of the MultiGSEA section; FALSE leaves them out.
 show_multigsea_pairwise <- show_section("multigsea_pairwise")
+# The DIABLO variable (correlation-circle) loadings plot; FALSE leaves it out.
+show_diablo_variable_plot <- show_section("diablo_variable_plot")
 
 # Detect which sections have data
 has_diablo      <- dir.exists(diablo_dir) && length(list.files(diablo_dir, "\\.png$")) > 0
@@ -1791,14 +1793,14 @@ figure_legend("DIABLO sample scores plot. Samples are projected onto the first t
 render_commentary("diablo_sample_plot")
 ```
 
-```{r diablo-variable-plot, eval=has_diablo, results='asis'}
+```{r diablo-variable-plot, eval=has_diablo && show_diablo_variable_plot, results='asis'}
 p <- file.path(diablo_dir, "diablo_variable_plot.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
 }
 ```
 
-```{r diablo-variable-legend, eval=has_diablo, results='asis'}
+```{r diablo-variable-legend, eval=has_diablo && show_diablo_variable_plot, results='asis'}
 figure_legend("DIABLO variable loadings plot. Top contributing features from each omics layer are shown on the first two components.")
 render_commentary("diablo_variable_plot")
 ```
