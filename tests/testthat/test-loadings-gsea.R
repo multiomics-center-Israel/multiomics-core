@@ -87,6 +87,16 @@ test_that("missing keys and non-finite values are dropped", {
     expect_identical(collapse_loading_ranks(numeric(0), character(0)), numeric(0))
 })
 
+test_that("a feature mapped to several genes gives each of them its value", {
+    id_map <- data.frame(feature_id = c("P1;P2", "P1;P2", "P3", "P4"),
+                         ENTREZID   = c("101", "102", "103", "101"),
+                         stringsAsFactors = FALSE)
+    ranks <- map_loading_ranks(c(0.5, -0.2, -0.9), c("P1;P2", "P3", "P4"), id_map)
+    # 101 is reached from P1;P2 (0.5) and P4 (-0.9): the larger |value| wins.
+    expect_identical(sort(names(ranks)), c("101", "102", "103"))
+    expect_equal(unname(ranks[c("101", "102", "103")]), c(-0.9, 0.5, -0.2))
+})
+
 test_that("GENE_N ids resolve in place, keeping the vector's length", {
     harm <- list(gene_protein_mapping = data.frame(
         gene_id = c("GID1", "GID2"), protein_id = c("PID1", "PID2"),
