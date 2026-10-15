@@ -205,6 +205,12 @@ test_that("outputs, index and the portal edge table are written and read back", 
     expect_true(file.exists(drawn$png))
     expect_true(file.exists(drawn$pdf))
     expect_match(drawn$png, "proteomics/Perfused_vs_Control/BP_positive.png", fixed = TRUE)
+    if (requireNamespace("visNetwork", quietly = TRUE)) {
+        expect_true(file.exists(drawn$html))
+        expect_match(drawn$html, "proteomics/Perfused_vs_Control/BP_positive.html", fixed = TRUE)
+        html <- paste(readLines(drawn$html, warn = FALSE), collapse = "\n")
+        expect_true(grepl("visNetwork", html, fixed = TRUE))
+    }
 
     tsv <- read.delim(file.path(run_dir, "proteomics", "Datasets", "go_dag_edges.tsv"),
                       stringsAsFactors = FALSE)
@@ -216,6 +222,37 @@ test_that("outputs, index and the portal edge table are written and read back", 
     write_go_hierarchy_outputs(NULL, out_dir, run_dir)
     expect_false(dir.exists(out_dir))
     expect_false(file.exists(file.path(run_dir, "proteomics", "Datasets", "go_dag_edges.tsv")))
+})
+
+test_that("the interactive graph carries every node, the bins and the line styles", {
+    skip_if_not_installed("visNetwork")
+    dag <- build_go_dag(
+        data.frame(go_id = c("GO:0000003", "GO:0000004"), NES = c(2, 1.5),
+                   padj = c(1e-4, 0.03), size = c(40L, 25L)),
+        normalize_go_relations(toy_parents_raw()), term_info = toy_terms())
+    w <- go_dag_widget(dag, fdr = 0.05, title = "t", footer = "f")
+    n <- w$x$nodes
+    expect_setequal(n$id, dag$nodes$go_id)
+    seed <- n$id %in% c("GO:0000003", "GO:0000004")
+    pal <- go_padj_palette(levels(go_padj_bins(c(1e-4, 0.03), 0.05)))
+    expect_true(all(n$color.background[seed] %in% pal))
+    expect_true(all(n$color.background[!seed] == "#ffffff"))
+    expect_true(all(grepl("NES", n$title[seed], fixed = TRUE)))
+    expect_true(all(grepl("Context term", n$title[!seed], fixed = TRUE)))
+    e <- w$x$edges
+    expect_identical(e$dashes, dag$edges$relation == "part_of")
+    # parent -> child, so general terms sit on top.
+    expect_identical(e$from, dag$edges$parent)
+})
+
+test_that("an index from before the interactive figure reads with an empty html column", {
+    out_dir <- withr::local_tempdir()
+    utils::write.csv(data.frame(layer = "proteomics", contrast = "A_vs_B", png = "a.png",
+                                pdf = "a.pdf", nodes_csv = "n.csv", edges_csv = "e.csv"),
+                     file.path(out_dir, "go_hierarchy_index.csv"), row.names = FALSE)
+    idx <- read_go_hierarchy_index(out_dir)
+    expect_true("html" %in% colnames(idx))
+    expect_true(is.na(idx$html))
 })
 
 # ---- config -------------------------------------------------------------------
