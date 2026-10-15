@@ -301,8 +301,10 @@ clear_go_hierarchy_outputs <- function(out_dir, run_dir) {
 
 #' Write the GO hierarchy figures, tables and index
 #'
-#' Per unit with a graph: <ONT>_<direction>.png and .pdf, _nodes.csv and
-#' _edges.csv under go_hierarchy/<layer>/<contrast>/. One index,
+#' Per unit with a graph: <ONT>_<direction>.png and .pdf, an interactive
+#' <ONT>_<direction>.html (zoom, pan, search), _nodes.csv and _edges.csv under
+#' go_hierarchy/<layer>/<contrast>/. The HTML is skipped, with a message, when
+#' visNetwork is not installed. One index,
 #' go_hierarchy_index.csv, lists every unit (with or without a figure), with
 #' paths relative to \code{out_dir}. Per layer, the union of drawn edges goes
 #' to <run_dir>/<mode>/Datasets/go_dag_edges.tsv.
@@ -332,7 +334,7 @@ write_go_hierarchy_outputs <- function(built, out_dir, run_dir, term_info = NULL
             note = paste("Not drawn:", built$error))))
     }
     for (u in units) {
-        files <- c(png = NA_character_, pdf = NA_character_,
+        files <- c(png = NA_character_, pdf = NA_character_, html = NA_character_,
                    nodes_csv = NA_character_, edges_csv = NA_character_)
         n_nodes <- 0L; n_edges <- 0L; n_shown <- 0L
         if (!is.null(u$dag)) {
@@ -340,6 +342,7 @@ write_go_hierarchy_outputs <- function(built, out_dir, run_dir, term_info = NULL
             dir.create(file.path(out_dir, rel_dir), recursive = TRUE, showWarnings = FALSE)
             stem <- file.path(rel_dir, paste0(u$ontology, "_", u$direction))
             files <- c(png = paste0(stem, ".png"), pdf = paste0(stem, ".pdf"),
+                       html = paste0(stem, ".html"),
                        nodes_csv = paste0(stem, "_nodes.csv"),
                        edges_csv = paste0(stem, "_edges.csv"))
             nodes <- u$dag$nodes
@@ -350,9 +353,29 @@ write_go_hierarchy_outputs <- function(built, out_dir, run_dir, term_info = NULL
                             width = sz[["width"]], height = sz[["height"]], dpi = 150)
             ggplot2::ggsave(file.path(out_dir, files[["pdf"]]), u$plot,
                             width = sz[["width"]], height = sz[["height"]])
+            html_ok <- tryCatch({
+                fdr <- (built$settings %||% list())$fdr %||% 0.05
+                widget <- go_dag_widget(
+                    u$dag, fdr = fdr, title = u$plot$labels$title,
+                    subtitle = u$plot$labels$subtitle,
+                    footer = paste(
+                        go_hierarchy_legend(u$ontology, fdr, u$direction,
+                                            u$direction_label, u$note),
+                        "Scroll to zoom, drag to pan, hover a term for its values;",
+                        "Find a GO term (top left) highlights it and its links."))
+                save_go_dag_widget(widget, file.path(out_dir, files[["html"]]),
+                                   title = paste("GO", u$ontology, gsub("_", " ", u$contrast),
+                                                 u$direction_label))
+                TRUE
+            }, error = function(e) {
+                message("GO hierarchy: interactive HTML not written for ", stem,
+                        ": ", conditionMessage(e))
+                FALSE
+            })
+            if (!html_ok) files[["html"]] <- NA_character_
             utils::write.csv(nodes, file.path(out_dir, files[["nodes_csv"]]), row.names = FALSE)
             utils::write.csv(edges, file.path(out_dir, files[["edges_csv"]]), row.names = FALSE)
-            written <- c(written, file.path(out_dir, files))
+            written <- c(written, file.path(out_dir, files[!is.na(files)]))
             edges_by_layer[[u$layer]] <- rbind(edges_by_layer[[u$layer]], edges)
         }
         index_rows[[length(index_rows) + 1]] <- data.frame(
@@ -360,7 +383,7 @@ write_go_hierarchy_outputs <- function(built, out_dir, run_dir, term_info = NULL
             direction = u$direction, direction_label = u$direction_label,
             n_significant = u$n_significant, n_seeds_shown = n_shown,
             n_nodes = n_nodes, n_edges = n_edges, note = u$note,
-            png = files[["png"]], pdf = files[["pdf"]],
+            png = files[["png"]], pdf = files[["pdf"]], html = files[["html"]],
             nodes_csv = files[["nodes_csv"]], edges_csv = files[["edges_csv"]],
             stringsAsFactors = FALSE)
     }
@@ -371,7 +394,7 @@ write_go_hierarchy_outputs <- function(built, out_dir, run_dir, term_info = NULL
                    direction_label = character(0), n_significant = integer(0),
                    n_seeds_shown = integer(0), n_nodes = integer(0),
                    n_edges = integer(0), note = character(0), png = character(0),
-                   pdf = character(0), nodes_csv = character(0),
+                   pdf = character(0), html = character(0), nodes_csv = character(0),
                    edges_csv = character(0))
     index_file <- file.path(out_dir, "go_hierarchy_index.csv")
     utils::write.csv(index, index_file, row.names = FALSE)
@@ -418,7 +441,9 @@ read_go_hierarchy_index <- function(out_dir) {
     f <- file.path(out_dir, "go_hierarchy_index.csv")
     if (!file.exists(f)) return(NULL)
     idx <- utils::read.csv(f, stringsAsFactors = FALSE)
-    for (col in c("png", "pdf", "nodes_csv", "edges_csv")) {
+    # An index written before the interactive figure existed has no html column.
+    if (!"html" %in% colnames(idx)) idx$html <- NA_character_
+    for (col in c("png", "pdf", "html", "nodes_csv", "edges_csv")) {
         has <- !is.na(idx[[col]]) & nzchar(idx[[col]])
         idx[[col]][has] <- file.path(out_dir, idx[[col]][has])
     }
