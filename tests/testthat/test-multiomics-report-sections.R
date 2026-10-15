@@ -96,6 +96,19 @@ test_that("a single-contrast run gets one tab, not a combined and a per-contrast
     }
 })
 
+test_that("the pairwise MultiGSEA figures are off unless set to true", {
+    section_cfg <- list()
+    expect_false(isTRUE(section_cfg[["multigsea_pairwise"]]))
+    section_cfg <- list(multigsea_pairwise = FALSE)
+    expect_false(isTRUE(section_cfg[["multigsea_pairwise"]]))
+    section_cfg <- list(multigsea_pairwise = TRUE)
+    expect_true(isTRUE(section_cfg[["multigsea_pairwise"]]))
+    cfg <- yaml::read_yaml(file.path(root_dir, "config", "templates",
+                                     "multiomics_config.yaml"))
+    sections <- (cfg$modes$multiomics$report %||% list())$sections %||% list()
+    expect_false(isTRUE(sections[["multigsea_pairwise"]]))
+})
+
 test_that("the shipped config template leaves the new switches on", {
     cfg <- yaml::read_yaml(file.path(root_dir, "config", "templates",
                                      "multiomics_config.yaml"))
@@ -667,9 +680,10 @@ test_that("the pairwise MultiGSEA figures show whenever there is no per-contrast
                       joined, fixed = TRUE))
     expect_true(grepl("show_mg_top_pairs <- show_multigsea_pairwise && has_multigsea && !show_mg_per_contrast",
                       joined, fixed = TRUE))
-    # The pairwise figures can be switched off per project.
-    expect_true(grepl('show_multigsea_pairwise <- show_section("multigsea_pairwise")',
+    # The pairwise figures are off unless a project asks for them.
+    expect_true(grepl('show_multigsea_pairwise <- isTRUE(section_cfg[["multigsea_pairwise"]])',
                       joined, fixed = TRUE))
+    expect_false(grepl('show_section("multigsea_pairwise")', joined, fixed = TRUE))
     expect_true(grepl('`r if (show_mg_top_pairs) combined_tab(2, "All Contrasts (Pooled)")`',
                       joined, fixed = TRUE))
     expect_true(grepl('`r if (show_mg_per_contrast) "## Per-Contrast MultiGSEA {.tabset .unnumbered}"`',
