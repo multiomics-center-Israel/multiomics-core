@@ -123,6 +123,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # ------------------------------------------------------------------
     annotation_dir <- enr_cfg$annotation_dir
     if (!is.null(annotation_dir) && nzchar(annotation_dir)) {
+        if (resolve_go_simplify_settings(pw_cfg)$enabled) {
+            message("pathway.simplify_go applies to the online fgsea/ORA path only; ",
+                    "the offline enrichment path simplifies GO cluster ORA on its own.")
+        }
         return(.run_local_enrichment(
             de_tables      = de_tables,
             feature_ids    = all_gene_ids,
@@ -221,9 +225,6 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     pw_min     <- pw_cfg$min_size %||% 10
     pw_max     <- pw_cfg$max_size %||% 500
 
-    # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
-    # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
-    # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
     rna_de_cfg <- rna_cfg$de %||% list()
     # Same fallback chain build_rnaseq_summary_df() uses
     # (R/domain/rnaseq/04_de_summary.R:100,148). validate_rna_config() accepts a
@@ -249,6 +250,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
     saved_files <- save_pathway_results(pathway_results, enrich_dir)
     plot_files  <- generate_pathway_plots(pathway_results, plot_dir)
+
+    # Optional GO simplification (pathway.simplify_go): separate files under
+    # Enrichment/simplified/; pathway_results and the files above are unchanged.
+    run_go_simplification(pathway_results, pw_cfg, organism,
+                          file.path(enrich_dir, "simplified"))
 
     # Save annotation table
     if (!is.null(annotation_df)) {
@@ -332,7 +338,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
              "but the resolved annotation directory does not exist:\n  ",
              normalizePath(annotation_dir, winslash = "/", mustWork = FALSE), "\n",
              "Provide the local annotation tables at that path, or set ",
-             "modes.rna.enrichment.annotation_dir: \"\" to use the online ",
+             "modes.rna.enrichment.annotation_dir: null to use the online ",
              "enrichment workflow.", call. = FALSE)
     }
 

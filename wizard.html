@@ -1234,10 +1234,6 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   </p>
   <div class="field-row">
     <div class="field">
-      <label>Project ID <span class="hint">(shown in report title)</span></label>
-      <input type="text" id="report_project_id" placeholder="e.g. EP-2025-001">
-    </div>
-    <div class="field">
       <label>Raw files location <span class="hint">(URL or path)</span></label>
       <input type="text" id="report_raw_files" placeholder="e.g. https://drive.google.com/...">
     </div>
@@ -2064,7 +2060,7 @@ function generateRNAYaml() {
   yaml += '      contrasts: ' + yamlStr(contrastsDest) + '\n';
 
   yaml += '\n    id_columns:\n';
-  yaml += '      gene_id_col: ' + yamlStr(v('rna_gene_id_col') || 'gene_id') + '\n';
+  yaml += '      gene_id: ' + yamlStr(v('rna_gene_id_col') || 'gene_id') + '\n';
   yaml += '      sample_col: ' + yamlStr(sampleCol) + '\n';
   yaml += '      map_from: "sample_original_name"\n';
   yaml += '      map_to: ' + yamlStr(sampleCol) + '\n';
@@ -2097,11 +2093,10 @@ function generateRNAYaml() {
   yaml += '      linear_fc_cutoff: ' + v('rna_fc_cutoff') + '\n';
   yaml += '      use_adj: true\n';
 
-  yaml += '\n    de_table:\n      id_col: "FeatureID"\n      pass_any_col: "pass_any_contrast"\n';
+  yaml += '\n    de_table:\n      id_col: "FeatureID"\n';
 
   yaml += '\n    qc_post:\n      enabled: true\n      de_source: "summary"\n      max_top_de_features: 100\n';
   yaml += '      plots:\n        volcano: true\n        ma: true\n';
-  yaml += '      outputs:\n        write_de_tables: true\n';
 
   yaml += '\n    annotation:\n';
   yaml += '      organism: ' + yamlStr(organism) + '\n';
@@ -2296,7 +2291,6 @@ function generateProtYaml() {
 
   // Report customization
   yaml += '\n    report:\n';
-  yaml += '      project_id: ' + yamlStr(v('report_project_id')) + '\n';
   var introText = v('report_intro_text');
   if (introText) yaml += '      introduction_text: |\n' + introText.split('\n').map(function(l) { return '        ' + l; }).join('\n') + '\n';
   var introBg = v('report_intro_bg');

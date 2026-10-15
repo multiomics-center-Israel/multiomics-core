@@ -189,6 +189,7 @@ validate_proteomics_config <- function(cfg) {
         if (!is.null(cfg$pathway$pathway_volcano)) {
             assert_scalar_bool(cfg$pathway$pathway_volcano, "pathway$pathway_volcano", allow_null = TRUE)
         }
+        validate_go_simplify_config(cfg$pathway, "pathway")
     }
 
 
