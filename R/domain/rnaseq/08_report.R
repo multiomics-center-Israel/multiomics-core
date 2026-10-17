@@ -100,3 +100,101 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 
     out_html
 }
+
+#' DE gene sets per contrast, for the report's overlap plots
+#'
+#' Applies the report's DE rule (padj at or below the cutoff and |log2FC| at
+#' or above the cutoff) to every contrast in the final results table. Kept out
+#' of the template so the All / Up / Down tabs share one rule.
+#'
+#' @param de_data Final results table (one row per gene, columns
+#'   \code{padj.<contrast>} and \code{log2FoldChange.<contrast>} or
+#'   \code{linearFC.<contrast>}).
+#' @param contrast_names Contrast names, in display order.
+#' @param padj_cut Adjusted p-value cutoff.
+#' @param lfc_cut Absolute log2 fold-change cutoff.
+#' @param direction \code{"all"}, \code{"up"} or \code{"down"}.
+#' @return Named list of gene vectors, one per contrast with both columns
+#'   present; names have underscores replaced by spaces.
+collect_de_gene_sets <- function(de_data, contrast_names, padj_cut, lfc_cut,
+                                 direction = c("all", "up", "down")) {
+    direction <- match.arg(direction)
+    gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
+    sets <- list()
+    for (cn in contrast_names) {
+        padj_col <- grep(paste0("^padj\\.", cn, "$"), names(de_data), value = TRUE)[1]
+        lfc_col <- grep(paste0("^(log2FoldChange|linearFC)\\.", cn, "$"), names(de_data), value = TRUE)[1]
+        if (is.na(padj_col) || is.na(lfc_col)) next
+        padj_vals <- as.numeric(de_data[[padj_col]])
+        lfc_vals <- as.numeric(de_data[[lfc_col]])
+        if (grepl("^linearFC", lfc_col)) lfc_vals <- log2(abs(lfc_vals)) * sign(lfc_vals)
+        passes_fc <- switch(direction,
+            all  = abs(lfc_vals) >= lfc_cut,
+            up   = lfc_vals >= lfc_cut,
+            down = lfc_vals <= -lfc_cut)
+        is_de <- !is.na(padj_vals) & padj_vals <= padj_cut & !is.na(passes_fc) & passes_fc
+        sets[[gsub("_", " ", cn)]] <- de_data[[gene_col]][is_de]
+    }
+    sets
+}
+
+#' Draw the overlap of DE gene sets: a Venn diagram or an UpSet plot
+#'
+#' A Venn diagram stays readable up to three sets. Beyond that most of its
+#' regions are tiny or empty, so an UpSet plot is drawn instead: one bar per
+#' combination of contrasts that actually shares genes, largest first.
+#'
+#' @param gene_sets Named list of gene vectors, from
+#'   \code{collect_de_gene_sets()}.
+#' @param title Plot title.
+#' @param fill_high Fill colour for the Venn regions and UpSet bars.
+#' @param max_venn Largest number of sets drawn as a Venn diagram.
+#' @param max_combinations Most combinations shown in the UpSet plot.
+#' @param use_venn Whether ggVennDiagram is available.
+#' @return Invisibly, \code{"venn"}, \code{"upset"} or \code{"none"}: what was drawn.
+draw_de_overlap <- function(gene_sets, title, fill_high = "steelblue", max_venn = 3,
+                            max_combinations = 25, use_venn = TRUE) {
+    total <- length(unique(unlist(gene_sets)))
+    if (length(gene_sets) < 2 || total == 0) {
+        cat("No DE genes to compare across contrasts.\n")
+        return(invisible("none"))
+    }
+
+    if (length(gene_sets) <= max_venn && isTRUE(use_venn)) {
+        names(gene_sets) <- gsub(" vs ", "\nvs ", names(gene_sets))
+        p <- ggVennDiagram::ggVennDiagram(gene_sets, label_alpha = 0, label = "both",
+                                          label_percent_digit = 1, set_size = 3.5) +
+            ggplot2::scale_fill_gradient(low = "white", high = fill_high) +
+            ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = 0.25)) +
+            ggplot2::labs(title = title, subtitle = paste0("Total unique genes: ", total)) +
+            ggplot2::theme(legend.position = "none",
+                           plot.title = ggplot2::element_text(hjust = 0),
+                           plot.subtitle = ggplot2::element_text(hjust = 0),
+                           plot.margin = ggplot2::margin(10, 40, 10, 40))
+        print(p)
+        return(invisible("venn"))
+    }
+
+    m <- ComplexHeatmap::make_comb_mat(gene_sets)
+    m <- m[ComplexHeatmap::comb_size(m) > 0]
+    n_comb <- length(ComplexHeatmap::comb_size(m))
+    keep <- utils::head(order(ComplexHeatmap::comb_size(m), decreasing = TRUE), max_combinations)
+    m <- m[keep]
+    ht <- ComplexHeatmap::UpSet(
+        m,
+        set_order = seq_along(gene_sets),
+        comb_order = order(ComplexHeatmap::comb_size(m), decreasing = TRUE),
+        comb_col = fill_high,
+        top_annotation = ComplexHeatmap::upset_top_annotation(m, add_numbers = TRUE,
+                                                              gp = grid::gpar(fill = fill_high)),
+        right_annotation = ComplexHeatmap::upset_right_annotation(m, add_numbers = TRUE,
+                                                                  gp = grid::gpar(fill = fill_high)),
+        row_names_max_width = ComplexHeatmap::max_text_width(names(gene_sets)),
+        column_title = sprintf("%s (total unique genes: %d; %s)", title, total,
+                               if (n_comb <= max_combinations) "all combinations shown"
+                               else sprintf("largest %d combinations shown", max_combinations))
+    )
+    # Left padding so long contrast names are not clipped at the device edge.
+    ComplexHeatmap::draw(ht, padding = grid::unit(c(2, 8, 2, 2), "mm"))
+    invisible("upset")
+}

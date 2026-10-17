@@ -1101,166 +1101,57 @@ if (file.exists(de_counts_file)) {
 
 ## DE Gene Overlap {.tabset}
 
+Genes called DE in more than one contrast. With up to three contrasts this is
+a Venn diagram. With more, an UpSet plot: the bars on the right are the number
+of DE genes per contrast, and each column is one combination of contrasts
+(the filled dots) with the number of genes DE in exactly that combination.
+
+```{r de-overlap-setup, include=FALSE}
+fig_h_overlap <- if (length(contrast_names) > 3) 7 else 6
+```
+
 ### All DE Genes
 
-```{r de-overlap-venn-all, fig.height=6, fig.width=10, results='asis'}
-# Create Venn diagram of DE genes across contrasts
+```{r de-overlap-venn-all, fig.height=fig_h_overlap, fig.width=10, results='asis'}
 if (!is.null(de_data) && length(contrast_names) >= 2) {
-    # Get DE genes for each contrast
-    padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
-    lfc_cut <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
-
-    de_gene_lists <- list()
-    for (cn in contrast_names) {
-        padj_col <- grep(paste0("padj\\.", cn), names(de_data), value = TRUE)[1]
-        lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", cn), names(de_data), value = TRUE)[1]
-        if (!is.na(padj_col) && !is.na(lfc_col)) {
-            padj_vals <- as.numeric(de_data[[padj_col]])
-            lfc_vals <- as.numeric(de_data[[lfc_col]])
-            if (grepl("^linearFC", lfc_col)) lfc_vals <- log2(abs(lfc_vals)) * sign(lfc_vals)
-            is_de <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(lfc_vals) >= lfc_cut
-            gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
-            de_gene_lists[[gsub("_", " ", cn)]] <- de_data[[gene_col]][is_de]
-        }
-    }
-
-    if (length(de_gene_lists) >= 2 && length(de_gene_lists) <= 7) {
-        # Use ggVennDiagram if available
-        if (has_ggVennDiagram) {
-            total_unique <- length(unique(unlist(de_gene_lists)))
-            # Shorten category names for cleaner display
-            short_names <- gsub(" vs ", "\nvs ", names(de_gene_lists))
-            names(de_gene_lists) <- short_names
-            venn_plot <- ggVennDiagram(de_gene_lists, label_alpha = 0,
-                                       label = "both", label_percent_digit = 1,
-                                       set_size = 3.5) +
-                scale_fill_gradient(low = "white", high = "steelblue") +
-                scale_x_continuous(expand = expansion(mult = 0.25)) +
-                labs(title = "DE Gene Overlap (All)",
-                     subtitle = paste0("Total unique DE genes: ", total_unique)) +
-                theme(legend.position = "none",
-                      plot.title = element_text(hjust = 0),
-                      plot.subtitle = element_text(hjust = 0),
-                      plot.margin = margin(10, 40, 10, 40))
-            print(venn_plot)
-        } else {
-            # Fallback: simple overlap table
-            cat("**DE gene counts per contrast:**\n\n")
-            for (nm in names(de_gene_lists)) {
-                cat(sprintf("- **%s**: %d genes\n", nm, length(de_gene_lists[[nm]])))
-            }
-            # Calculate pairwise overlaps
-            if (length(de_gene_lists) == 2) {
-                overlap <- length(intersect(de_gene_lists[[1]], de_gene_lists[[2]]))
-                cat(sprintf("\n- **Shared**: %d genes\n", overlap))
-            }
-        }
-    } else if (length(de_gene_lists) > 7) {
-        cat("Too many contrasts for Venn diagram (max 7). Showing summary:\n\n")
-        for (nm in names(de_gene_lists)) {
-            cat(sprintf("- **%s**: %d genes\n", nm, length(de_gene_lists[[nm]])))
-        }
-    }
-} else if (length(contrast_names) < 2) {
-    cat("Venn diagram requires at least 2 contrasts.\n")
+    draw_de_overlap(
+        collect_de_gene_sets(de_data, contrast_names,
+                             padj_cut = rna_cfg$de$p_cutoff %||% 0.05,
+                             lfc_cut = log2(rna_cfg$de$linear_fc_cutoff %||% 1.5),
+                             direction = "all"),
+        title = "DE Gene Overlap (All)", fill_high = "steelblue", use_venn = has_ggVennDiagram)
 } else {
-    cat("DE data not available for Venn diagram.\n")
+    cat("At least two contrasts with DE results are needed for an overlap plot.\n")
 }
 ```
 
 ### Up-regulated
 
-```{r de-overlap-venn-up, fig.height=6, fig.width=10, results='asis'}
+```{r de-overlap-venn-up, fig.height=fig_h_overlap, fig.width=10, results='asis'}
 if (!is.null(de_data) && length(contrast_names) >= 2) {
-    padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
-    lfc_cut <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
-
-    up_gene_lists <- list()
-    for (cn in contrast_names) {
-        padj_col <- grep(paste0("padj\\.", cn), names(de_data), value = TRUE)[1]
-        lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", cn), names(de_data), value = TRUE)[1]
-        if (!is.na(padj_col) && !is.na(lfc_col)) {
-            padj_vals <- as.numeric(de_data[[padj_col]])
-            lfc_vals <- as.numeric(de_data[[lfc_col]])
-            if (grepl("^linearFC", lfc_col)) lfc_vals <- log2(abs(lfc_vals)) * sign(lfc_vals)
-            is_up <- !is.na(padj_vals) & padj_vals <= padj_cut & lfc_vals >= lfc_cut
-            gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
-            up_gene_lists[[gsub("_", " ", cn)]] <- de_data[[gene_col]][is_up]
-        }
-    }
-
-    if (length(up_gene_lists) >= 2 && length(up_gene_lists) <= 7) {
-        if (has_ggVennDiagram) {
-            total_up <- length(unique(unlist(up_gene_lists)))
-            short_names_up <- gsub(" vs ", "\nvs ", names(up_gene_lists))
-            names(up_gene_lists) <- short_names_up
-            venn_plot <- ggVennDiagram(up_gene_lists, label_alpha = 0,
-                                       label = "both", label_percent_digit = 1,
-                                       set_size = 3.5) +
-                scale_fill_gradient(low = "white", high = "#E41A1C") +
-                scale_x_continuous(expand = expansion(mult = 0.25)) +
-                labs(title = "Up-regulated Gene Overlap",
-                     subtitle = paste0("Total unique up-regulated genes: ", total_up)) +
-                theme(legend.position = "none",
-                      plot.title = element_text(hjust = 0),
-                      plot.subtitle = element_text(hjust = 0),
-                      plot.margin = margin(10, 40, 10, 40))
-            print(venn_plot)
-        } else {
-            cat("**Up-regulated gene counts:**\n\n")
-            for (nm in names(up_gene_lists)) {
-                cat(sprintf("- **%s**: %d genes\n", nm, length(up_gene_lists[[nm]])))
-            }
-        }
-    }
+    draw_de_overlap(
+        collect_de_gene_sets(de_data, contrast_names,
+                             padj_cut = rna_cfg$de$p_cutoff %||% 0.05,
+                             lfc_cut = log2(rna_cfg$de$linear_fc_cutoff %||% 1.5),
+                             direction = "up"),
+        title = "Up-regulated Gene Overlap", fill_high = "#E41A1C", use_venn = has_ggVennDiagram)
+} else {
+    cat("At least two contrasts with DE results are needed for an overlap plot.\n")
 }
 ```
 
 ### Down-regulated
 
-```{r de-overlap-venn-down, fig.height=6, fig.width=10, results='asis'}
+```{r de-overlap-venn-down, fig.height=fig_h_overlap, fig.width=10, results='asis'}
 if (!is.null(de_data) && length(contrast_names) >= 2) {
-    padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
-    lfc_cut <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
-
-    down_gene_lists <- list()
-    for (cn in contrast_names) {
-        padj_col <- grep(paste0("padj\\.", cn), names(de_data), value = TRUE)[1]
-        lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", cn), names(de_data), value = TRUE)[1]
-        if (!is.na(padj_col) && !is.na(lfc_col)) {
-            padj_vals <- as.numeric(de_data[[padj_col]])
-            lfc_vals <- as.numeric(de_data[[lfc_col]])
-            if (grepl("^linearFC", lfc_col)) lfc_vals <- log2(abs(lfc_vals)) * sign(lfc_vals)
-            is_down <- !is.na(padj_vals) & padj_vals <= padj_cut & lfc_vals <= -lfc_cut
-            gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
-            down_gene_lists[[gsub("_", " ", cn)]] <- de_data[[gene_col]][is_down]
-        }
-    }
-
-    if (length(down_gene_lists) >= 2 && length(down_gene_lists) <= 7) {
-        if (has_ggVennDiagram) {
-            total_down <- length(unique(unlist(down_gene_lists)))
-            short_names_dn <- gsub(" vs ", "\nvs ", names(down_gene_lists))
-            names(down_gene_lists) <- short_names_dn
-            venn_plot <- ggVennDiagram(down_gene_lists, label_alpha = 0,
-                                       label = "both", label_percent_digit = 1,
-                                       set_size = 3.5) +
-                scale_fill_gradient(low = "white", high = "#377EB8") +
-                scale_x_continuous(expand = expansion(mult = 0.25)) +
-                labs(title = "Down-regulated Gene Overlap",
-                     subtitle = paste0("Total unique down-regulated genes: ", total_down)) +
-                theme(legend.position = "none",
-                      plot.title = element_text(hjust = 0),
-                      plot.subtitle = element_text(hjust = 0),
-                      plot.margin = margin(10, 40, 10, 40))
-            print(venn_plot)
-        } else {
-            cat("**Down-regulated gene counts:**\n\n")
-            for (nm in names(down_gene_lists)) {
-                cat(sprintf("- **%s**: %d genes\n", nm, length(down_gene_lists[[nm]])))
-            }
-        }
-    }
+    draw_de_overlap(
+        collect_de_gene_sets(de_data, contrast_names,
+                             padj_cut = rna_cfg$de$p_cutoff %||% 0.05,
+                             lfc_cut = log2(rna_cfg$de$linear_fc_cutoff %||% 1.5),
+                             direction = "down"),
+        title = "Down-regulated Gene Overlap", fill_high = "#377EB8", use_venn = has_ggVennDiagram)
+} else {
+    cat("At least two contrasts with DE results are needed for an overlap plot.\n")
 }
 ```
 
