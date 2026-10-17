@@ -250,7 +250,8 @@ pipe_multiomics <- function() {
                         # This run's own enrichment state, so the no-OrgDb
                         # pathview fallback selects pathways from it rather
                         # than from enrichment CSVs an earlier run left behind.
-                        per_omics_enrichment = multiomics_cross_enrichment$per_omics
+                        per_omics_enrichment = multiomics_cross_enrichment$per_omics,
+                        enzyme_pairs = multiomics_enzyme_metabolite$pairs
                     )
                 }, error = function(e) {
                     warning("Multi-ORA failed: ", e$message)

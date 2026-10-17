@@ -203,14 +203,16 @@ pathview_map_contrast <- function(png_path, contrast_labels = list()) {
 #' @param multi_ora_label Display name of the cross-omics set, from
 #'   \code{pathview_multi_ora_support()}.
 #' @param contrast_labels Passed to \code{pathview_map_contrast()}.
+#' @param gsea_pair Logical: include the maps chosen by GSEA and by the
+#'   enzyme-metabolite pair table.
 #' @return Data frame with columns \code{set} (\code{"multi_ora"},
-#'   \code{"metab_top"} or \code{"prot_top"}), \code{map_set} (its display
+#'   \code{"metab_top"}, \code{"prot_top"} or \code{"gsea_pair"}), \code{map_set} (its display
 #'   name), \code{contrast} ("" where the map names none), \code{kegg_id},
 #'   \code{pathway} ("" without a KGML title), \code{heading} and \code{png};
 #'   zero rows when there is nothing to show.
 pathview_map_index <- function(pathview_dir, multi_ora = TRUE, metab_top = TRUE,
                                prot_top = TRUE, multi_ora_label = "Cross-omics pathways",
-                               contrast_labels = list()) {
+                               contrast_labels = list(), gsea_pair = FALSE) {
     sets <- list(
         list(on = multi_ora, key = "multi_ora",
              pattern = "\\.multi_ora.*\\.(multi\\.)?png$", strip = "\\.multi_ora.*$",
@@ -222,7 +224,10 @@ pathview_map_index <- function(pathview_dir, multi_ora = TRUE, metab_top = TRUE,
              strip = "\\.metab_top(\\.multi)?\\.png$", label = "Top metabolomics pathways"),
         list(on = prot_top, key = "prot_top",
              pattern = "\\.prot_top(\\.multi)?\\.png$",
-             strip = "\\.prot_top(\\.multi)?\\.png$", label = "Top proteomics pathways"))
+             strip = "\\.prot_top(\\.multi)?\\.png$", label = "Top proteomics pathways"),
+        list(on = gsea_pair, key = "gsea_pair",
+             pattern = "\\.gsea_pair.*\\.png$", strip = "\\.gsea_pair.*$",
+             label = "GSEA / enzyme-metabolite pairs"))
     empty <- data.frame(set = character(0), map_set = character(0),
                         contrast = character(0), kegg_id = character(0),
                         pathway = character(0), heading = character(0),
