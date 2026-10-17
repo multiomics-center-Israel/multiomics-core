@@ -555,7 +555,7 @@ test_that("#8 duplicate normalized expr keys are excluded (no silent wrong match
     expect_false(any(is.na(ctx[ctx$FeatureID == "DEF456", paste0("S", 1:3)])))
 })
 
-# ---- #5 + #9: ORA dotplot toggle & targeted na-handling --------------------
+# ---- #5 + #9: ORA enrichment-bar toggle & targeted na-handling -------------
 
 # Small synthetic ORA result that is definitely significant (cluster1 == T1 genes).
 .mk_ora_result <- function() {
@@ -569,20 +569,24 @@ test_that("#8 duplicate normalized expr keys are excluded (no silent wrong match
                             type = "KEGG")   # KEGG: never simplified
 }
 
-test_that("#5 plots.dotplot=FALSE suppresses the ORA dotplot; TRUE writes it", {
+test_that("#5 plots.dotplot=FALSE suppresses the ORA enrichment bars; TRUE writes top20+full", {
     skip_if_not_installed("clusterProfiler")
-    skip_if_not_installed("enrichplot")
     res <- .mk_ora_result()
     skip_if(length(res) == 0, "fixture produced no ORA enrichment")
 
     d_off <- withr::local_tempdir()
     write_cluster_ora_outputs(res, unit_dir = d_off, type = "KEGG", dotplot = FALSE)
     expect_true(file.exists(file.path(d_off, "results.csv")))
-    expect_false(file.exists(file.path(d_off, "dotplot.pdf")))   # suppressed
+    # §18 D18.1: canonical summary is the enrichment bar pair, gated by the same toggle
+    expect_false(file.exists(file.path(d_off, "enrichment_bar_top20.pdf")))  # suppressed
+    expect_false(file.exists(file.path(d_off, "enrichment_bar_full.pdf")))
+    expect_false(file.exists(file.path(d_off, "dotplot.pdf")))               # never (retired)
 
     d_on <- withr::local_tempdir()
     write_cluster_ora_outputs(res, unit_dir = d_on, type = "KEGG", dotplot = TRUE)
-    expect_true(file.exists(file.path(d_on, "dotplot.pdf")))     # written
+    expect_true(file.exists(file.path(d_on, "enrichment_bar_top20.pdf")))    # written
+    expect_true(file.exists(file.path(d_on, "enrichment_bar_full.pdf")))     # written
+    expect_false(file.exists(file.path(d_on, "dotplot.pdf")))                # old dotplot retired
 })
 
 test_that("#9 shared-gene keeps enriched terms with NA in optional columns", {
@@ -653,6 +657,80 @@ test_that("#7 core-gene CSVs written only when per_pathway_artifacts (plots) is 
     expect_true(length(core_csvs(d4)) >= 1)
     expect_true(any(grepl("heatmaps_(all|core)_genes/.*\\.png$",
                           list.files(d4, recursive = TRUE))))
+})
+
+# ===========================================================================
+# §17 R1 — GSEA ridgeplot FOLD-CHANGE hack (legacy `values_for_x_axis`)
+# The ridge X-axis must show FOLD CHANGE, not the GSEA ranking metric, for
+# specific contrasts (all rankings). GSEA result / gene sets / ordering unchanged.
+# ===========================================================================
+
+test_that("R1 ridge: values_for_x_axis (FC) overrides the geneList in the CSV (leading-edge)", {
+    skip_if_not_installed("clusterProfiler")
+    g <- tryCatch(.mk_gsea_result(), error = function(e) NULL)
+    skip_if(is.null(g) || nrow(as.data.frame(g)) == 0, "no GSEA result produced")
+    genes <- names(g@geneList)
+    # a DISTINCT fold-change vector over the same genes (clearly != the ranking metric)
+    fc_vec <- setNames(seq(-1, 1, length.out = length(genes)), genes)
+
+    d_fc  <- withr::local_tempdir()
+    plot_gsea_ridgeplot(g, d_fc, x_axis_title = "log2 Fold Change",
+                        values_for_x_axis = fc_vec)
+    csv_fc <- utils::read.csv(file.path(d_fc, "data.csv"), stringsAsFactors = FALSE)
+    skip_if(nrow(csv_fc) == 0, "empty ridge data")
+
+    # the plotted values are EXACTLY the FC-vector values of the leading-edge genes
+    # (the pathway gene set), NOT the GSEA geneList metric.
+    le_genes <- unlist(strsplit(as.character(g@result$core_enrichment[1]), "/", fixed = TRUE))
+    expect_equal(sort(csv_fc$value), sort(unname(fc_vec[le_genes])), tolerance = 1e-6)
+    expect_true(all(csv_fc$value >= -1 - 1e-9 & csv_fc$value <= 1 + 1e-9))   # FC range [-1,1]
+    # and NOT the geneList metric (which spans ~[-3, 3])
+    expect_false(all(sort(csv_fc$value) == sort(unname(g@geneList[le_genes]))))
+
+    # default (no values_for_x_axis) still uses the GSEA geneList (backward compat)
+    d_def <- withr::local_tempdir()
+    plot_gsea_ridgeplot(g, d_def)
+    csv_def <- utils::read.csv(file.path(d_def, "data.csv"), stringsAsFactors = FALSE)
+    expect_true(any(abs(csv_def$value) > 1))   # spans the geneList range, not FC's [-1,1]
+
+    # GSEA result object itself is unchanged by plotting
+    expect_identical(names(g@geneList), genes)
+})
+
+test_that("R1 ridge: all-genes variant also honors the FC vector", {
+    skip_if_not_installed("clusterProfiler")
+    g <- tryCatch(.mk_gsea_result(), error = function(e) NULL)
+    skip_if(is.null(g) || nrow(as.data.frame(g)) == 0, "no GSEA result produced")
+    genes  <- names(g@geneList)
+    fc_vec <- setNames(seq(-1, 1, length.out = length(genes)), genes)
+    d <- withr::local_tempdir()
+    plot_gsea_ridgeplot(g, d, core_enrichment = FALSE,
+                        x_axis_title = "log2 Fold Change", values_for_x_axis = fc_vec)
+    f <- file.path(d, "data_all_genes.csv")
+    expect_true(file.exists(f))
+    csv <- utils::read.csv(f, stringsAsFactors = FALSE)
+    skip_if(nrow(csv) == 0, "empty ridge data")
+    expect_true(all(csv$value >= -1 - 1e-9 & csv$value <= 1 + 1e-9))   # FC range only
+})
+
+test_that("R1 any_contrast has NO fc vector (so the caller draws no FC ridge)", {
+    # build_ranked_gene_lists creates any_contrast ONLY under pval_wo_direction,
+    # and NEVER an fc$any_contrast (D2). The ridge caller reads
+    # ranked_genes[["fc"]][[contrast]] and skips when it is NULL/any_contrast.
+    de <- list(
+        cA = data.frame(FeatureID = paste0("g", 1:10),
+                        log2FoldChange = rnorm(10), pvalue = runif(10),
+                        stringsAsFactors = FALSE),
+        cB = data.frame(FeatureID = paste0("g", 1:10),
+                        log2FoldChange = rnorm(10), pvalue = runif(10),
+                        stringsAsFactors = FALSE))
+    rk <- build_ranked_gene_lists(de)
+    expect_true("any_contrast" %in% names(rk[["pval_wo_direction"]]))   # exists
+    expect_null(rk[["fc"]][["any_contrast"]])                           # but NO fc vector
+    expect_null(rk[["pval_with_direction"]][["any_contrast"]])          # nor directional
+    # every real contrast DOES have an fc vector (the caller uses it for the ridge)
+    expect_false(is.null(rk[["fc"]][["cA"]]))
+    expect_false(is.null(rk[["fc"]][["cB"]]))
 })
 
 # ===========================================================================

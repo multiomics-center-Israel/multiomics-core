@@ -400,6 +400,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # $enrichment_index at return.
     ora_manifest_rows <- list()
     ora_index_rows    <- list()
+    # §23 J2: significant ORA term IDs per database, collected so pathway
+    # membership (§14) covers EVERY selectable ORA term (GO_BP/MF/CC + KEGG),
+    # not only the GSEA-significant subset. Unioned with GSEA IDs at build time.
+    ora_ids_by_db     <- list()
 
     # ------------------------------------------------------------------
     # 2. Cluster-based ORA across all gene-list methods
@@ -482,6 +486,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
             # Serial assembly + file writing (deterministic; never in a worker).
             ora_results <- list()
+            # §5/§9: per-db collection of each contrast's direction-agnostic DE ORA
+            # table, used after the loop to write the cross-contrast Compare
+            # Contrasts artifact (no recompute; reuses these stored tables).
+            de_wo_by_db <- list()
             for (jr in ora_job_results) {
                 job         <- jr$job
                 res         <- jr$result
@@ -502,17 +510,25 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                         has_simplify = has_simpl, clusters = clusters,
                         storage_key = storage_key)
 
+                # §23 J2: collect this unit's significant ORA term IDs for the db,
+                # so complete per-term membership is later built for every ORA term.
+                if (!is.null(main_df) && "ID" %in% names(main_df) && nrow(main_df) > 0)
+                    ora_ids_by_db[[job$db_name]] <- unique(c(
+                        ora_ids_by_db[[job$db_name]], as.character(main_df$ID)))
+
                 if (length(res) == 0) {
                     message("    ORA: ", result_base, " — no significant enrichment")
                     next
                 }
 
-                unit_dir <- ora_unit_dir(
-                    file.path(enrich_dir, "ORA"),
-                    job$db_name, job$clust_method, job$clust_round)
-                write_cluster_ora_outputs(
+                # §17 R3 (Option B): write the contrast-first per-subgroup subtree
+                # by reusing this unit's result objects (no ORA recompute).
+                write_ora_unit_tree(
                     res,
-                    unit_dir     = unit_dir,
+                    ora_root     = file.path(enrich_dir, "ORA"),
+                    db_name      = job$db_name,
+                    collection   = job$clust_method,
+                    round        = job$clust_round,
                     type         = jr$db_type,
                     maxCategory  = enr_cfg$max_terms_in_dotplot %||% 20,
                     dotplot      = do_dotplot,
@@ -538,6 +554,25 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
                 n_terms <- if (!is.null(res[[3]])) nrow(res[[3]]) else 0
                 message("    ORA: ", result_base, " — ", n_terms, " enriched terms")
+
+                # §5/§9: collect each contrast's DE (direction-agnostic) ORA table
+                # for the cross-contrast Compare Contrasts figure written below.
+                if (identical(job$clust_method, "contrasts_wo_direction") &&
+                    !is.null(res[[3]]) && is.data.frame(res[[3]]) && nrow(res[[3]]) > 0)
+                    de_wo_by_db[[job$db_name]][[job$clust_round]] <- res[[3]]
+            }
+
+            # §5/§9: write the cross-contrast Compare Contrasts artifact per db (only
+            # when >= 2 contrasts contributed significant DE enrichment — §14). Lives
+            # at ORA/<db>/contrasts/compare_contrasts/ (a sibling of the per-contrast
+            # dirs, never inside one contrast). Deterministic; fail-soft.
+            for (db in names(de_wo_by_db)) {
+                if (length(de_wo_by_db[[db]]) >= 2L)
+                    tryCatch(write_ora_compare_contrasts(
+                        de_wo_by_db[[db]],
+                        file.path(enrich_dir, "ORA", db, "contrasts", "compare_contrasts")),
+                        error = function(e) message(
+                            "    Compare Contrasts (", db, ") failed: ", e$message))
             }
 
             if (length(ora_results) > 0) pathway_results[["cluster_ora"]] <- ora_results
@@ -639,9 +674,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # no db-specific filtering). Returned verbatim; never recomputed downstream.
     gsea_rankings <- ranked_genes
 
-    # GSEA pathway membership: significant-pathway union per db from the exact
-    # local TERM2GENE tables GSEA used.
-    pathway_membership <- .build_gsea_pathway_membership(gsea_out$results, local_tables)
+    # Pathway membership: significant-pathway union per db from the exact local
+    # TERM2GENE tables. §23 J2 — includes BOTH GSEA and ORA term IDs so every
+    # selectable ORA term (GO_BP/MF/CC + KEGG) has complete membership.
+    pathway_membership <- .build_gsea_pathway_membership(
+        gsea_out$results, local_tables, ora_ids_by_db)
 
     message("\n=== Local enrichment complete ===")
     if (length(gene_lists) == 0) message("  ORA: skipped (no gene lists available)")
@@ -684,13 +721,23 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
 #' Build availability-manifest rows for one ORA unit (collection x round x db)
 #'
-#' Produces one manifest row per USER-FACING item, capturing evaluated-but-empty
-#' units (n_significant = 0) that are otherwise dropped from pathway_results:
-#'   - partition / binary_patterns: one row per evaluated cluster/pattern label
-#'     (from the evaluated gene-list, NOT from the result), n_significant counted
-#'     from the result's `Cluster` column (0 when the label is absent);
-#'   - contrasts / contrasts_wo_direction / all_DE: one row for the round
-#'     (contrast or `any_contrast`), n_significant = total rows in the unit table.
+#' §17 R2 — contrast-first hierarchy + compare-cluster views. NO new biological
+#' computation: every row points at an EXISTING result table (`storage_key`) and,
+#' for the UI, an optional `subgroup`/`item` filter on its `Cluster` column.
+#' Captures evaluated-but-empty units (n_significant = 0) so three-state is exact.
+#'   - "contrasts" (directional compareCluster, Cluster in {up,down}) -> THREE
+#'     rows under group "contrasts", item = <contrast>: subgroup "up" (Cluster ==
+#'     "up"), "down" (Cluster == "down"), "up_down" (whole table = the up-vs-down
+#'     compareCluster; n = total rows). group_type "direction".
+#'   - "contrasts_wo_direction" (direction-agnostic, Cluster == "all") -> ONE row
+#'     merged UNDER group "contrasts", item = <contrast>, subgroup "all"
+#'     (= the existing contrasts_wo_direction result). up_down != all: they carry
+#'     DIFFERENT storage_keys (with- vs without-direction tables).
+#'   - "partition"/"binary_patterns" -> one row per evaluated cluster/pattern
+#'     (subgroup NA, group_type "partition"/"pattern") PLUS a "compare" item row
+#'     (whole unfiltered compareCluster table). Hierarchical is NOT here (the
+#'     pipeline never runs ORA on hierarchical cuts).
+#'   - "all_DE" (union of DE genes) -> one row (subgroup NA, group_type NA).
 #'
 #' @param collection Collection name (clust_method).
 #' @param round Round within the collection (contrast / any_contrast / k / best).
@@ -709,26 +756,50 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # recorded — there is no "failed" ORA manifest state to misrepresent. Every
     # ORA row is therefore a SUCCESSFUL evaluation: "significant" (n_sig > 0) or
     # "empty" (n_sig == 0).
-    mk <- function(item, n_sig) data.frame(
-        analysis = "ORA", database = db_name, group = collection,
-        item = as.character(item), evaluated = TRUE,
+    mk <- function(group, item, subgroup, group_type, group_label, n_sig) data.frame(
+        analysis = "ORA", database = db_name, group = group,
+        item = as.character(item),
+        subgroup    = if (length(subgroup) == 0 || is.na(subgroup)) NA_character_
+                      else as.character(subgroup),
+        group_type  = if (length(group_type) == 0 || is.na(group_type)) NA_character_
+                      else as.character(group_type),
+        group_label = as.character(group_label),
+        evaluated = TRUE,
         status = if (n_sig > 0) "significant" else "empty",
         n_significant = as.integer(n_sig), has_simplify = has_simplify,
         storage_key = storage_key, stringsAsFactors = FALSE)
 
-    if (collection %in% c("partition", "binary_patterns")) {
+    cluster_n <- function(lab) if (!is.null(main_df) && "Cluster" %in% names(main_df))
+                                   sum(as.character(main_df$Cluster) == lab) else 0L
+    total_n   <- if (!is.null(main_df)) nrow(main_df) else 0L
+
+    if (collection == "contrasts") {
+        # directional compareCluster -> UP / DOWN / UP+DOWN subgroups of the contrast
+        rbind(
+            mk("contrasts", round, "up",      "direction", "Up",        cluster_n("up")),
+            mk("contrasts", round, "down",    "direction", "Down",      cluster_n("down")),
+            mk("contrasts", round, "up_down", "direction", "Up + Down", total_n))
+    } else if (collection == "contrasts_wo_direction") {
+        # the existing direction-agnostic result -> the "All" subgroup of the contrast
+        mk("contrasts", round, "all", "direction", "All", total_n)
+    } else if (collection %in% c("partition", "binary_patterns")) {
+        gtype  <- if (collection == "partition") "partition" else "pattern"
+        lab_pfx  <- if (collection == "partition") "Cluster " else "Pattern "
+        cmp_lab  <- if (collection == "partition") "Compare Clusters" else "Compare Patterns"
         labels <- sort(unique(as.character(clusters)))
         if (length(labels) == 0) return(.empty_enrichment_manifest())
-        rows <- lapply(labels, function(lab) {
-            n <- if (!is.null(main_df) && "Cluster" %in% names(main_df)) {
-                sum(as.character(main_df$Cluster) == lab)
-            } else 0L
-            mk(lab, n)
-        })
+        rows <- lapply(labels, function(lab)
+            mk(collection, lab, NA, gtype, paste0(lab_pfx, lab), cluster_n(lab)))
+        # Compare row (whole unfiltered compareCluster table) — only meaningful with
+        # >= 2 evaluated groups. Same storage_key as the individual rows; item
+        # "compare" selects the WHOLE table (no Cluster filter).
+        if (length(labels) >= 2)
+            rows[[length(rows) + 1]] <-
+                mk(collection, "compare", NA, gtype, cmp_lab, total_n)
         do.call(rbind, rows)
     } else {
-        n <- if (!is.null(main_df)) nrow(main_df) else 0L
-        mk(round, n)
+        # all_DE (union of DE genes; direction-agnostic single group)
+        mk(collection, round, NA, NA, "All DE", total_n)
     }
 }
 
@@ -747,7 +818,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 #' @return list(database -> list(pathway_id -> character gene IDs)); empty list
 #'   when no GSEA pathways are significant.
 #' @noRd
-.build_gsea_pathway_membership <- function(gsea_results, local_tables) {
+.build_gsea_pathway_membership <- function(gsea_results, local_tables,
+                                           ora_ids_by_db = list()) {
     ids_by_db <- list()
     for (contrast in names(gsea_results)) {
         for (key in names(gsea_results[[contrast]])) {
@@ -758,6 +830,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
             ids_by_db[[db]] <- unique(c(ids_by_db[[db]], as.character(df$ID)))
         }
     }
+    # §23 J2: union in EVERY significant ORA term ID (per db) so membership covers
+    # all selectable ORA terms — including KEGG and GO terms not tested by GSEA —
+    # using the SAME compact TERM2GENE split (no new architecture).
+    for (db in names(ora_ids_by_db %||% list()))
+        ids_by_db[[db]] <- unique(c(ids_by_db[[db]], as.character(ora_ids_by_db[[db]])))
 
     membership <- list()
     for (db in names(ids_by_db)) {
