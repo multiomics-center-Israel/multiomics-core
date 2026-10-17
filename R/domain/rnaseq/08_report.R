@@ -100,3 +100,49 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 
     out_html
 }
+
+#' Write a pheatmap object to a PNG for embedding in the report
+#'
+#' Printing a pheatmap inside a report chunk draws on whatever device is
+#' current, and \code{pheatmap(silent = TRUE)} can itself switch the current
+#' device while it builds. In the pipeline's R session the Top DE heatmaps were
+#' therefore drawn into a stray Rplots.pdf and the report showed nothing.
+#' Drawing onto a PNG device opened and closed here does not depend on that
+#' state; the chunk then embeds the file with \code{knitr::include_graphics()}.
+#'
+#' @param ph A pheatmap object (\code{pheatmap(..., silent = TRUE)}).
+#' @param file PNG path to write; a temporary file by default.
+#' @param width,height Size in inches.
+#' @param res Resolution in pixels per inch.
+#' @return The PNG path, invisibly.
+write_pheatmap_png <- function(ph, file = tempfile(fileext = ".png"),
+                               width = 10, height = 8, res = 100) {
+    with_png_device(file, width = width, height = height, res = res, {
+        grid::grid.newpage()
+        grid::grid.draw(ph$gtable)
+    })
+    invisible(file)
+}
+
+#' Draw onto a PNG device and give the previous device back
+#'
+#' \code{dev.off()} makes the next open device current, not the one that was
+#' current before, so closing a PNG inside a knitr chunk could leave a device
+#' other than knitr's in charge. This records the current device and restores
+#' it after closing the PNG.
+#'
+#' @param file PNG path.
+#' @param width,height Size in inches.
+#' @param res Resolution in pixels per inch.
+#' @param code Drawing code, evaluated with the PNG as the current device.
+#' @return The value of \code{code}, invisibly.
+with_png_device <- function(file, width, height, res = 100, code) {
+    prev <- grDevices::dev.cur()
+    grDevices::png(file, width = width, height = height, units = "in", res = res)
+    png_dev <- grDevices::dev.cur()
+    on.exit({
+        grDevices::dev.off(png_dev)
+        if (prev != 1 && prev %in% grDevices::dev.list()) grDevices::dev.set(prev)
+    }, add = TRUE)
+    invisible(force(code))
+}

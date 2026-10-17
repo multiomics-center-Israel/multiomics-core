@@ -2566,7 +2566,7 @@ group_col <- resolve_group_col(rna_cfg)
 if (!is.null(norm_expr) && !is.null(heatmap_de_source) && nrow(heatmap_de_source) > 0) {
     tryCatch({
         hm <- make_top_de_heatmap(10, norm_expr, heatmap_de_source, meta_df, group_col)
-        if (!is.null(hm)) print(hm)
+        if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 6))
     }, error = function(e) cat("Heatmap error:", e$message))
 } else {
     cat("Expression matrix or DE results not available.")
@@ -2585,7 +2585,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 ```{r heatmap-top50, fig.height=8, fig.width=10}
 if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     hm <- make_top_de_heatmap(50, norm_expr, heatmap_de_source, meta_df, group_col)
-    if (!is.null(hm)) print(hm)
+    if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 8))
 }
 ```
 
@@ -2600,7 +2600,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 ```{r heatmap-top100, fig.height=10, fig.width=10}
 if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     hm <- make_top_de_heatmap(100, norm_expr, heatmap_de_source, meta_df, group_col)
-    if (!is.null(hm)) print(hm)
+    if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 10))
 }
 ```
 
@@ -2615,7 +2615,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 ```{r heatmap-top200, fig.height=12, fig.width=10}
 if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     hm <- make_top_de_heatmap(200, norm_expr, heatmap_de_source, meta_df, group_col)
-    if (!is.null(hm)) print(hm)
+    if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 12))
 }
 ```
 
@@ -2637,7 +2637,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
         n_all <- 500
     }
     hm <- make_top_de_heatmap(n_all, norm_expr, heatmap_de_source, meta_df, group_col)
-    if (!is.null(hm)) print(hm)
+    if (!is.null(hm)) knitr::include_graphics(write_pheatmap_png(hm, width = 10, height = 14))
 }
 ```
 
