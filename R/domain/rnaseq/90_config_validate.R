@@ -41,6 +41,18 @@ validate_rna_config <- function(cfg) {
         n <- cfg$normalization
         assert_one_of(n$method, "normalization$method", c("TMMlogCPM", "VST"), allow_null = TRUE)
         assert_scalar_num(n$prior.count, "normalization$prior.count", allow_null = TRUE, min_val = 0)
+        assert_scalar_num(n$cpm_pseudocount, "normalization$cpm_pseudocount", allow_null = TRUE, min_val = 0)
+        if (!is.null(n$cpm_pseudocount)) {
+            if (n$cpm_pseudocount <= 0) {
+                stop("[config] normalization$cpm_pseudocount must be above 0 ",
+                     "(log2(CPM + 0) is -Inf for unexpressed genes).", call. = FALSE)
+            }
+            if (!is.null(n$prior.count)) {
+                stop("[config] Set either normalization$prior.count (edgeR prior, in reads) ",
+                     "or normalization$cpm_pseudocount (log2(CPM + x)), not both: ",
+                     "only one of them can be the log offset.", call. = FALSE)
+            }
+        }
 
         # tximport requires VST (TMMlogCPM not supported)
         if (uses_tximport && identical(n$method, "TMMlogCPM")) {
