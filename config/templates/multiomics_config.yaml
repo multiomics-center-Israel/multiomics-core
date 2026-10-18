@@ -168,8 +168,9 @@ modes:
     # --- GO hierarchy of GSEA results ---
     # For the proteomics and RNA layers: the part of the GO graph above the GO
     # terms that layer's own fgsea step found at padj < fdr, one figure per
-    # contrast, ontology and NES sign. Nothing is re-tested; ancestors come
-    # from GO.db (is_a and part_of) and are drawn for context only. Needs that
+    # contrast, ontology and NES sign. Nothing is re-tested; the terms on the
+    # path to each seed come from GO.db (is_a and part_of) and are drawn for
+    # context only. Needs that
     # layer's pathway enrichment to have run fgsea on GO gene sets (the RNA
     # offline annotation_dir path runs a different GSEA and is not read).
     # Written to multiomics/go_hierarchy/ and <mode>/Datasets/go_dag_edges.tsv.
@@ -179,6 +180,7 @@ modes:
       fdr: 0.05               # fgsea padj cutoff for a seed term
       max_seed_terms: 30      # per direction, smallest padj first
       max_nodes: 120          # seeds are dropped (largest padj first) to stay within this
+      ancestors: "shortest_path"  # "shortest_path": one path from each seed to the root; "all": every ancestor
 
     # --- Feature selection for integration ---
     feature_selection:
