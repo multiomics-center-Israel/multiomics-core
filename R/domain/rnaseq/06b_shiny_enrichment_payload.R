@@ -281,14 +281,91 @@ build_enrichment_payload <- function(pathway_res, gene_universe = NULL, config =
 }
 
 
+#' Payload ORA group node name for a manifest (group, subgroup) — subgroup-aware
+#'
+#' §17 R4. The R2 manifest merges the two contrast collections under one
+#' `group = "contrasts"`; the with-/without-direction distinction is carried by
+#' `subgroup` (up/down/up_down vs all). This maps a manifest (group, subgroup) to
+#' the payload `ora[[db]]` node key: contrasts + subgroup "all" ->
+#' `contrasts_without_direction`; contrasts + up/down/up_down ->
+#' `contrasts_with_direction`; every other group via `.ORA_GROUP_MAP`.
+#' @noRd
+.ora_payload_group_for <- function(group, subgroup) {
+    if (identical(as.character(group), "contrasts"))
+        return(if (identical(as.character(subgroup), "all"))
+                   "contrasts_without_direction" else "contrasts_with_direction")
+    .ORA_GROUP_MAP[[as.character(group)]] %||% as.character(group)
+}
+
+#' Cluster filter for one ORA manifest selection (generic, omics-agnostic)
+#'
+#' §17 R4. Returns the `Cluster` value to keep, or NA meaning "the whole table"
+#' (a compare / up_down / all / all_DE view). Fully determined by the R2 manifest
+#' columns — no new column, no biology:
+#'   group_type "direction": subgroup up|down -> that Cluster; up_down|all -> whole
+#'   group_type partition|pattern: item "compare" -> whole; else Cluster == item
+#'   otherwise (all_DE / NA): whole
+#' @noRd
+.ora_selection_filter <- function(group_type, subgroup, item) {
+    gt <- as.character(group_type); sg <- as.character(subgroup); it <- as.character(item)
+    if (!is.na(gt) && gt == "direction")
+        return(if (!is.na(sg) && sg %in% c("up", "down")) sg else NA_character_)
+    if (!is.na(gt) && gt %in% c("partition", "pattern"))
+        return(if (identical(it, "compare")) NA_character_ else it)
+    NA_character_
+}
+
+#' Resolve one ORA manifest selection to its (filtered) compact-payload table
+#'
+#' §17 R4 — the executable resolution contract that lets the three-state selector
+#' turn a manifest row (db, group, item, subgroup, group_type) into the exact ORA
+#' table WITHOUT any duplicated per-subgroup storage: UP/DOWN filter the ONE
+#' `contrasts_with_direction[[contrast]]` table on `Cluster`; UP+DOWN returns that
+#' whole table; All returns the whole `contrasts_without_direction[[contrast]]`
+#' table (distinct node — never a union); a single cluster/pattern filters the ONE
+#' `partition`/`binary_patterns` table; Compare returns that whole table; all_DE
+#' returns its single table. Generic and omics-agnostic (manifest columns only).
+#'
+#' @param enrichment The compact enrichment block.
+#' @param db,group,item,subgroup,group_type Manifest-row fields (group_type may be
+#'   NULL -> inferred from `group`).
+#' @return The selected data.frame (possibly 0-row for an evaluated-but-empty
+#'   subgroup), or NULL when the underlying node is absent (an entirely-empty
+#'   evaluated unit that stored no table).
+#' @export
+resolve_ora_selection <- function(enrichment, db, group, item, subgroup = NA_character_,
+                                  group_type = NULL) {
+    ora_db <- enrichment$ora[[db]]
+    if (is.null(ora_db)) return(NULL)
+    pg   <- .ora_payload_group_for(group, subgroup)
+    node <- if (pg %in% .ORA_SINGLE_GROUPS) ora_db[[pg]] else ora_db[[pg]][[item]]
+    if (is.null(node)) return(NULL)
+    # Infer group_type from `group` when the caller omits it (NULL) or passes NA,
+    # so a partition/pattern selection never silently degrades to the whole table.
+    gt <- if (is.null(group_type) || is.na(group_type))
+              switch(as.character(group),
+                     contrasts       = "direction",
+                     partition       = "partition",
+                     binary_patterns = "pattern",
+                     NA_character_)
+          else group_type
+    filt <- .ora_selection_filter(gt, subgroup, item)
+    if (is.na(filt) || !("Cluster" %in% names(node))) return(node)
+    node[as.character(node$Cluster) == filt, , drop = FALSE]
+}
+
 #' Validate the compact enrichment payload structure
 #'
 #' Deeper, enrichment-specific structural validation kept OUT of the generic
 #' Shiny contract (which only treats `enrichment` as an optional list). NULL is
 #' valid (enrichment absent / not run). Checks the top-level schema, gene_index
-#' uniqueness, the manifest columns (incl. the `status` three-state field), and
-#' the compact-representation invariant that GSEA tables never carry the heavy
-#' `core_enrichment` string (it lives in `gsea_leading_edge`).
+#' uniqueness, the manifest columns (incl. the `status` three-state field and the
+#' §17 R2 `subgroup`/`group_type`/`group_label` hierarchy), the §17 R4 resolution
+#' invariant (every ORA manifest row resolves through resolve_ora_selection() to a
+#' row count consistent with its three-state `status`/`n_significant`, proving
+#' UP/DOWN/UP+DOWN/All + Compare all resolve from the compact tables with NO
+#' duplication), and the compact-representation invariant that GSEA tables never
+#' carry the heavy `core_enrichment` string (it lives in `gsea_leading_edge`).
 #'
 #' @param enrichment The enrichment block, or NULL.
 #' @param strict If TRUE, violations stop(); otherwise warning().
@@ -312,10 +389,44 @@ validate_enrichment_payload <- function(enrichment, strict = TRUE) {
     if (!is.data.frame(enrichment$manifest)) {
         signal("enrichment$manifest must be a data.frame")
     } else {
-        mcols <- c("analysis", "database", "group", "item", "evaluated",
+        m <- enrichment$manifest
+        mcols <- c("analysis", "database", "group", "item", "subgroup",
+                   "group_type", "group_label", "evaluated",
                    "status", "n_significant", "has_simplify", "storage_key")
-        if (!all(mcols %in% names(enrichment$manifest)))
+        if (!all(mcols %in% names(m))) {
             signal("enrichment$manifest missing required columns")
+        } else if (nrow(m) > 0) {
+            # §17 R2 hierarchy vocabulary (NA allowed for GSEA / all_DE / single groups).
+            ok_sg <- is.na(m$subgroup) | m$subgroup %in% c("up", "down", "up_down", "all")
+            if (!all(ok_sg))
+                signal("enrichment$manifest$subgroup outside {NA, up, down, up_down, all}")
+            ok_gt <- is.na(m$group_type) | m$group_type %in% c("direction", "partition", "pattern")
+            if (!all(ok_gt))
+                signal("enrichment$manifest$group_type outside {NA, direction, partition, pattern}")
+
+            # §17 R4 resolution invariant: every ORA manifest row must resolve
+            # through resolve_ora_selection() to a row count consistent with its
+            # three-state status — proving UP/DOWN/UP+DOWN/All + Compare all come
+            # from the compact whole-table nodes (no duplicated per-subgroup tables).
+            om <- m[m$analysis == "ORA", , drop = FALSE]
+            for (i in seq_len(nrow(om))) {
+                r   <- om[i, ]
+                sel <- resolve_ora_selection(enrichment, r$database, r$group, r$item,
+                                             r$subgroup, r$group_type)
+                if (identical(r$status, "significant")) {
+                    if (is.null(sel) || nrow(sel) != r$n_significant)
+                        signal(sprintf(
+                            "ORA row [%s/%s/%s/subgroup=%s] does not resolve to n_significant=%s rows",
+                            r$database, r$group, r$item, r$subgroup, r$n_significant))
+                } else if (identical(r$status, "empty")) {
+                    # empty is fine either way: node absent (whole unit empty) or 0 filtered rows.
+                    if (!is.null(sel) && nrow(sel) != 0L)
+                        signal(sprintf(
+                            "empty ORA row [%s/%s/%s/subgroup=%s] resolves to %d rows (expected 0)",
+                            r$database, r$group, r$item, r$subgroup, nrow(sel)))
+                }
+            }
+        }
     }
 
     # Compact-representation invariant: GSEA result tables must NOT carry the
