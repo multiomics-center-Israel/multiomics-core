@@ -69,6 +69,10 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
     # been produced from these settings. It also makes the file.exists(out_html)
     # check below meaningful rather than satisfied by the leftover.
     if (file.exists(out_html)) try(file.remove(out_html), silent = TRUE)
+    # Likewise a previous failure's log, or a successful re-run would sit beside
+    # diagnostics saying it failed.
+    err_log <- file.path(parent_dir, "report_rnaseq_error.log")
+    if (file.exists(err_log)) try(file.remove(err_log), silent = TRUE)
 
     message("Rendering RNA-seq report to: ", out_html)
 
@@ -95,7 +99,9 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
         error = function(e) render_err <<- conditionMessage(e)
     )
 
-    if (file.exists(out_html)) {
+    # rmarkdown can fail after pandoc has already written the HTML, so a file on
+    # disk is not proof of success on its own.
+    if (is.null(render_err) && file.exists(out_html)) {
         message("Report rendered successfully: ", out_html)
         return(out_html)
     }
@@ -111,15 +117,10 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
         "outside any chunk (setup or pandoc step)"
     }
     cause <- render_err %||% "no error was raised, but no HTML was written"
-    err_log <- file.path(parent_dir, "report_rnaseq_error.log")
     writeLines(c(paste("Template:", dest_rmd),
                  paste("Failed in:", where),
                  paste("Error:", cause)),
                err_log)
-
-    warning("RNA-seq report rendering failed in ", where, ": ", cause,
-            "\nTemplate: ", dest_rmd,
-            "\nDetails: ", err_log)
 
     writeLines(paste0(
         "<!doctype html><html><head><meta charset='utf-8'>",
@@ -135,6 +136,12 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
         "</body></html>"),
         out_html)
     message("Wrote fallback stub report: ", out_html)
+
+    # Raised last: under options(warn = 2) or an exiting warning handler it ends
+    # the call, and the stub must already be on disk by then.
+    warning("RNA-seq report rendering failed in ", where, ": ", cause,
+            "\nTemplate: ", dest_rmd,
+            "\nDetails: ", err_log)
 
     out_html
 }
