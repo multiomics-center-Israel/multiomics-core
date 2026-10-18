@@ -60,10 +60,36 @@ test_that("the closure holds the seeds and every ancestor, nothing else", {
     expect_identical(go_dag_closure("GO:0000001", p), "GO:0000001")
 })
 
-test_that("edges are the parent links with both ends in the node set", {
+test_that("the shortest path keeps one route from each seed to the root", {
+    p <- normalize_go_relations(toy_parents_raw())
+    # GO:4 reaches the root GO:1 through GO:2 or GO:3 in two steps; the tie
+    # goes to the smaller id, every run.
+    expect_identical(go_dag_paths("GO:0000004", p),
+                     c("GO:0000004", "GO:0000001", "GO:0000002"))
+    expect_setequal(go_dag_paths(c("GO:0000004", "GO:0000005"), p),
+                    c("GO:0000004", "GO:0000005", "GO:0000002", "GO:0000001"))
+    expect_identical(go_dag_paths("GO:0000001", p), "GO:0000001")
+    # A longer route is not taken when a shorter one exists.
+    long <- rbind(p, data.frame(child = c("GO:0000007", "GO:0000007"),
+                                parent = c("GO:0000004", "GO:0000001"),
+                                relation = "is_a"))
+    expect_setequal(go_dag_paths("GO:0000007", long), c("GO:0000007", "GO:0000001"))
+})
+
+test_that("by default the graph holds the seeds and their paths only", {
     p <- normalize_go_relations(toy_parents_raw())
     dag <- build_go_dag(data.frame(go_id = "GO:0000004", padj = 0.01), p,
                         term_info = toy_terms())
+    expect_setequal(dag$nodes$go_id, c("GO:0000004", "GO:0000002", "GO:0000001"))
+    expect_false("GO:0000003" %in% c(dag$edges$child, dag$edges$parent))
+    expect_equal(nrow(dag$edges), 2)
+    expect_identical(go_hierarchy_config(gh_config())$ancestors, "shortest_path")
+})
+
+test_that("edges are the parent links with both ends in the node set", {
+    p <- normalize_go_relations(toy_parents_raw())
+    dag <- build_go_dag(data.frame(go_id = "GO:0000004", padj = 0.01), p,
+                        term_info = toy_terms(), ancestors = "all")
     expect_true(all(dag$edges$child %in% dag$nodes$go_id))
     expect_true(all(dag$edges$parent %in% dag$nodes$go_id))
     expect_equal(nrow(dag$edges), 4)
@@ -77,13 +103,15 @@ test_that("edges are the parent links with both ends in the node set", {
 test_that("the node limit drops the last seeds first and says how many", {
     p <- normalize_go_relations(toy_parents_raw())
     seeds <- data.frame(go_id = c("GO:0000004", "GO:0000005"), padj = c(0.001, 0.01))
-    dag <- build_go_dag(seeds, p, term_info = toy_terms(), max_nodes = 4)
+    dag <- build_go_dag(seeds, p, term_info = toy_terms(), max_nodes = 4,
+                        ancestors = "all")
     expect_equal(dag$n_seeds_requested, 2)
     expect_equal(dag$n_seeds_shown, 1)
     expect_identical(dag$nodes$go_id[dag$nodes$is_seed], "GO:0000004")
     expect_lte(nrow(dag$nodes), 4)
 
-    full <- build_go_dag(seeds, p, term_info = toy_terms(), max_nodes = 120)
+    full <- build_go_dag(seeds, p, term_info = toy_terms(), max_nodes = 120,
+                         ancestors = "all")
     expect_equal(full$n_seeds_shown, 2)
     expect_equal(nrow(full$nodes), 5)
 })
@@ -280,6 +308,8 @@ test_that("the validator fills defaults and rejects bad values", {
     expect_error(validate_multiomics_config(bad(enabled = "yes")), "true or false")
     expect_error(validate_multiomics_config(bad(max_seed_terms = 0)), "max_seed_terms")
     expect_error(validate_multiomics_config(bad(seeds = 10)), "Unknown key")
+    expect_error(validate_multiomics_config(bad(ancestors = "parents")), "ancestors")
+    expect_identical(validate_multiomics_config(base)$go_hierarchy$ancestors, "shortest_path")
 })
 
 test_that("the shipped template leaves the figure off", {

@@ -217,7 +217,8 @@ validate_multiomics_config <- function(multiomics_cfg) {
     # would otherwise be ignored and its default used.
     gh_cfg <- multiomics_cfg$go_hierarchy %||% list()
     gh_defaults <- list(enabled = FALSE, ontologies = list("GO_BP"), fdr = 0.05,
-                        max_seed_terms = 30L, max_nodes = 120L)
+                        max_seed_terms = 30L, max_nodes = 120L,
+                        ancestors = "shortest_path")
     gh_unknown <- setdiff(names(gh_cfg), names(gh_defaults))
     if (length(gh_unknown) > 0) {
         stop("Unknown key(s) in modes.multiomics.go_hierarchy: ",
@@ -252,6 +253,12 @@ validate_multiomics_config <- function(multiomics_cfg) {
             stop("modes.multiomics.go_hierarchy.", key, " must be a positive whole ",
                  "number, got ", format(gh_cfg[[key]]), ".", call. = FALSE)
         }
+    }
+    if (!(is.character(gh_cfg$ancestors) && length(gh_cfg$ancestors) == 1 &&
+          gh_cfg$ancestors %in% c("shortest_path", "all"))) {
+        stop("modes.multiomics.go_hierarchy.ancestors must be \"shortest_path\" or ",
+             "\"all\", got ", paste(format(unlist(gh_cfg$ancestors)), collapse = ", "),
+             ".", call. = FALSE)
     }
 
     # Validate feature selection config

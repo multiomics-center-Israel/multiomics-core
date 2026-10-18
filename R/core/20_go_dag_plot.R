@@ -104,10 +104,52 @@ go_dag_closure <- function(seed_ids, parents) {
     nodes
 }
 
+#' One shortest path from each GO term up to its ontology root
+#'
+#' Breadth-first up the parent links from each seed; the first term reached
+#' that has no parent is the root, and the path back to the seed is kept.
+#' Ties (two parents equally close to a root) go to the parent with the
+#' smaller GO id, so the result is the same on every run. The other ancestors
+#' of a seed are left out.
+#'
+#' @param seed_ids Character vector of GO identifiers.
+#' @param parents Parent table as returned by go_parent_table().
+#' @return Character vector: the seeds followed by the terms on their paths,
+#'   each once.
+go_dag_paths <- function(seed_ids, parents) {
+    by_child <- split(as.character(parents$parent), as.character(parents$child))
+    seed_ids <- unique(as.character(seed_ids))
+    nodes <- seed_ids
+    for (s in seed_ids) {
+        came_from <- stats::setNames(NA_character_, s)
+        queue <- s
+        root <- s
+        while (length(queue) > 0) {
+            cur <- queue[1]
+            queue <- queue[-1]
+            ups <- sort(unique(by_child[[cur]]))
+            if (length(ups) == 0) { root <- cur; break }
+            for (up in setdiff(ups, names(came_from))) {
+                came_from[up] <- cur
+                queue <- c(queue, up)
+            }
+        }
+        node <- root
+        while (!is.na(node)) {
+            nodes <- c(nodes, node)
+            node <- came_from[[node]]
+        }
+    }
+    unique(nodes)
+}
+
 #' Build the GO sub-graph above a set of seed terms
 #'
-#' The node set is the seeds plus all their is_a/part_of ancestors; the edges
-#' are the parent links with both ends in that set. When the node set would
+#' The node set is the seeds plus, with \code{ancestors = "shortest_path"},
+#' the terms on one shortest path from each seed to its root
+#' (go_dag_paths()), or with \code{"all"} every is_a/part_of ancestor
+#' (go_dag_closure()); the edges are the parent links with both ends in that
+#' set. When the node set would
 #' exceed \code{max_nodes}, seeds are dropped from the end of \code{seeds}
 #' (callers order them by adjusted p-value) until it fits, and the number
 #' dropped is recorded, so a figure never silently shows fewer terms than were
@@ -121,17 +163,21 @@ go_dag_closure <- function(seed_ids, parents) {
 #'   NULL, names come from GO.db via go_term_info(). A seed GO.db does not
 #'   name keeps the \code{term} column of \code{seeds}, if any.
 #' @param max_nodes Largest node count to draw.
+#' @param ancestors "shortest_path" (default) or "all".
 #' @return list(nodes, edges, n_seeds_requested, n_seeds_shown) where
 #'   \code{nodes} has \code{go_id}, \code{term}, \code{is_seed} and the seed
 #'   columns (NA on context nodes), and \code{edges} has \code{child},
 #'   \code{parent}, \code{relation}.
-build_go_dag <- function(seeds, parents, term_info = NULL, max_nodes = 120) {
+build_go_dag <- function(seeds, parents, term_info = NULL, max_nodes = 120,
+                         ancestors = c("shortest_path", "all")) {
+    ancestors <- match.arg(ancestors)
+    expand <- if (ancestors == "all") go_dag_closure else go_dag_paths
     seeds <- seeds[!duplicated(seeds$go_id), , drop = FALSE]
     n_requested <- nrow(seeds)
-    node_ids <- go_dag_closure(seeds$go_id, parents)
+    node_ids <- expand(seeds$go_id, parents)
     while (length(node_ids) > max_nodes && nrow(seeds) > 1) {
         seeds <- seeds[-nrow(seeds), , drop = FALSE]
-        node_ids <- go_dag_closure(seeds$go_id, parents)
+        node_ids <- expand(seeds$go_id, parents)
     }
 
     edges <- parents[parents$child %in% node_ids & parents$parent %in% node_ids,
@@ -217,14 +263,19 @@ truncate_go_label <- function(x, width = 40) {
 #' @param fdr The cutoff the seeds were selected with (sets the bins).
 #' @param title,subtitle Plot title and subtitle.
 #' @param label_width Maximum characters of a seed label.
+#' @param label_context Also label context terms, smaller and in grey; meant
+#'   for the shortest-path graph, where they name the path to each seed.
 #' @return A ggplot object (ggraph).
 plot_go_dag <- function(dag, fdr = 0.05, title = NULL, subtitle = NULL,
-                        label_width = 40) {
+                        label_width = 40, label_context = FALSE) {
     nodes <- dag$nodes
     nodes$padj_bin <- go_padj_bins(ifelse(nodes$is_seed, nodes$padj, NA_real_), fdr)
     nodes$node_type <- factor(ifelse(nodes$is_seed, "seed", "context"),
                               levels = c("seed", "context"))
     nodes$label <- ifelse(nodes$is_seed, truncate_go_label(nodes$term, label_width), "")
+    nodes$context_label <- if (label_context) {
+        ifelse(nodes$is_seed, "", truncate_go_label(nodes$term, 30))
+    } else ""
     edges <- dag$edges
 
     # Edges run parent -> child so the layered layout puts general terms on top.
@@ -243,6 +294,9 @@ plot_go_dag <- function(dag, fdr = 0.05, title = NULL, subtitle = NULL,
         ggraph::geom_node_point(ggplot2::aes(fill = padj_bin, colour = node_type,
                                              size = node_type),
                                 shape = 21, stroke = 0.4) +
+        ggraph::geom_node_text(ggplot2::aes(label = context_label), repel = TRUE,
+                               size = 2.1, colour = "grey55",
+                               max.overlaps = Inf, seed = 1) +
         ggraph::geom_node_text(ggplot2::aes(label = label), repel = TRUE,
                                size = 2.6, colour = "grey15",
                                max.overlaps = Inf, seed = 1) +
