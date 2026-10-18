@@ -333,8 +333,8 @@ plot_go_dag <- function(dag, fdr = 0.05, title = NULL, subtitle = NULL,
 #' Interactive GO sub-graph
 #'
 #' The same graph as plot_go_dag(), as a visNetwork widget that can be zoomed,
-#' panned and searched, for graphs too dense to read at page width. Layered
-#' top-down with general terms on top; every term is labelled in full (context
+#' panned and searched, for graphs too dense to read at page width. Placed by
+#' the same Sugiyama layering, general terms on top; every term is labelled in full (context
 #' terms in grey), and hovering a node shows its GO id and, for a seed, NES,
 #' adjusted p and set size. Fill, outline and line styles follow plot_go_dag().
 #'
@@ -380,7 +380,17 @@ go_dag_widget <- function(dag, fdr = 0.05, title = NULL, subtitle = NULL,
         font.size = ifelse(is_seed, 16, 13),
         stringsAsFactors = FALSE)
     edges <- dag$edges
-    # parent -> child, so the hierarchical layout puts general terms on top.
+    # Positions from the same Sugiyama layering as plot_go_dag(), so each term
+    # sits at its depth below the root. vis.js's own hierarchical layout put
+    # every leaf on the bottom row, which flattened the paths.
+    graph <- igraph::graph_from_data_frame(
+        d = data.frame(from = edges$parent, to = edges$child, stringsAsFactors = FALSE),
+        vertices = data.frame(name = nodes$go_id, stringsAsFactors = FALSE),
+        directed = TRUE)
+    xy <- igraph::layout_with_sugiyama(graph)$layout
+    vn_nodes$x <- xy[, 1] * 220
+    vn_nodes$y <- -xy[, 2] * 320
+    # parent -> child, matching plot_go_dag().
     vn_edges <- data.frame(
         from = edges$parent, to = edges$child,
         dashes = edges$relation == "part_of",
@@ -404,11 +414,10 @@ go_dag_widget <- function(dag, fdr = 0.05, title = NULL, subtitle = NULL,
                                                style = "font-family:sans-serif;font-size:13px;color:#4d4d4d;"),
                                 footer = list(text = footer %||% "",
                                               style = "font-family:sans-serif;font-size:12px;color:#4d4d4d;"))
-    w <- visNetwork::visHierarchicalLayout(w, direction = "UD", sortMethod = "directed",
-                                           levelSeparation = 150, nodeSpacing = 220,
-                                           treeSpacing = 220, blockShifting = TRUE,
-                                           edgeMinimization = TRUE, parentCentralization = TRUE)
     w <- visNetwork::visPhysics(w, enabled = FALSE)
+    # Keep labels drawn when zoomed out far enough to see the whole graph.
+    w <- visNetwork::visNodes(w, scaling = list(label = list(enabled = TRUE,
+                                                             drawThreshold = 3)))
     w <- visNetwork::visEdges(w, smooth = FALSE, arrows = list(to = list(enabled = FALSE)))
     w <- visNetwork::visInteraction(w, navigationButtons = TRUE, hover = TRUE,
                                     zoomView = TRUE, dragView = TRUE,

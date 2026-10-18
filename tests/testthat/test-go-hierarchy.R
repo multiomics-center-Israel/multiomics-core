@@ -269,8 +269,10 @@ test_that("the interactive graph carries every node, the bins and the line style
     expect_true(all(grepl("Context term", n$title[!seed], fixed = TRUE)))
     e <- w$x$edges
     expect_identical(e$dashes, dag$edges$relation == "part_of")
-    # parent -> child, so general terms sit on top.
+    # parent -> child, and every parent placed above its child.
     expect_identical(e$from, dag$edges$parent)
+    y <- setNames(n$y, n$id)
+    expect_true(all(y[e$from] < y[e$to]))
 })
 
 test_that("an index from before the interactive figure reads with an empty html column", {
