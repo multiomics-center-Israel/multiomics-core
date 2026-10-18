@@ -253,7 +253,7 @@ meta_ts <- tryCatch(
              stringsAsFactors = FALSE),
     error = function(e) NULL
 )
-grp_col <- rna_cfg$filtering$group_col
+grp_col <- resolve_group_col(rna_cfg)
 
 n_samples_ts <- if (!is.null(meta_ts)) nrow(meta_ts) else NA
 n_groups_ts <- if (!is.null(meta_ts) && grp_col %in% names(meta_ts)) length(unique(meta_ts[[grp_col]])) else NA
@@ -419,8 +419,8 @@ settings <- data.frame(
   Value = c(
     rna_cfg$normalization$method %||% "N/A",
     prior_count,
-    rna_cfg$filtering$group_col %||% "N/A",
-    paste0(rna_cfg$filtering$auto_filter$min %||% "?", " – ", rna_cfg$filtering$auto_filter$max %||% "?", " CPM (pipeline selects optimal within this range)"),
+    resolve_group_col(rna_cfg),
+    paste0(rna_cfg$filtering$auto_filter$min %||% 0.5, " – ", rna_cfg$filtering$auto_filter$max %||% 2.0, " CPM (pipeline selects optimal within this range)"),
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
     ifelse(isTRUE(rna_cfg$clustering$enabled), "Yes", "No")
@@ -459,8 +459,8 @@ filter_params <- data.frame(
     "Filtering Rule"
   ),
   Value = c(
-    rna_cfg$filtering$group_col,
-    paste0(rna_cfg$filtering$auto_filter$min, " – ", rna_cfg$filtering$auto_filter$max, " CPM (pipeline automatically selects the optimal threshold within this range)"),
+    resolve_group_col(rna_cfg),
+    paste0(rna_cfg$filtering$auto_filter$min %||% 0.5, " – ", rna_cfg$filtering$auto_filter$max %||% 2.0, " CPM (pipeline automatically selects the optimal threshold within this range)"),
     paste0(rna_cfg$filtering$auto_filter$fallback %||% 1.0, " CPM"),
     "Gene is KEPT only if it has CPM ≥ threshold in ALL samples of at least ONE biological group"
   ),
@@ -2071,7 +2071,7 @@ if (file.exists(norm_expr_file_exp)) {
 # Load metadata for group assignment
 meta_file_exp <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata)
 meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAsFactors = FALSE) else NULL
-group_col_exp <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
+group_col_exp <- resolve_group_col(rna_cfg)
 
 if (!is.null(norm_expr_exp) && !is.null(meta_df_exp)) {
     # Build gene display names: "GeneName (gene_id)" for unique identification
