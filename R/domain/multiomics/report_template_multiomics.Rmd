@@ -1419,9 +1419,13 @@ cat(paste(
             format(go_hier_cfg$fdr), go_hier_cfg$max_seed_terms),
     "direction in order of adjusted p, drawn separately for positive NES (sets",
     "towards the top of the ranking, higher in the first group of the contrast)",
-    "and negative NES. Each seed's ancestors along is_a and part_of links were",
-    "added from GO.db, and links are drawn only among the terms shown.",
-    "Ancestors are shown for context only: the GSEA used direct, unpropagated",
+    "and negative NES.",
+    if (identical(go_hier_cfg$ancestors, "all"))
+        "Each seed's ancestors along is_a and part_of links were added from GO.db,"
+    else paste("For each seed, one shortest path to the root of the ontology along",
+               "is_a and part_of links was added from GO.db; other ancestors are left out,"),
+    "and links are drawn only among the terms shown.",
+    "Terms on these paths are shown for context only: the GSEA used direct, unpropagated",
     "GO annotations and a gene-set size range, so a grey term was either not",
     "significant or not tested. Neighbouring GO terms share many genes, so",
     "related seed terms are not independent observations. The figures are",
@@ -1468,7 +1472,8 @@ if (is.null(gh_idx) || nrow(gh_idx) == 0) {
                         cat(sprintf("![](%s)\n\n", u$png))
                     }
                     go_legend <- go_hierarchy_legend(ont, go_hier_cfg$fdr, u$direction,
-                                                     u$direction_label, u$note)
+                                                     u$direction_label, u$note,
+                                                     go_hier_cfg$ancestors)
                     figure_legend(go_legend)
                     seeds <- utils::read.csv(u$nodes_csv, stringsAsFactors = FALSE)
                     seeds <- seeds[seeds$is_seed, , drop = FALSE]

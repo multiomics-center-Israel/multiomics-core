@@ -20,7 +20,7 @@
 #' @param config Full config list (or one whose \code{modes$multiomics} is the
 #'   multiomics block).
 #' @return list(enabled, ontologies (subset of "BP", "MF", "CC"), fdr,
-#'   max_seed_terms, max_nodes).
+#'   max_seed_terms, max_nodes, ancestors ("shortest_path" or "all")).
 go_hierarchy_config <- function(config) {
     gh <- (config$modes$multiomics %||% list())$go_hierarchy %||% list()
     onts <- unlist(gh$ontologies %||% "GO_BP", use.names = FALSE)
@@ -29,7 +29,8 @@ go_hierarchy_config <- function(config) {
         ontologies     = unique(sub("^GO_", "", toupper(as.character(onts)))),
         fdr            = as.numeric(gh$fdr %||% 0.05),
         max_seed_terms = as.integer(gh$max_seed_terms %||% 30L),
-        max_nodes      = as.integer(gh$max_nodes %||% 120L)
+        max_nodes      = as.integer(gh$max_nodes %||% 120L),
+        ancestors      = as.character(gh$ancestors %||% "shortest_path")
     )
 }
 
@@ -216,11 +217,13 @@ build_go_hierarchy_dags <- function(enrichment_results, config,
                     }
                     if (is.null(parent_tables[[ont]])) parent_tables[[ont]] <- go_parent_table(ont)
                     dag <- build_go_dag(s$seeds, parent_tables[[ont]],
-                                        term_info = term_info, max_nodes = gh$max_nodes)
+                                        term_info = term_info, max_nodes = gh$max_nodes,
+                                        ancestors = gh$ancestors)
                     note <- go_hierarchy_note(s$n_significant, dag$n_seeds_requested,
                                               dag$n_seeds_shown, gh$max_nodes)
                     plot <- plot_go_dag(
                         dag, fdr = gh$fdr,
+                        label_context = identical(gh$ancestors, "shortest_path"),
                         title = sprintf("GO %s terms, %s, %s (%s)", ont,
                                         gsub("_", " ", cn), label, layer),
                         subtitle = paste0("fgsea padj < ", format(gh$fdr),
@@ -268,13 +271,16 @@ go_hierarchy_note <- function(n_significant, n_requested, n_shown, max_nodes) {
 #' @param direction_label From go_direction_label().
 #' @param note From go_hierarchy_note().
 #' @return Character scalar.
-go_hierarchy_legend <- function(ontology, fdr, direction, direction_label, note) {
+go_hierarchy_legend <- function(ontology, fdr, direction, direction_label, note,
+                                ancestors = "shortest_path") {
     paste(
         sprintf("GO %s terms with fgsea adjusted p < %s and %s NES",
                 ontology, format(fdr), direction),
-        sprintf("(%s), with their ancestors.", direction_label),
+        sprintf("(%s), with %s.", direction_label,
+                if (identical(ancestors, "all")) "all their ancestors"
+                else "one shortest path from each to the root"),
         "Filled nodes: seed terms, shaded by adjusted p (darker is",
-        "smaller). Hollow grey nodes: context terms, not significant",
+        "smaller). Hollow grey nodes: context terms on the path, not significant",
         "or not tested. Solid lines: is_a; dashed: part_of. More",
         "general terms are higher.", note)
 }
@@ -360,7 +366,9 @@ write_go_hierarchy_outputs <- function(built, out_dir, run_dir, term_info = NULL
                     subtitle = u$plot$labels$subtitle,
                     footer = paste(
                         go_hierarchy_legend(u$ontology, fdr, u$direction,
-                                            u$direction_label, u$note),
+                                            u$direction_label, u$note,
+                                            (built$settings %||% list())$ancestors %||%
+                                                "shortest_path"),
                         "Scroll to zoom, drag to pan, hover a term for its values;",
                         "Find a GO term (top left) highlights it and its links."))
                 save_go_dag_widget(widget, file.path(out_dir, files[["html"]]),
