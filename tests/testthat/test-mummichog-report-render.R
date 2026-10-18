@@ -4,15 +4,14 @@
 #
 # The chunks are EXTRACTED FROM THE REAL TEMPLATE at test time (never copied
 # here), so this cannot drift from what the pipeline actually renders. It checks
-# that the section survives knitting in the three shapes it can take:
-#   * full      -- ORA plot + table, GSEA scatter + table, evidence drill-down
+# that the section survives knitting in the shapes it can take:
+#   * full      -- Summary, ORA plot, GSEA plot, Pathway Evidence, Advanced
 #   * ORA only  -- GSEA and evidence genuinely unavailable
 #   * nothing   -- no mummichog results at all
 #
-# Adapted from the integration branch of #266; the section contract differs
-# there (that branch swapped the primary plot for the GSEA scatter), so the
-# assertions below pin THIS contract: the bubble plot stays primary and GSEA is
-# strictly additive.
+# The per-contrast contract pinned below: Summary -> ORA plot -> GSEA plot ->
+# Pathway Evidence -> Advanced / Downloads, with the full tables under Advanced
+# rather than as tabs of their own.
 #
 # Skipped when rmarkdown/pandoc are unavailable, like the report module itself.
 
@@ -35,13 +34,14 @@ extract_chunk <- function(lines, label) {
 # A synthetic section list shaped exactly like build_mummichog_report_sections()
 # returns, so the harness exercises the template's rendering contract without
 # needing fgsea or a mummichog run.
-render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE) {
+render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE,
+                                    nominal = TRUE, gsea_only = FALSE) {
   pw <- data.frame(
     check.names = FALSE, stringsAsFactors = FALSE,
     pathway      = c("Fatty acid degradation", "Glycolysis"),
     overlap_size = c(2, 1),
     pathway_size = c(2, 4),
-    "p-value"    = c(0.01, 0.30),
+    "p-value"    = if (nominal) c(0.01, 0.30) else c(0.20, 0.30),
     "overlap_EmpiricalCompounds (id)" = c("E196,E3", "E2")
   )
 
@@ -56,7 +56,10 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE) {
       "Tested size"                     = c(2, 2),
       "ES"                              = c(0.8, -0.4),
       "NES"                             = c(1.9, -1.1),
-      "P.Value"                         = c(0.002, 0.400),
+      # gsea_only: Glycolysis becomes nominal in GSEA while its ORA p stays 0.30,
+      # although an ORA evidence row exists for it.
+      "P.Value"                         = if (!nominal) c(0.2, 0.4) else
+                                            c(0.002, if (gsea_only) 0.010 else 0.400),
       "padj"                            = c(0.004, 0.400),
       "Leading-edge EmpiricalCompounds" = c("E196; E3", "E2"),
       "ES defaulted by reference implementation" = c(FALSE, FALSE),
@@ -132,14 +135,22 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE) {
     )
   }
 
+  tbl <- build_mummichog_pathway_table(pw)
+  summary <- build_mummichog_summary(
+    tbl, gsea_table = gsea$table, evidence = evidence,
+    pathway_ids = c("Fatty acid degradation" = "xx00071",
+                    "Glycolysis" = "xx00010"),
+    library_ids = c("xx00071", "xx00010"), p_cutoff = 0.05)
+
   list("HL_vs_LL" = list(
     title     = "Mummichog pathway analysis - test (test model)",
     subtitle  = "HL vs LL, all features",
     plot      = plot_mummichog_bubble(pw, title = "ORA", p_cutoff = 0.05),
-    table     = build_mummichog_pathway_table(pw),
+    table     = tbl,
     gsea      = gsea,
     gsea_plot = gsea_plot,
     evidence  = evidence,
+    summary   = summary,
     slug      = "HL_vs_LL"))
 }
 
@@ -207,9 +218,8 @@ skip_unless_renderable <- function() {
 }
 
 # Character offset of a pandoc section anchor, or NA when the tab is absent.
-# Tab ORDER is part of this section's contract -- the GSEA scatter has to be the
-# first plot a reader meets -- so the tests assert on positions, not just on
-# presence.
+# Tab ORDER is part of this section's contract -- the Summary is what a reader
+# meets first -- so the tests assert on positions, not just on presence.
 anchor_at <- function(html, id) {
   m <- regexpr(sprintf('id="%s"', id), html, fixed = TRUE)
   if (m[[1]] == -1L) NA_integer_ else as.integer(m[[1]])
@@ -234,56 +244,74 @@ test_that("the mummichog section renders with GSEA and evidence", {
                                    withr::local_tempdir())
 
   # The five per-contrast tabs, matched on their section ids so prose that
-  # merely mentions a tab name cannot stand in for the tab itself.
-  expect_match(html, 'id="gsea-plot"', fixed = TRUE)
-  expect_match(html, 'id="gsea-results-table"', fixed = TRUE)
-  expect_match(html, 'id="ora-bubble-plot"', fixed = TRUE)
-  expect_match(html, 'id="ora-results-table"', fixed = TRUE)
-  expect_match(html, 'id="supporting-evidence"', fixed = TRUE)
-  expect_match(html, 'id="pathway-drill-down"', fixed = TRUE)
+  # merely mentions a tab name cannot stand in for the tab itself, in order.
+  tabs <- c("summary", "ora-plot", "gsea-plot", "pathway-evidence",
+            "advanced-downloads")
+  at <- vapply(tabs, function(id) anchor_at(html, id), integer(1))
+  expect_false(anyNA(at), info = paste(tabs[is.na(at)], collapse = ", "))
+  expect_true(all(diff(at) > 0))
 
-  # The contract: GSEA is the PRIMARY visualization. Its tab precedes every ORA
-  # tab, so the first plot a reader meets in a contrast is the NES scatter.
-  expect_lt(anchor_at(html, "gsea-plot"),
-            anchor_at(html, "gsea-results-table"))
-  expect_lt(anchor_at(html, "gsea-results-table"),
-            anchor_at(html, "ora-bubble-plot"))
-  expect_lt(anchor_at(html, "ora-bubble-plot"),
-            anchor_at(html, "ora-results-table"))
-  expect_lt(anchor_at(html, "ora-results-table"),
-            anchor_at(html, "supporting-evidence"))
+  # The full tables are no longer tabs of their own.
+  expect_false(grepl('id="gsea-results-table"', html, fixed = TRUE))
+  expect_false(grepl('id="ora-results-table"', html, fixed = TRUE))
+  expect_false(grepl('id="supporting-evidence"', html, fixed = TRUE))
 
-  # ... and the plot in that first tab is the scatter, described by its own
-  # NES / -log10(GSEA p) legend, not the enrichment-ratio bubble.
-  gsea_tab <- tab_body(html, "gsea-plot", "gsea-results-table")
+  # The Summary: the top-ranked pathways with their compact cells and labels.
+  summary_tab <- tab_body(html, "summary", "ora-plot")
+  expect_match(summary_tab, "Top 20 Mummichog pathways for this contrast", fixed = TRUE)
+  # pageLength 20 for this table only, so the whole top 20 fits one page.
+  expect_match(summary_tab, '"pageLength":20', fixed = TRUE)
+  expect_match(summary_tab, "Fatty acid degradation", fixed = TRUE)
+  expect_match(summary_tab, "Mummichog-only candidate", fixed = TRUE)
+  expect_match(summary_tab, "Not tested", fixed = TRUE)
+  expect_match(summary_tab, "2 ECs / 3 features", fixed = TRUE)
+  expect_match(summary_tab, "no adjusted pathway p-value is reported", fixed = TRUE)
+  # Ranked, but not nominal: listed, and never called a candidate.
+  expect_match(summary_tab, "Glycolysis", fixed = TRUE)
+  expect_match(summary_tab, "No nominal Mummichog signal", fixed = TRUE)
+
+  # Each plot tab carries its own plot, legend and one-line count.
+  ora_tab <- tab_body(html, "ora-plot", "gsea-plot")
+  expect_match(ora_tab, "Each bubble is a pathway")
+  expect_match(ora_tab, "One pathway reached nominal p &lt; 0.05 in Mummichog ORA",
+               fixed = TRUE)
+  gsea_tab <- tab_body(html, "gsea-plot", "pathway-evidence")
   expect_match(gsea_tab, "Mummichog GSEA over the full ranked EmpiricalCompound list")
-  # The two axes named separately, so a reflow of the legend prose between them
-  # cannot break the assertion that this is the NES-vs-p scatter.
   expect_match(gsea_tab, "x = NES", fixed = TRUE)
   expect_match(gsea_tab, "-log10(raw GSEA p-value)", fixed = TRUE)
+  expect_match(gsea_tab, "One pathway reached nominal p &lt; 0.05 in Mummichog GSEA; 1 remained significant after BH correction",
+               fixed = TRUE)
   expect_false(grepl("Each bubble is a pathway", gsea_tab, fixed = TRUE))
 
-  # ORA is preserved, demoted in position only: its plot and legend still render
-  # under their own heading.
-  expect_match(tab_body(html, "ora-bubble-plot", "ora-results-table"),
-               "Each bubble is a pathway")
+  # Pathway Evidence: Summary pathways only, Pathway -> EC -> features.
+  ev_tab <- tab_body(html, "pathway-evidence", "advanced-downloads")
+  expect_match(ev_tab, "pathway-matching candidate", fixed = TRUE)
+  expect_match(ev_tab, "<details>")
+  expect_match(ev_tab, "E196 — Match", fixed = TRUE)
+  expect_match(ev_tab, "Mummichog pathway candidate", fixed = TRUE)
+  expect_match(ev_tab, "feat_1")
+  expect_false(grepl("E2 — Match", ev_tab, fixed = TRUE))
 
-  # Both analyses are named and distinguished in the methodology block.
-  expect_match(html, "complete ranked EmpiricalCompound list with no significance cutoff")
+  # Advanced keeps every full table, and names the exports that were written.
+  expect_match(html, "`mummichog_gsea_table`|<code>mummichog_gsea_table</code>")
+  expect_match(html, "<code>mummichog_evidence_features</code>", fixed = TRUE)
+  expect_match(html, "Full Mummichog ORA table", fixed = TRUE)
+  expect_match(html, "Full Mummichog GSEA table", fixed = TRUE)
+  expect_match(html, "Pathway evidence summary (all pathways)", fixed = TRUE)
+  expect_match(html, "Feature-level evidence", fixed = TRUE)
 
-  # NES is described conservatively: parity only, no direction of any kind.
+  # Methodology: both analyses named, NES described conservatively.
+  expect_match(html, "complete ranked EC list, without a significance cutoff")
+  expect_match(html, "unadjusted DE p-value below the configured Mummichog cutoff")
   expect_match(html, "retained to reproduce the pinned MetaboAnalystR result")
   expect_match(html, "should not be interpreted as biological up/down direction")
+  expect_false(grepl("toward one end", html, fixed = TRUE))
 
-  # The pinned reference is stated in the report.
+  # Provenance and the evidence rules survive, in the collapsed block.
+  expect_match(html, "Technical details / Reproducibility", fixed = TRUE)
   expect_match(html, "MetaboAnalystR")
   expect_match(html, substr(.MMC_GSEA_REF_COMMIT, 1, 12))
-
-  # The evidence terminology the biologist has to see, and the one it must not.
-  expect_match(html, "Pathway-matching candidate")
   expect_match(html, "not.{0,40}Best guess", perl = TRUE)
-  expect_match(html, "<details>")
-  expect_match(html, "feat_1")
 })
 
 test_that("the mummichog section renders without GSEA or evidence", {
@@ -293,37 +321,67 @@ test_that("the mummichog section renders without GSEA or evidence", {
     render_fixture_sections(with_gsea = FALSE, with_evidence = FALSE),
     withr::local_tempdir())
 
-  # The ORA tabs are unaffected by GSEA's absence: ORA results stay available
-  # under their own headings.
-  expect_match(html, 'id="ora-bubble-plot"', fixed = TRUE)
-  expect_match(html, 'id="ora-results-table"', fixed = TRUE)
+  # ORA is unaffected by GSEA's absence.
+  expect_match(html, 'id="ora-plot"', fixed = TRUE)
   expect_match(html, "Each bubble is a pathway")
 
-  # The GSEA Plot tab is rendered even with nothing to plot, so the primary tab
-  # always answers what GSEA found. Its results table is the tab that goes away.
-  expect_match(html, 'id="gsea-plot"', fixed = TRUE)
-  expect_false(grepl('id="gsea-results-table"', html, fixed = TRUE))
-  expect_lt(anchor_at(html, "gsea-plot"), anchor_at(html, "ora-bubble-plot"))
-
-  # And what it carries is the explanation, NOT the ORA bubble wearing a GSEA
-  # heading. This is the substitution the section must never make: a reader on
-  # the GSEA tab must not be shown an enrichment-ratio plot.
-  gsea_tab <- tab_body(html, "gsea-plot", "ora-bubble-plot")
+  # The GSEA plot tab is rendered even with nothing to plot, and what it
+  # carries is the explanation, NOT the ORA bubble wearing a GSEA heading.
+  gsea_tab <- tab_body(html, "gsea-plot", "advanced-downloads")
   expect_match(gsea_tab, "No GSEA results for this contrast")
   expect_false(grepl("Each bubble is a pathway", gsea_tab, fixed = TRUE))
   expect_false(grepl("x = NES", gsea_tab, fixed = TRUE))
-  # It points the reader at where the ORA results actually are.
-  expect_match(gsea_tab, "ORA Bubble Plot")
+  expect_match(gsea_tab, "ORA plot")
 
-  # Evidence is simply absent, and the methodology says why rather than leaving
-  # a reader to infer it from a missing tab.
-  expect_false(grepl('id="supporting-evidence"', html, fixed = TRUE))
+  # The Summary falls back to ORA and says GSEA did not run.
+  expect_match(tab_body(html, "summary", "ora-plot"), "Not run", fixed = TRUE)
+
+  # Evidence is simply absent, and the methodology says why GSEA is.
+  expect_false(grepl('id="pathway-evidence"', html, fixed = TRUE))
+  # Advanced names only exports that exist for this contrast.
+  expect_match(html, "<code>mummichog_summary</code>", fixed = TRUE)
+  expect_false(grepl("mummichog_gsea_table", html, fixed = TRUE))
+  expect_false(grepl("mummichog_evidence_", html, fixed = TRUE))
   expect_match(html, "has no results in this report")
-  # And it must NOT assert a cause: a NULL GSEA result means either that the
-  # analysis could not run or that it ran and found nothing, and the section
-  # cannot tell them apart. Naming only the setup causes would report a
-  # legitimate negative result as a misconfiguration.
+  # It must NOT assert a cause: a NULL GSEA result means either that the
+  # analysis could not run or that it ran and found nothing.
   expect_match(html, "no pathway passed the size filter")
+})
+
+test_that("a GSEA-only pathway shows no ORA evidence as its support", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(render_fixture_sections(gsea_only = TRUE),
+                                   withr::local_tempdir())
+  # In the Summary, labelled as a GSEA-only signal ...
+  summary_tab <- tab_body(html, "summary", "ora-plot")
+  expect_match(summary_tab, "Glycolysis", fixed = TRUE)
+  expect_match(summary_tab, "GSEA-only signal", fixed = TRUE)
+  # ... and absent from the default Pathway Evidence view, though its evidence
+  # row still exists under Advanced.
+  ev_tab <- tab_body(html, "pathway-evidence", "advanced-downloads")
+  expect_match(ev_tab, "Fatty acid degradation", fixed = TRUE)
+  expect_false(grepl("Glycolysis", ev_tab, fixed = TRUE))
+})
+
+test_that("a contrast with no nominal pathway says so above its ranked rows", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(render_fixture_sections(nominal = FALSE),
+                                   withr::local_tempdir())
+  # Pandoc escapes "<" in prose, so the message is matched in its HTML form.
+  summary_tab <- tab_body(html, "summary", "ora-plot")
+  expect_match(summary_tab,
+               "No Mummichog pathway reached nominal p &lt; 0.05 in ORA or GSEA for this contrast.",
+               fixed = TRUE)
+  expect_match(summary_tab, "not significant results", fixed = TRUE)
+  # The ranked rows are still listed, none as a candidate.
+  expect_match(summary_tab, "Fatty acid degradation", fixed = TRUE)
+  expect_match(summary_tab, "No nominal Mummichog signal", fixed = TRUE)
+  expect_false(grepl("Mummichog-only candidate", summary_tab, fixed = TRUE))
+  expect_match(tab_body(html, "pathway-evidence", "advanced-downloads"),
+               "No Summary pathway has a nominal ORA result with ORA-derived evidence",
+               fixed = TRUE)
 })
 
 test_that("a contrast without GSEA says so when another contrast has it", {
@@ -352,7 +410,8 @@ test_that("the mummichog section renders with no results at all", {
 
   html <- render_mummichog_section(list(), withr::local_tempdir())
   expect_true(nzchar(html))
+  expect_false(grepl('id="summary"', html, fixed = TRUE))
   expect_false(grepl('id="gsea-plot"', html, fixed = TRUE))
-  expect_false(grepl('id="ora-bubble-plot"', html, fixed = TRUE))
-  expect_false(grepl('id="supporting-evidence"', html, fixed = TRUE))
+  expect_false(grepl('id="ora-plot"', html, fixed = TRUE))
+  expect_false(grepl('id="pathway-evidence"', html, fixed = TRUE))
 })

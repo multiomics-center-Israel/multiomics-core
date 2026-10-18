@@ -142,15 +142,18 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
     # the report simply omits that tab.
     # `de_res` activates the complementary GSEA (06g): it supplies both the
     # ranking statistic and the DE method that decides which column that is.
+    # `enrichment_res` lets each contrast's Summary say whether a pathway is
+    # also supported by enrichment on identified metabolites.
     mummi_sections <- build_mummichog_report_sections(
         mummichog_pathways, config,
         files    = mummichog_files,
         row_data = pre$row_data,
-        de_res   = de_res)
+        de_res   = de_res,
+        enrichment_res = enrichment_res)
 
     # Save standalone presentation exports per contrast (plots as PNG + PDF,
     # tables as TSV + CSV: the ORA bubble and pathway table, the GSEA scatter
-    # and table, and the three evidence tables when built) into
+    # and table, the three evidence tables when built, and the Summary) into
     # mummichog_pinned/, named by the section's de-duplicated
     # slug (so labels that collapse to the same token don't overwrite each
     # other), in addition to embedding them in the HTML. The engine's mcg_*
@@ -163,11 +166,13 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
                                                   contrast_label = s$slug,
                                                   gsea      = s$gsea,
                                                   gsea_plot = s$gsea_plot,
-                                                  evidence  = s$evidence))
+                                                  evidence  = s$evidence,
+                                                  summary   = s$summary))
     }
 
     # A contrast the stage ran but that produced no section never reaches the
-    # loop above, so the by-name GSEA clearing inside save_mummichog_exports()
+    # loop above, so the by-name GSEA and Summary clearing inside
+    # save_mummichog_exports()
     # never runs for it and a previous run's table would survive. Clearing is
     # safe for those contrasts because there is nothing of theirs to keep;
     # whether they should get a GSEA analysis at all is a section-contract
