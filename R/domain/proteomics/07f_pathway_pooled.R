@@ -3,7 +3,7 @@
 #' A second enrichment, next to the legacy one in 07b_pathway.R: proteins are
 #' ranked by the z-score of the limma statistic combined across imputation draws
 #' with Rubin's rules (pool_limma_imputations()), collapsed to one protein per
-#' gene, and tested with fgsea and limma::cameraPR on the same gene sets. Output
+#' gene when gene annotation is available, and tested with fgsea and limma::cameraPR on the same gene sets. Output
 #' goes to Enrichment/pooled_ranking/ only, so the legacy tables, plots and the
 #' contrast-keyed prot_pathway_res consumed by multiomics are untouched.
 
@@ -15,6 +15,21 @@
 #' @return Path to \code{Enrichment/pooled_ranking} under \code{out_dir}.
 proteomics_pooled_enrichment_dir <- function(out_dir) {
     file.path(out_dir, "Enrichment", "pooled_ranking")
+}
+
+#' Remove the pooled-ranking output directory
+#'
+#' Called before a run writes, and by the module when the analysis is disabled
+#' or skipped, so tables left by an earlier run never reach the report.
+#'
+#' @param out_dir Proteomics output root.
+#' @return TRUE if a directory was removed, invisibly.
+clear_proteomics_pooled_enrichment_dir <- function(out_dir) {
+    d <- proteomics_pooled_enrichment_dir(out_dir)
+    if (!dir.exists(d)) return(invisible(FALSE))
+    message("Removing earlier pooled-ranking output: ", d)
+    unlink(d, recursive = TRUE)
+    invisible(TRUE)
 }
 
 #' Build per-contrast gene-level rankings from pooled limma statistics
@@ -57,6 +72,9 @@ build_pooled_ranking_tables <- function(de_res, pre, config) {
             # ID column, which the per-run DE table carries.
             pooled <- map_proteins_to_gene_symbols(pooled, ann_tbl, config, priority = "observed")
         }
+        # map_proteins_to_gene_symbols() adds ProteinID only when it collapsed;
+        # recorded so the report text says what was done.
+        pooled$collapsed_to_gene <- !is.null(pooled$ProteinID)
         # Unmapped (no Genes column, or annotation skipped): one row per protein.
         if (is.null(pooled$ProteinID)) pooled$ProteinID <- pooled$FeatureID
         pooled
@@ -136,6 +154,9 @@ run_proteomics_pooled_enrichment <- function(de_res, pre, config, out_dir) {
 
     pooled_dir <- proteomics_pooled_enrichment_dir(out_dir)
     plots_dir <- file.path(pooled_dir, "plots")
+    # Start empty: files from an earlier run (other contrasts or databases)
+    # would otherwise be read by the report as part of this one.
+    clear_proteomics_pooled_enrichment_dir(out_dir)
     dir.create(pooled_dir, recursive = TRUE, showWarnings = FALSE)
     for (cn in names(ranking)) {
         tbl <- ranking[[cn]]
@@ -150,7 +171,9 @@ run_proteomics_pooled_enrichment <- function(de_res, pre, config, out_dir) {
         m              = length(de_res$runs),
         inter_gene_cor = inter_gene_cor,
         use_ranks      = use_ranks,
-        collapse_rule  = "most_observed_then_AveExpr",
+        collapse_rule  = if (all(vapply(ranking, function(t) isTRUE(t$collapsed_to_gene[1]), logical(1)))) {
+            "finite_z_then_most_observed_then_AveExpr"
+        } else "none",
         df_com_rule    = pooled_df_com_rule()
     )
 

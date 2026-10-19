@@ -199,6 +199,12 @@ test_that("build_pooled_ranking_tables ranks on z_pooled and collapses per gene"
     expect_false(any(duplicated(tb$FeatureID)))
     expect_true(all(tb$FeatureID %in% paste0("G", 1:40)))
     expect_true(all(is.na(tb$legacy_stat)))
+    expect_true(all(tb$collapsed_to_gene))
+
+    cfg$modes$proteomics$annotation <- list(skip_annotation = TRUE)
+    tb_raw <- build_pooled_ranking_tables(de_res, pre, cfg)$B_vs_A
+    expect_false(any(tb_raw$collapsed_to_gene))
+    expect_identical(tb_raw$ProteinID, tb_raw$FeatureID)
 })
 
 test_that("the pooled module skips unless limma ran and the option is on", {
@@ -209,4 +215,21 @@ test_that("the pooled module skips unless limma ran and the option is on", {
     expect_message(res <- mod_proteomics_pathway_pooled(list(method = "ttest"), NULL, on, tempdir()),
                    "needs de.method 'limma'")
     expect_null(res)
+})
+
+test_that("a disabled or skipped pooled module removes earlier output", {
+    off <- list(modes = list(proteomics = list(pathway = list(enabled = TRUE))))
+    on <- list(modes = list(proteomics = list(pathway = list(
+        enabled = TRUE, pooled_ranking = list(enabled = TRUE)))))
+    for (case in list(list(cfg = off, de = list(method = "limma")),
+                      list(cfg = on, de = list(method = "ttest")))) {
+        out <- withr::local_tempdir()
+        d <- proteomics_pooled_enrichment_dir(out)
+        dir.create(d, recursive = TRUE)
+        writeLines("x", file.path(d, "pooled_ranking_A_vs_B.csv"))
+        suppressMessages(mod_proteomics_pathway_pooled(case$de, NULL, case$cfg, out))
+        expect_false(dir.exists(d))
+        # The rest of the output tree is left alone.
+        expect_true(dir.exists(file.path(out, "Enrichment")))
+    }
 })

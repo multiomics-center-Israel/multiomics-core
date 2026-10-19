@@ -452,28 +452,63 @@ methods_de_phrase <- function(de_cfg, method) {
     sprintf("Differential abundance was assessed using the %s method.", method)
 }
 
+#' What the written pooled-ranking tables record about their run
+#'
+#' Read from the first pooled_ranking_<contrast>.csv, so the report and the
+#' Methods describe the run that wrote the files rather than the current config.
+#'
+#' @param pooled_dir Directory written by run_proteomics_pooled_enrichment(), or NULL.
+#' @return list(m, collapsed): \code{m} the number of draws and \code{collapsed}
+#'   TRUE/FALSE for the protein-to-gene collapse, each NA when the table does
+#'   not record it; NULL when no pooled ranking was written.
+pooled_ranking_run_info <- function(pooled_dir) {
+    if (is.null(pooled_dir) || !dir.exists(pooled_dir)) return(NULL)
+    rank_files <- list.files(pooled_dir, pattern = "^pooled_ranking_.*\\.csv$", full.names = TRUE)
+    if (length(rank_files) == 0) return(NULL)
+    row <- tryCatch(utils::read.csv(rank_files[1], nrows = 1), error = function(e) NULL)
+    m <- suppressWarnings(as.numeric(row$m))
+    collapsed <- as.logical(row$collapsed_to_gene)
+    list(m         = if (length(m) == 1 && is.finite(m)) m else NA_real_,
+         collapsed = if (length(collapsed) == 1) collapsed else NA)
+}
+
+#' Sentence on the protein-to-gene collapse of the pooled ranking
+#'
+#' @param collapsed TRUE, FALSE or NA (not recorded) from pooled_ranking_run_info().
+#' @return A sentence, or "" when the tables do not record it.
+pooled_ranking_collapse_text <- function(collapsed) {
+    if (isTRUE(collapsed)) {
+        paste0("Proteins were collapsed to one per gene, preferring proteins with a finite ",
+               "z-score, then the most observed values, then the highest average expression.")
+    } else if (isFALSE(collapsed)) {
+        paste0("Proteins were not collapsed to genes (no gene annotation was used), so the ",
+               "ranking has one row per protein.")
+    } else ""
+}
+
 #' Methods sentences for the pooled-ranking enrichment
 #'
-#' Gated on the artefacts, not on \code{pathway.pooled_ranking.enabled}: the
-#' module skips itself (pathway disabled, a DE method other than limma) with a
-#' message, so only the files show it ran. The number of draws and the cameraPR
+#' Gated on the artefacts as well as \code{pathway.pooled_ranking.enabled}
+#' (checked by the caller): the module skips itself (pathway disabled, a DE
+#' method other than limma) and then removes any earlier output, so only the
+#' files show it ran. The number of draws, the collapse and the cameraPR
 #' correlation are read from the written tables for the same reason.
 #'
 #' @param pooled_dir Directory written by run_proteomics_pooled_enrichment(), or NULL.
 #' @param imp_cfg The \code{imputation} config block.
 #' @return A character scalar, or NULL when no pooled ranking was written.
 methods_pooled_ranking_text <- function(pooled_dir, imp_cfg) {
-    if (is.null(pooled_dir) || !dir.exists(pooled_dir)) return(NULL)
-    rank_files <- list.files(pooled_dir, pattern = "^pooled_ranking_.*\\.csv$", full.names = TRUE)
-    if (length(rank_files) == 0) return(NULL)
-    m <- tryCatch(utils::read.csv(rank_files[1], nrows = 1)$m, error = function(e) NULL)
-    m_known <- length(m) == 1 && is.finite(m)
+    info <- pooled_ranking_run_info(pooled_dir)
+    if (is.null(info)) return(NULL)
+    m <- info$m
+    m_known <- !is.na(m)
+    collapse_txt <- pooled_ranking_collapse_text(info$collapsed)
     if (m_known && m == 1) {
         txt <- paste0(
             "As a separate analysis, proteins were ranked by the z-score of the limma ",
-            "moderated t-statistic from the single imputation draw, collapsed to one protein ",
-            "per gene, keeping the protein with the most observed values and then the highest ",
-            "average expression. With one draw there is no between-draw variance to combine.")
+            "moderated t-statistic from the single imputation draw. With one draw there is ",
+            "no between-draw variance to combine.")
+        txt <- trimws(paste(txt, collapse_txt))
         return(methods_pooled_enrichment_sentences(pooled_dir, txt))
     }
     m_txt <- if (m_known) sprintf("each of the %d", as.integer(m)) else "each"
@@ -485,9 +520,8 @@ methods_pooled_ranking_text <- function(pooled_dir, imp_cfg) {
         "with Barnard-Rubin degrees of freedom (Rubin 1987; Barnard and Rubin 1999), ",
         "following the approach of Baker et al. (2024). The complete-data degrees of ",
         "freedom were the mean of the per-draw moderated degrees of freedom. The pooled ",
-        "t-statistics were converted to z-scores and collapsed to one protein per gene, ",
-        "keeping the protein with the most observed values and then the highest average ",
-        "expression."), m_txt)
+        "t-statistics were converted to z-scores."), m_txt)
+    txt <- trimws(paste(txt, collapse_txt))
     txt <- paste(txt, if (methods_imputation_is_deterministic(imp_cfg)) {
         paste0("The imputation is deterministic, so the draws are identical and the ",
                "statistic reduces to the single-fit moderated t-statistic.")
@@ -834,7 +868,8 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                                 paste(cfg$pathway$databases %||% c("GO", "KEGG", "Reactome"),
                                       collapse = ", ")))
     }
-    pooled_txt <- methods_pooled_ranking_text(pooled_dir, imp_cfg)
+    pooled_on <- isTRUE(((cfg$pathway %||% list())$pooled_ranking %||% list())$enabled)
+    pooled_txt <- if (pooled_on) methods_pooled_ranking_text(pooled_dir, imp_cfg)
     if (!is.null(pooled_txt)) down <- c(down, pooled_txt)
     if (isTRUE(cfg$ppi$enabled)) {
         down <- c(down, paste0("Protein-protein interaction networks were constructed using ",

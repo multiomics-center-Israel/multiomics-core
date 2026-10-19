@@ -1115,11 +1115,14 @@ test_that("the complete-case claim needs the PCA section, not just the file", {
 
 # A pooled_ranking directory as run_proteomics_pooled_enrichment() leaves it,
 # with only the files named. Values are synthetic.
-pooled_dir_with <- function(dir, m = 5, fgsea = TRUE, camerapr = TRUE) {
+# collapsed = NULL writes a table without the collapsed_to_gene column, as
+# tables written before that column existed.
+pooled_dir_with <- function(dir, m = 5, fgsea = TRUE, camerapr = TRUE, collapsed = TRUE) {
     d <- file.path(dir, "Enrichment", "pooled_ranking")
     dir.create(d, recursive = TRUE)
-    utils::write.csv(data.frame(FeatureID = "G1", m = m, z_pooled = 1.2),
-                     file.path(d, "pooled_ranking_A_vs_B.csv"), row.names = FALSE)
+    tbl <- data.frame(FeatureID = "G1", m = m, z_pooled = 1.2)
+    if (!is.null(collapsed)) tbl$collapsed_to_gene <- collapsed
+    utils::write.csv(tbl, file.path(d, "pooled_ranking_A_vs_B.csv"), row.names = FALSE)
     if (fgsea) utils::write.csv(data.frame(pathway = "S1", NES = 1.1),
                                 file.path(d, "pathway_A_vs_B_DB_fgsea.csv"), row.names = FALSE)
     if (camerapr) utils::write.csv(data.frame(pathway = "S1", PValue = 0.2, inter_gene_cor = 0.01),
@@ -1127,20 +1130,24 @@ pooled_dir_with <- function(dir, m = 5, fgsea = TRUE, camerapr = TRUE) {
     d
 }
 
-pooled_downstream <- function(pooled_dir, ...) {
-    build_proteomics_methods_text(cfg_for(...), de_method = "limma",
+pooled_downstream <- function(pooled_dir, ..., enabled = TRUE) {
+    cfg <- cfg_for(...)
+    cfg$modes$proteomics$pathway$pooled_ranking$enabled <- enabled
+    build_proteomics_methods_text(cfg, de_method = "limma",
                                   pooled_dir = pooled_dir)$downstream
 }
 
-test_that("the pooled-ranking sentences are gated on its files, not the flag", {
+test_that("the pooled-ranking sentences need both its files and the flag", {
     tmp <- withr::local_tempdir()
     # Flag on, nothing written: no claim.
-    on_cfg <- list(pathway = list(enabled = FALSE, pooled_ranking = list(enabled = TRUE)))
-    txt <- do.call(pooled_downstream,
-                   c(list(pooled_dir = file.path(tmp, "absent")), on_cfg))
+    txt <- pooled_downstream(file.path(tmp, "absent"))
     expect_false(grepl("Rubin", txt %||% "", fixed = TRUE))
 
     d <- pooled_dir_with(tmp)
+    # Files from an earlier run, flag now off: no claim.
+    off <- pooled_downstream(d, enabled = FALSE)
+    expect_false(grepl("Rubin", off %||% "", fixed = TRUE))
+
     txt <- pooled_downstream(d)
     expect_match(txt, "Rubin's rules", fixed = TRUE)
     expect_match(txt, "Barnard-Rubin degrees of freedom", fixed = TRUE)
@@ -1177,6 +1184,26 @@ test_that("a deterministic imputation or one draw is described as such", {
     one <- pooled_downstream(pooled_dir_with(tmp1, m = 1))
     expect_match(one, "single imputation draw", fixed = TRUE)
     expect_false(grepl("Barnard-Rubin", one, fixed = TRUE))
+    expect_false(grepl("Rubin's rules", one, fixed = TRUE))
+    expect_match(one, "collapsed to one per gene", fixed = TRUE)
+})
+
+test_that("the collapse is described only when the tables record it", {
+    yes <- pooled_downstream(pooled_dir_with(withr::local_tempdir(), collapsed = TRUE))
+    expect_match(yes, "collapsed to one per gene", fixed = TRUE)
+    expect_match(yes, "finite z-score", fixed = TRUE)
+
+    no <- pooled_downstream(pooled_dir_with(withr::local_tempdir(), collapsed = FALSE))
+    expect_match(no, "not collapsed to genes", fixed = TRUE)
+    expect_false(grepl("collapsed to one per gene", no, fixed = TRUE))
+
+    one_no <- pooled_downstream(pooled_dir_with(withr::local_tempdir(), m = 1, collapsed = FALSE))
+    expect_match(one_no, "not collapsed to genes", fixed = TRUE)
+
+    # Older tables without the column: no claim either way.
+    old <- pooled_downstream(pooled_dir_with(withr::local_tempdir(), collapsed = NULL))
+    expect_false(grepl("collapsed", old, fixed = TRUE))
+    expect_match(old, "Rubin's rules", fixed = TRUE)
 })
 
 test_that("the report's pooled section keeps to the agreed wording", {
@@ -1191,6 +1218,11 @@ test_that("the report's pooled section keeps to the agreed wording", {
     expect_match(sec, "combined across imputation draws with Rubin's rules", fixed = TRUE)
     expect_match(sec, "are not comparable", fixed = TRUE)
     expect_match(sec, "proteomics_pooled_enrichment_dir(prot_dir)", fixed = TRUE)
+    # Draws, collapse and the flag come from the run, not fixed prose.
+    expect_match(sec, "pooled_info$m == 1", fixed = TRUE)
+    expect_match(sec, "pooled_ranking_collapse_text(pooled_info$collapsed)", fixed = TRUE)
+    expect_match(sec, "$pooled_ranking %||% list())$enabled", fixed = TRUE)
+    expect_false(grepl("Proteins were collapsed to \"", sec, fixed = TRUE))
     # No bold emphasis inside this section's prose.
     expect_false(grepl("\\*\\*", sec))
 })

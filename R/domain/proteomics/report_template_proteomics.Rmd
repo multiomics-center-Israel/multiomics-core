@@ -3745,10 +3745,14 @@ pooled_plot_dir <- file.path(pooled_dir, "plots")
 pooled_rank_files <- if (dir.exists(pooled_dir)) {
     list.files(pooled_dir, pattern = "^pooled_ranking_.*\\.csv$", full.names = TRUE)
 } else character(0)
-has_pooled <- length(pooled_rank_files) > 0
+# Gated on the flag as well as the files, so tables from an earlier run never
+# appear when the option is now off.
+has_pooled <- length(pooled_rank_files) > 0 &&
+    isTRUE(((prot_cfg$pathway %||% list())$pooled_ranking %||% list())$enabled)
+pooled_info <- if (has_pooled) pooled_ranking_run_info(pooled_dir) else NULL
 pooled_fgsea_files <- if (has_pooled) list.files(pooled_dir, pattern = "^pathway_.*_fgsea\\.csv$", full.names = TRUE) else character(0)
 pooled_cam_files <- if (has_pooled) list.files(pooled_dir, pattern = "^pathway_.*_camerapr\\.csv$", full.names = TRUE) else character(0)
-pooled_pathway_pngs <- if (dir.exists(pooled_plot_dir)) list.files(pooled_plot_dir, pattern = "^pathway_.*\\.png$", full.names = TRUE) else character(0)
+pooled_pathway_pngs <- if (has_pooled && dir.exists(pooled_plot_dir)) list.files(pooled_plot_dir, pattern = "^pathway_.*\\.png$", full.names = TRUE) else character(0)
 ```
 
 ```{r pooled-skip, eval=!has_pooled, results='asis'}
@@ -3756,16 +3760,25 @@ cat("The pooled-ranking enrichment did not run for this report. It runs when `pa
 ```
 
 ```{r pooled-explanation, eval=has_pooled, results='asis'}
+.pooled_one_draw <- isTRUE(pooled_info$m == 1)
 cat(paste0(
     "This section is a separate analysis from the enrichment above, which it does not change. ",
-    "limma was fitted separately to each imputation draw. For each protein the coefficients were ",
-    "averaged and the variances combined across imputation draws with Rubin's rules (within-draw ",
-    "moderated variance plus (1 + 1/m) times the between-draw variance), with Barnard-Rubin degrees ",
-    "of freedom, and the pooled t-statistic was converted to a z-score. Proteins were collapsed to ",
-    "one per gene, keeping the protein with the most observed values and then the highest average ",
-    "expression. The ranking is the pooled z-score for both methods below.\n\n"))
+    if (.pooled_one_draw) {
+        paste0("limma was fitted to the single imputation draw and its moderated t-statistic ",
+               "was converted to a z-score; with one draw there is no between-draw variance ",
+               "to combine. ")
+    } else {
+        paste0("limma was fitted separately to each imputation draw. For each protein the coefficients were ",
+               "averaged and the variances combined across imputation draws with Rubin's rules (within-draw ",
+               "moderated variance plus (1 + 1/m) times the between-draw variance), with Barnard-Rubin degrees ",
+               "of freedom, and the pooled t-statistic was converted to a z-score. ")
+    },
+    pooled_ranking_collapse_text(pooled_info$collapsed),
+    " The ranking is this z-score for both methods below.\n\n"))
 .pooled_imp <- prot_cfg$imputation %||% list()
-if (methods_imputation_is_deterministic(.pooled_imp)) {
+if (.pooled_one_draw) {
+    cat("Results here are hypothesis-generating.\n\n")
+} else if (methods_imputation_is_deterministic(.pooled_imp)) {
     cat(paste0(
         "The configured imputation is deterministic, so the draws are identical, the between-draw ",
         "variance is zero and the ranking is the single-fit moderated statistic. Results here are ",

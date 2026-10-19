@@ -32,11 +32,13 @@ mod_proteomics_pathway_pooled <- function(de_res, pre, config, out_dir) {
     pw_cfg <- config$modes$proteomics$pathway %||% list()
     if (!isTRUE(pw_cfg$enabled) || !isTRUE((pw_cfg$pooled_ranking %||% list())$enabled)) {
         message("Pooled-ranking enrichment disabled.")
+        clear_proteomics_pooled_enrichment_dir(out_dir)
         return(NULL)
     }
     if (!identical(de_res$method, "limma")) {
         message("Pooled-ranking enrichment skipped: it needs de.method 'limma' ",
                 "(this run used '", de_res$method %||% "unknown", "').")
+        clear_proteomics_pooled_enrichment_dir(out_dir)
         return(NULL)
     }
     run_proteomics_pooled_enrichment(de_res, pre, config, out_dir)
