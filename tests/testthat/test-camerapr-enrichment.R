@@ -82,6 +82,12 @@ test_that("an invalid inter-gene correlation is rejected", {
     expect_error(run_camerapr(c(ranks, f = NA), sets), "must be finite")
 })
 
+test_that("a set member missing from the ranks is an error, not an NA p-value", {
+    ranks <- setNames(c(5, 4, 3, -1, -2), letters[1:5])
+    expect_error(run_camerapr(ranks, list(s = c("a", "b", "zz"))),
+                 "every set member must be in names\\(ranks\\)")
+})
+
 test_that("method = 'both' keeps its meaning and adds no cameraPR table", {
     skip_if_not_installed("fgsea")
     fx <- camera_fixture()

@@ -932,6 +932,12 @@ run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) 
     if (length(sets) == 0 || length(ranks) < 3L) return(empty)
 
     index <- lapply(sets, function(s) unique(match(s, names(ranks))))
+    # cameraPR does not reject an NA index; it returns an NA p-value for the
+    # set, which would pass through to the table unnoticed.
+    if (any(vapply(index, anyNA, logical(1)))) {
+        stop("run_camerapr(): every set member must be in names(ranks); filter the ",
+             "sets with .filter_sets_to_ranks() first.", call. = FALSE)
+    }
     tab <- limma::cameraPR(ranks, index, use.ranks = use_ranks,
                            inter.gene.cor = inter_gene_cor, sort = FALSE)
     out <- data.frame(
