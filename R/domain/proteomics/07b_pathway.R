@@ -104,7 +104,9 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
 #' lowest adjusted p-value; \code{"observed"} keeps the protein with the most
 #' observed (pre-imputation) values, then the highest average expression, which
 #' needs \code{n_observed} and \code{AveExpr} columns and is what the
-#' pooled-ranking enrichment uses.
+#' pooled-ranking enrichment uses. Under "observed", a protein with a finite
+#' \code{stat} is preferred over one without, so a gene is not dropped from the
+#' ranking when another of its proteins has a usable statistic.
 #'
 #' @param de_table  DE table with FeatureID column
 #' @param summary_df Original summary data.frame with Genes column
@@ -144,7 +146,8 @@ map_proteins_to_gene_symbols <- function(de_table, summary_df, config,
     # Remove duplicates (keep one protein per gene symbol, chosen by priority)
     ord <- switch(priority,
         padj     = order(de_table$padj, na.last = TRUE),
-        observed = order(-de_table$n_observed, -de_table$AveExpr, na.last = TRUE)
+        observed = order(if (is.null(de_table$stat)) logical(nrow(de_table)) else !is.finite(de_table$stat),
+                         -de_table$n_observed, -de_table$AveExpr, na.last = TRUE)
     )
     de_table <- de_table[ord, ]
     de_table <- de_table[!duplicated(de_table$FeatureID), ]

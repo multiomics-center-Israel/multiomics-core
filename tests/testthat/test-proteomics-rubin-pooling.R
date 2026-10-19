@@ -173,6 +173,20 @@ test_that("the collapse keeps the legacy padj rule by default and most-observed 
     expect_equal(tie$ProteinID[tie$FeatureID == "GA"], "p2")
 })
 
+test_that("the observed collapse prefers a protein with a finite statistic", {
+    cfg <- list(modes = list(proteomics = list(de_table = list(id_col = "FeatureID"))))
+    ann <- data.frame(FeatureID = c("p1", "p2", "p3"), Genes = c("GA", "GA", "GB"),
+                      stringsAsFactors = FALSE)
+    tbl <- data.frame(FeatureID = c("p1", "p2", "p3"), stat = c(NA, 1.5, NaN),
+                      n_observed = c(6L, 3L, 5L), AveExpr = c(18, 22, 20),
+                      stringsAsFactors = FALSE)
+    obs <- map_proteins_to_gene_symbols(tbl, ann, cfg, priority = "observed")
+    # p1 has more observed values but no z; the gene keeps p2.
+    expect_equal(obs$ProteinID[obs$FeatureID == "GA"], "p2")
+    # A gene whose only protein has no z is still kept, as before.
+    expect_equal(obs$ProteinID[obs$FeatureID == "GB"], "p3")
+})
+
 test_that("build_pooled_ranking_tables ranks on z_pooled and collapses per gene", {
     toy <- make_toy_runs(m = 3)
     cfg <- list(modes = list(proteomics = list(de_table = list(id_col = "FeatureID"))))
