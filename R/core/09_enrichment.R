@@ -905,15 +905,18 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #' @param ranks Named numeric vector of finite ranking statistics (one per gene).
 #' @param sets Named list of character vectors, already restricted to
 #'   \code{names(ranks)} (see \code{.filter_sets_to_ranks()}).
-#' @param inter_gene_cor Assumed inter-gene correlation, strictly between -1 and 1.
+#' @param inter_gene_cor Assumed inter-gene correlation, at least 0 and below 1.
+#'   Negative values are rejected: cameraPR's variance inflation factor
+#'   1 + rho * (n - 1) is negative for sets larger than 1 - 1/rho, which
+#'   gives NaN p-values.
 #' @param use_ranks Logical; use the rank-based version of the test.
 #' @return data.frame with \code{pathway}, \code{NGenes}, \code{Direction},
 #'   \code{PValue}, \code{FDR} and \code{inter_gene_cor}, ordered by
 #'   \code{PValue}. Zero rows when there is nothing to test.
 run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) {
     if (!is.numeric(inter_gene_cor) || length(inter_gene_cor) != 1L ||
-        !is.finite(inter_gene_cor) || abs(inter_gene_cor) >= 1) {
-        stop("run_camerapr(): inter_gene_cor must be one number strictly between -1 and 1.",
+        !is.finite(inter_gene_cor) || inter_gene_cor < 0 || inter_gene_cor >= 1) {
+        stop("run_camerapr(): inter_gene_cor must be one number in [0, 1).",
              call. = FALSE)
     }
     if (!is.logical(use_ranks) || length(use_ranks) != 1L || is.na(use_ranks)) {

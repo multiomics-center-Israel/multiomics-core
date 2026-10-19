@@ -273,7 +273,7 @@ modes:
       pooled_ranking:
         enabled: false
         camerapr:
-          inter_gene_cor: 0.01  # assumed inter-gene correlation, strictly between -1 and 1
+          inter_gene_cor: 0.01  # assumed inter-gene correlation, in [0, 1)
           use_ranks: false      # rank-based cameraPR
 
     # --------------------------------------------------------

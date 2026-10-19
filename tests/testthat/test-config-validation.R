@@ -147,7 +147,7 @@ test_that("validate_proteomics_config accepts the pooled_ranking block", {
         camerapr = list(inter_gene_cor = 0.01, use_ranks = FALSE)
     )
     expect_true(validate_proteomics_config(cfg))
-    cfg$pathway$pooled_ranking$camerapr$inter_gene_cor <- -0.5
+    cfg$pathway$pooled_ranking$camerapr$inter_gene_cor <- 0
     expect_true(validate_proteomics_config(cfg))
 })
 
@@ -157,7 +157,7 @@ test_that("validate_proteomics_config rejects invalid pooled_ranking settings", 
         enabled = TRUE,
         camerapr = list(inter_gene_cor = 0.01, use_ranks = FALSE)
     )
-    for (rho in list(1, -1, 1.2, NA_real_, "0.01", c(0.01, 0.02))) {
+    for (rho in list(1, -1, -0.01, 1.2, NA_real_, "0.01", c(0.01, 0.02))) {
         cfg <- base
         cfg$pathway$pooled_ranking$camerapr$inter_gene_cor <- rho
         expect_error(validate_proteomics_config(cfg), "inter_gene_cor")

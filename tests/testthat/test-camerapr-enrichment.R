@@ -74,10 +74,11 @@ test_that("cameraPR reports an FDR for a single set", {
 test_that("an invalid inter-gene correlation is rejected", {
     ranks <- setNames(c(5, 4, 3, -1, -2), letters[1:5])
     sets <- list(s = c("a", "b"))
-    expect_error(run_camerapr(ranks, sets, inter_gene_cor = 1), "strictly between -1 and 1")
-    expect_error(run_camerapr(ranks, sets, inter_gene_cor = -1.5), "strictly between -1 and 1")
-    expect_error(run_camerapr(ranks, sets, inter_gene_cor = NA_real_), "strictly between -1 and 1")
-    expect_error(run_camerapr(ranks, sets, inter_gene_cor = c(0.1, 0.2)), "strictly between -1 and 1")
+    expect_error(run_camerapr(ranks, sets, inter_gene_cor = 1), "in \\[0, 1\\)")
+    expect_error(run_camerapr(ranks, sets, inter_gene_cor = -1.5), "in \\[0, 1\\)")
+    expect_error(run_camerapr(ranks, sets, inter_gene_cor = -0.01), "in \\[0, 1\\)")
+    expect_error(run_camerapr(ranks, sets, inter_gene_cor = NA_real_), "in \\[0, 1\\)")
+    expect_error(run_camerapr(ranks, sets, inter_gene_cor = c(0.1, 0.2)), "in \\[0, 1\\)")
     expect_error(run_camerapr(c(ranks, f = NA), sets), "must be finite")
 })
 

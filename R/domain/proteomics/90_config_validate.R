@@ -198,9 +198,9 @@ validate_proteomics_config <- function(cfg) {
                 assert_named_list(cam, "pathway$pooled_ranking$camerapr")
                 rho <- cam$inter_gene_cor
                 if (!is.null(rho) &&
-                    (!is.numeric(rho) || length(rho) != 1L || is.na(rho) || abs(rho) >= 1)) {
+                    (!is.numeric(rho) || length(rho) != 1L || is.na(rho) || rho < 0 || rho >= 1)) {
                     stop("'pathway$pooled_ranking$camerapr$inter_gene_cor' must be one number ",
-                         "strictly between -1 and 1 (default 0.01)", call. = FALSE)
+                         "in [0, 1) (default 0.01)", call. = FALSE)
                 }
                 assert_scalar_bool(cam$use_ranks, "pathway$pooled_ranking$camerapr$use_ranks",
                                    allow_null = TRUE)
