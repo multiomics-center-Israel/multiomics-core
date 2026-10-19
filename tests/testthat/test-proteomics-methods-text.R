@@ -1223,6 +1223,9 @@ test_that("the report's pooled section keeps to the agreed wording", {
     expect_match(sec, "pooled_ranking_collapse_text(pooled_info$collapsed)", fixed = TRUE)
     expect_match(sec, "$pooled_ranking %||% list())$enabled", fixed = TRUE)
     expect_false(grepl("Proteins were collapsed to \"", sec, fixed = TRUE))
+    # Sub-headings are printed by the gated chunks, so none shows when the
+    # section did not run.
+    expect_false(any(grepl("^## ", rmd[start:(end - 1)])))
     # No bold emphasis inside this section's prose.
     expect_false(grepl("\\*\\*", sec))
 })

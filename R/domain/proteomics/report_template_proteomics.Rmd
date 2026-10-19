@@ -3795,15 +3795,18 @@ if (.pooled_one_draw) {
             "random draws"
         }))
 }
+# Name only the files this run wrote.
+.pooled_src <- c("pooled_ranking&#95;&lt;contrast&gt;.csv",
+                 if (length(pooled_fgsea_files) > 0) "pathway&#95;&lt;contrast&gt;&#95;&lt;database&gt;&#95;fgsea.csv",
+                 if (length(pooled_cam_files) > 0) "pathway&#95;&lt;contrast&gt;&#95;&lt;database&gt;&#95;camerapr.csv")
 cat(paste0(
-    "<p style='font-size: 0.9em; color: #555;'><em>Source: Enrichment/pooled_ranking/ ",
-    "(pooled_ranking_&lt;contrast&gt;.csv, pathway_&lt;contrast&gt;_&lt;database&gt;_fgsea.csv, ",
-    "pathway_&lt;contrast&gt;_&lt;database&gt;_camerapr.csv).</em></p>\n\n"))
+    "<p style='font-size: 0.9em; color: #555;'><em>Source: Enrichment/pooled_ranking/ (",
+    paste(.pooled_src, collapse = ", "), ").</em></p>\n\n"))
 ```
 
-## Pooled Ranking Diagnostics {.tabset}
-
 ```{r pooled-diagnostics, eval=has_pooled, results='asis'}
+# Heading printed here, not as markdown, so it is absent when the section did not run.
+cat("\n## Pooled Ranking Diagnostics {.tabset}\n\n")
 for (rf in pooled_rank_files) {
     label_raw <- gsub("^pooled_ranking_|\\.csv$", "", basename(rf))
     cat(sprintf("\n### %s\n\n", gsub("_", " ", label_raw)))
@@ -3823,10 +3826,10 @@ for (rf in pooled_rank_files) {
 }
 ```
 
-## fgsea (pooled ranking) {.tabset}
-
 ```{r pooled-fgsea, eval=has_pooled, results='asis'}
-cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: fgsea on the pooled ranking. Gene sets with padj &lt; 0.05 are shown. Source: pathway_&lt;contrast&gt;_&lt;database&gt;_fgsea.csv in Enrichment/pooled_ranking/.</em></p>\n")
+# Heading printed here, not as markdown, so it is absent when the section did not run.
+cat("\n## fgsea (pooled ranking) {.tabset}\n\n")
+if (length(pooled_fgsea_files) > 0) cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: fgsea on the pooled ranking. Gene sets with padj &lt; 0.05 are shown. Source: pathway&#95;&lt;contrast&gt;&#95;&lt;database&gt;&#95;fgsea.csv in Enrichment/pooled_ranking/.</em></p>\n")
 if (length(pooled_fgsea_files) == 0) {
     cat("No fgsea tables were written for the pooled ranking.\n\n")
 }
@@ -3847,10 +3850,10 @@ for (ff in pooled_fgsea_files) {
 }
 ```
 
-## cameraPR (pooled ranking) {.tabset}
-
 ```{r pooled-camerapr, eval=has_pooled, results='asis'}
-cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: cameraPR on the pooled ranking, on the same gene sets as the fgsea tables. Gene sets with FDR &lt; 0.05 are shown. Source: pathway_&lt;contrast&gt;_&lt;database&gt;_camerapr.csv in Enrichment/pooled_ranking/.</em></p>\n")
+# Heading printed here, not as markdown, so it is absent when the section did not run.
+cat("\n## cameraPR (pooled ranking) {.tabset}\n\n")
+if (length(pooled_cam_files) > 0) cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: cameraPR on the pooled ranking, on the same gene sets as the fgsea tables. Gene sets with FDR &lt; 0.05 are shown. Source: pathway&#95;&lt;contrast&gt;&#95;&lt;database&gt;&#95;camerapr.csv in Enrichment/pooled_ranking/.</em></p>\n")
 if (length(pooled_cam_files) == 0) {
     cat("No cameraPR tables were written for the pooled ranking.\n\n")
 }
@@ -3871,9 +3874,9 @@ for (cf in pooled_cam_files) {
 }
 ```
 
-## Pooled-ranking Dotplots {.tabset}
-
 ```{r pooled-dotplots, eval=has_pooled, results='asis'}
+# Heading printed here, not as markdown, so it is absent when the section did not run.
+cat("\n## Pooled-ranking Dotplots {.tabset}\n\n")
 if (length(pooled_pathway_pngs) == 0) {
     cat("No dotplots were written for the pooled ranking.\n\n")
 }
