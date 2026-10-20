@@ -294,7 +294,8 @@ modes:
       gsea_engine: "fgsea"
       # GSEA engine for the offline workflow (annotation_dir set).
       # "fgsea" (default): the same fgsea call as the online workflow and the
-      #   proteomics pipeline; gene-set size limits from gsea.min_size/max_size,
+      #   proteomics pipeline; gene-set size limits from gsea.min_size/max_size
+      #   (default: min 4, no upper limit, as in earlier offline runs),
       #   seeded from params.seed, all tested gene sets kept. Also writes
       #   Enrichment/pathway_<contrast>_<db>_fgsea.csv (pval_with_direction ranking).
       # "clusterProfiler": the earlier clusterProfiler::GSEA call (min set size 4,
@@ -334,10 +335,13 @@ modes:
         # Generate per-pathway GSEA plots and detailed core-gene tables.
         # (Back-compat: the old flat key gsea_per_pathway_artifacts is still honored.)
 
-        min_size: 10
-        max_size: 500
-        # Gene-set size limits for fgsea (genes of the set present in the ranking).
-        # Used by the online workflow too; ignored by gsea_engine "clusterProfiler".
+        # min_size: 4
+        # max_size: 500
+        # Optional gene-set size limits for fgsea (genes of the set present in the
+        # ranking). Unset, they keep the limits of earlier offline runs: min 4 and
+        # no upper limit (the number of unique genes in each TERM2GENE table).
+        # Offline workflow only (the online workflow uses pathway.min_size/max_size);
+        # ignored by gsea_engine "clusterProfiler".
 
 params:
   seed: 1

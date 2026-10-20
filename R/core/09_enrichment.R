@@ -2548,12 +2548,13 @@ write_ora_unit_tree <- function(ora_result, ora_root, db_name, collection, round
 #' @param pAdjustMethod P-value adjustment method (clusterProfiler engine only).
 #' @param engine "fgsea" or "clusterProfiler".
 #' @param min_size Minimum gene-set size (fgsea engine only).
-#' @param max_size Maximum gene-set size (fgsea engine only).
+#' @param max_size Maximum gene-set size (fgsea engine only), used when the job
+#'   carries no `max_size` of its own.
 #' @param seed Integer seed passed to run_fgsea_core() (fgsea engine only).
 #' @return A function(job) -> list(ranking_method, contrast, db_name, gsea_result).
 #' @noRd
 .make_gsea_worker <- function(pvalueCutoff, pAdjustMethod, engine = "fgsea",
-                              min_size = 10, max_size = 500, seed = 1L) {
+                              min_size = 4, max_size = 500, seed = 1L) {
     force(pvalueCutoff); force(pAdjustMethod); force(engine)
     force(min_size); force(max_size); force(seed)
     function(job) {
@@ -2563,7 +2564,7 @@ write_ora_unit_tree <- function(ora_result, ora_root, db_name, collection, round
                     ranks     = job$ranked,
                     gene_sets = job$gene_sets,
                     min_size  = min_size,
-                    max_size  = max_size,
+                    max_size  = job$max_size %||% max_size,
                     seed      = seed,
                     # Serial inside each job; see the clusterProfiler branch.
                     bpparam   = BiocParallel::SerialParam()
@@ -2740,7 +2741,9 @@ write_ora_unit_tree <- function(ora_result, ora_root, db_name, collection, round
 #'   per-pathway tables and heatmaps (serial stage only).
 #' @param seed Integer seed: the per-job RNG streams, and fgsea's own seed.
 #' @param engine "fgsea" or "clusterProfiler" (see resolve_rna_gsea_settings()).
-#' @param min_size,max_size Gene-set size limits for the fgsea engine.
+#' @param min_size,max_size Gene-set size limits for the fgsea engine. The
+#'   defaults are those of the earlier offline runs: 4, and NULL, which means
+#'   the number of unique genes in each database's TERM2GENE table.
 #' @param primary_ranking Ranking stored under `<db>_fgsea` (fgsea engine).
 #' @return Nested list compatible with downstream consumers:
 #'   contrast -> db_method_key -> data.frame with padj, NES, etc.
@@ -2761,8 +2764,8 @@ run_gsea_all <- function(ranked_genes,
                          annotation_col = NULL,
                          seed = 1L,
                          engine = "fgsea",
-                         min_size = 10,
-                         max_size = 500,
+                         min_size = 4,
+                         max_size = NULL,
                          primary_ranking = "pval_with_direction") {
 
     engine <- match.arg(engine, c("fgsea", "clusterProfiler"))
@@ -2805,6 +2808,10 @@ run_gsea_all <- function(ranked_genes,
                 )
                 if (use_fgsea) {
                     job$gene_sets <- gene_sets_by_db[[db_name]]
+                    # NULL keeps the earlier offline limit: every annotated
+                    # gene of this database, as the clusterProfiler engine does.
+                    job$max_size  <- max_size %||%
+                        length(unique(local_tables[[db_name]]$TERM2GENE[, 2]))
                 } else {
                     job$term2gene <- local_tables[[db_name]]$TERM2GENE
                     job$term2name <- local_tables[[db_name]]$TERM2NAME

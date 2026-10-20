@@ -119,29 +119,30 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
 
 #' Resolve the RNA GSEA settings
 #'
-#' The one reader of the RNA GSEA engine, gene-set size limits and seed; the
-#' online and offline enrichment paths both call it.
+#' The one reader of the offline RNA GSEA engine and gene-set size limits, and
+#' of the enrichment seed, which the online path also takes from here. The
+#' online path keeps its own size limits (`modes.rna.pathway.min_size` /
+#' `max_size`, default 10 / 500), read where it calls run_pathway_analysis().
 #'
 #' - `engine`: `modes.rna.enrichment.gsea_engine`, default "fgsea". "fgsea"
 #'   runs the shared fgsea call (run_fgsea_core()) and keeps every tested set;
 #'   "clusterProfiler" reproduces earlier offline runs (clusterProfiler::GSEA,
-#'   minGSSize 4, maxGSSize = all annotated genes, non-significant sets
-#'   dropped). Only the offline path has a choice; the online path always
-#'   uses fgsea.
+#'   non-significant sets dropped).
 #' - `min_size` / `max_size`: `modes.rna.enrichment.gsea.min_size` /
-#'   `max_size`, falling back to the online path's `modes.rna.pathway.min_size`
-#'   / `max_size`, then 10 / 500. Ignored by the clusterProfiler engine.
+#'   `max_size`, defaulting to the limits of the earlier offline runs: 4, and
+#'   NULL, which run_gsea_all() reads as the number of unique genes in each
+#'   database's TERM2GENE table (no upper limit in practice). The
+#'   clusterProfiler engine always uses those defaults.
 #' - `seed`: `params.seed`, default 1.
 #'
 #' @param config Full pipeline config.
-#' @return list(engine, min_size, max_size, seed).
+#' @return list(engine, min_size, max_size, seed); `max_size` may be NULL.
 resolve_rna_gsea_settings <- function(config) {
   rna  <- config$modes$rna %||% list()
   enr  <- rna$enrichment %||% list()
   # [[ ]] not $: enr$gsea would partially match enr$gsea_engine when the
   # gsea block is absent and hand back the engine string.
   gsea <- enr[["gsea", exact = TRUE]] %||% list()
-  pw   <- rna[["pathway", exact = TRUE]] %||% list()
 
   engine <- enr$gsea_engine %||% "fgsea"
   # Case-insensitive, as validate_rna_config() accepts it.
@@ -157,8 +158,8 @@ resolve_rna_gsea_settings <- function(config) {
 
   list(
     engine   = engine,
-    min_size = gsea$min_size %||% pw$min_size %||% 10,
-    max_size = gsea$max_size %||% pw$max_size %||% 500,
+    min_size = gsea$min_size %||% 4,
+    max_size = gsea$max_size,
     seed     = config$params$seed %||% 1L
   )
 }
