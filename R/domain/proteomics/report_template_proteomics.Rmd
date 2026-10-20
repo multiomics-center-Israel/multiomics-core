@@ -3896,9 +3896,8 @@ for (pp in pooled_pathway_pngs) {
 cat("### What each method tests\n\n")
 cat(paste0(
     "fgsea asks whether a set's members sit towards the top or the bottom of the ranking, using a ",
-    "running-sum enrichment score normalised against random sets of the same size (NES). cameraPR ",
-    "compares the mean ranking statistic of a set's members with that of the other genes, with a ",
-    "two-sample test whose variance allows for an assumed inter-gene correlation. The two methods test ",
+    "running-sum enrichment score normalised against random sets of the same size (NES). ",
+    camerapr_test_description(pooled_camerapr_use_ranks(pooled_dir)), " The two methods test ",
     "different null hypotheses. NES values and cameraPR statistics or p-values are not comparable, and ",
     "agreement or disagreement between the two tables is descriptive.\n\n"))
 ```

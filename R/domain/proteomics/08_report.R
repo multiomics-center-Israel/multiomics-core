@@ -533,6 +533,41 @@ methods_pooled_ranking_text <- function(pooled_dir, imp_cfg) {
     methods_pooled_enrichment_sentences(pooled_dir, txt)
 }
 
+#' Whether the pooled cameraPR tables were written by the rank-based test
+#'
+#' Read from the written tables (the \code{use_ranks} column), like the
+#' inter-gene correlation, so the text describes the run that wrote them.
+#'
+#' @param pooled_dir Directory of the pooled-ranking enrichment.
+#' @return TRUE, FALSE, or NA when no table records it.
+pooled_camerapr_use_ranks <- function(pooled_dir) {
+    cam_files <- list.files(pooled_dir, pattern = "^pathway_.*_camerapr\\.csv$", full.names = TRUE)
+    if (length(cam_files) == 0) return(NA)
+    v <- tryCatch(as.logical(utils::read.csv(cam_files[1], nrows = 1)$use_ranks),
+                  error = function(e) NULL)
+    if (length(v) == 1 && !is.na(v)) v else NA
+}
+
+#' Reader-facing sentence on what cameraPR compares
+#'
+#' @param use_ranks TRUE, FALSE or NA, from pooled_camerapr_use_ranks().
+#' @return One sentence.
+camerapr_test_description <- function(use_ranks) {
+    if (isTRUE(use_ranks)) {
+        paste0("cameraPR, in its rank-based version (use.ranks = TRUE), compares the ranks of ",
+               "a set's members in the ranking with those of the other genes, with a test whose ",
+               "variance allows for an assumed inter-gene correlation.")
+    } else if (isFALSE(use_ranks)) {
+        paste0("cameraPR compares the mean ranking statistic of a set's members with that of ",
+               "the other genes, with a two-sample test whose variance allows for an assumed ",
+               "inter-gene correlation.")
+    } else {
+        paste0("cameraPR compares a set's members with the other genes in the ranking, with a ",
+               "test whose variance allows for an assumed inter-gene correlation; the tables do ",
+               "not record whether its rank-based version was used.")
+    }
+}
+
 #' Append the fgsea and cameraPR sentences for the pooled ranking
 #'
 #' @param pooled_dir Directory of the pooled-ranking enrichment.
@@ -547,8 +582,10 @@ methods_pooled_enrichment_sentences <- function(pooled_dir, txt) {
     if (length(cam_files) > 0) {
         rho <- tryCatch(utils::read.csv(cam_files[1], nrows = 1)$inter_gene_cor,
                         error = function(e) NULL)
+        use_ranks <- pooled_camerapr_use_ranks(pooled_dir)
         txt <- paste(txt, sprintf(paste0(
-            "The cameraPR test from limma was run on the same ranking and the same filtered gene sets%s."),
+            "The cameraPR test from limma was run%s on the same ranking and the same filtered gene sets%s."),
+            if (isTRUE(use_ranks)) " in its rank-based version (use.ranks = TRUE)" else "",
             if (length(rho) == 1 && is.finite(rho)) {
                 sprintf(", with an assumed inter-gene correlation of %s", format(rho))
             } else ""))

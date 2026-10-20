@@ -1117,7 +1117,9 @@ test_that("the complete-case claim needs the PCA section, not just the file", {
 # with only the files named. Values are synthetic.
 # collapsed = NULL writes a table without the collapsed_to_gene column, as
 # tables written before that column existed.
-pooled_dir_with <- function(dir, m = 5, fgsea = TRUE, camerapr = TRUE, collapsed = TRUE) {
+# use_ranks = NULL writes a cameraPR table without the use_ranks column.
+pooled_dir_with <- function(dir, m = 5, fgsea = TRUE, camerapr = TRUE, collapsed = TRUE,
+                            use_ranks = FALSE) {
     d <- file.path(dir, "Enrichment", "pooled_ranking")
     dir.create(d, recursive = TRUE)
     tbl <- data.frame(FeatureID = "G1", m = m, z_pooled = 1.2)
@@ -1125,8 +1127,11 @@ pooled_dir_with <- function(dir, m = 5, fgsea = TRUE, camerapr = TRUE, collapsed
     utils::write.csv(tbl, file.path(d, "pooled_ranking_A_vs_B.csv"), row.names = FALSE)
     if (fgsea) utils::write.csv(data.frame(pathway = "S1", NES = 1.1),
                                 file.path(d, "pathway_A_vs_B_DB_fgsea.csv"), row.names = FALSE)
-    if (camerapr) utils::write.csv(data.frame(pathway = "S1", PValue = 0.2, inter_gene_cor = 0.01),
-                                   file.path(d, "pathway_A_vs_B_DB_camerapr.csv"), row.names = FALSE)
+    if (camerapr) {
+        cam <- data.frame(pathway = "S1", PValue = 0.2, inter_gene_cor = 0.01)
+        if (!is.null(use_ranks)) cam$use_ranks <- use_ranks
+        utils::write.csv(cam, file.path(d, "pathway_A_vs_B_DB_camerapr.csv"), row.names = FALSE)
+    }
     d
 }
 
@@ -1154,6 +1159,25 @@ test_that("the pooled-ranking sentences need both its files and the flag", {
     expect_match(txt, "each of the 5 imputation draws", fixed = TRUE)
     expect_match(txt, "(fgsea)", fixed = TRUE)
     expect_match(txt, "inter-gene correlation of 0.01", fixed = TRUE)
+})
+
+test_that("the cameraPR text follows the use_ranks the tables record", {
+    by_rank <- pooled_dir_with(withr::local_tempdir(), use_ranks = TRUE)
+    txt <- pooled_downstream(by_rank)
+    expect_match(txt, "rank-based version (use.ranks = TRUE)", fixed = TRUE)
+    expect_equal(pooled_camerapr_use_ranks(by_rank), TRUE)
+    expect_match(camerapr_test_description(TRUE), "compares the ranks", fixed = TRUE)
+    expect_false(grepl("mean ranking statistic", camerapr_test_description(TRUE), fixed = TRUE))
+
+    by_value <- pooled_dir_with(withr::local_tempdir(), use_ranks = FALSE)
+    txt <- pooled_downstream(by_value)
+    expect_false(grepl("rank-based", txt, fixed = TRUE))
+    expect_match(camerapr_test_description(FALSE), "mean ranking statistic", fixed = TRUE)
+
+    unknown <- pooled_dir_with(withr::local_tempdir(), use_ranks = NULL)
+    expect_true(is.na(pooled_camerapr_use_ranks(unknown)))
+    expect_false(grepl("rank-based version \\(", pooled_downstream(unknown)))
+    expect_match(camerapr_test_description(NA), "do not record", fixed = TRUE)
 })
 
 test_that("each method is named only when its tables exist", {

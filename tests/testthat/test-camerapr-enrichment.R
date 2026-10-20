@@ -35,8 +35,9 @@ test_that("fgsea and cameraPR test identical sets with identical sizes", {
     m <- match(fg$pathway, cam$pathway)
     expect_equal(as.integer(fg$size), cam$NGenes[m])
     expect_setequal(cam$pathway, c("UP_SET", "MIXED", "EDGE_MIN"))
-    expect_true(all(c("pathway", "NGenes", "Direction", "PValue", "FDR", "inter_gene_cor")
-                    %in% names(cam)))
+    expect_true(all(c("pathway", "NGenes", "Direction", "PValue", "FDR", "inter_gene_cor",
+                      "use_ranks") %in% names(cam)))
+    expect_true(all(cam$use_ranks == FALSE))
     expect_equal(cam$Direction[cam$pathway == "UP_SET"], "Up")
 })
 

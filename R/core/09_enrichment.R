@@ -921,8 +921,10 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #'   gives NaN p-values.
 #' @param use_ranks Logical; use the rank-based version of the test.
 #' @return data.frame with \code{pathway}, \code{NGenes}, \code{Direction},
-#'   \code{PValue}, \code{FDR} and \code{inter_gene_cor}, ordered by
-#'   \code{PValue}. Zero rows when there is nothing to test.
+#'   \code{PValue}, \code{FDR}, \code{inter_gene_cor} and \code{use_ranks},
+#'   ordered by \code{PValue}. Zero rows when there is nothing to test. The two
+#'   settings are written into every row so the report can describe the test
+#'   that produced the table.
 run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) {
     if (!is.numeric(inter_gene_cor) || length(inter_gene_cor) != 1L ||
         !is.finite(inter_gene_cor) || inter_gene_cor < 0 || inter_gene_cor >= 1) {
@@ -938,7 +940,8 @@ run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) 
     }
     empty <- data.frame(pathway = character(0), NGenes = integer(0),
                         Direction = character(0), PValue = numeric(0), FDR = numeric(0),
-                        inter_gene_cor = numeric(0), stringsAsFactors = FALSE)
+                        inter_gene_cor = numeric(0), use_ranks = logical(0),
+                        stringsAsFactors = FALSE)
     if (length(sets) == 0 || length(ranks) < 3L) return(empty)
 
     index <- lapply(sets, function(s) unique(match(s, names(ranks))))
@@ -964,6 +967,7 @@ run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) 
         PValue         = tab$PValue,
         FDR            = stats::p.adjust(tab$PValue, method = "BH"),
         inter_gene_cor = inter_gene_cor,
+        use_ranks      = use_ranks,
         stringsAsFactors = FALSE
     )
     out <- out[order(out$PValue), , drop = FALSE]
