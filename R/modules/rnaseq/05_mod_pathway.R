@@ -73,6 +73,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     pw_cfg  <- rna_cfg$pathway
     enr_cfg <- rna_cfg$enrichment %||% list()
 
+    # The report reads this manifest as the record that offline enrichment ran;
+    # one left by an earlier run must not outlive a run that disables, skips or
+    # reroutes enrichment. Only .run_local_enrichment() writes it again.
+    unlink(file.path(out_dir, "Enrichment", "enrichment_manifest.csv"))
+
     # Decide whether to run enrichment. Skip when either switch is explicitly
     # false (`pathway.enabled: false` or `enrichment.enabled: false`), OR when the
     # config omits BOTH blocks entirely — a legacy/minimal RNA config never ran
@@ -697,6 +702,13 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         ora_manifest, gsea_out$manifest %||% .empty_enrichment_manifest())
     enrichment_index <- rbind(
         ora_index, gsea_out$index %||% .empty_enrichment_index())
+
+    # On disk for the RNA report: it is the record that the analysis ran,
+    # including units that were evaluated with nothing significant or wrote no
+    # table, which the result files alone cannot show.
+    dir.create(enrich_dir, recursive = TRUE, showWarnings = FALSE)
+    write.csv(enrichment_manifest, file.path(enrich_dir, "enrichment_manifest.csv"),
+              row.names = FALSE)
 
     # Exact ranked vectors used by GSEA (shared across databases — verified in
     # run_gsea_all: job$ranked = ranked_genes[[method]][[contrast]] for every db,

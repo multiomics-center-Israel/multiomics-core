@@ -444,6 +444,65 @@ test_that(".run_local_enrichment runs with gsea_engine set and no gsea block", {
     expect_true("KEGG_fgsea" %in% names(res$pathway_results$c1))
 })
 
+test_that("offline enrichment records its manifest even when no unit has a table", {
+    skip_if_not_installed("BiocParallel")
+    # Every unit evaluates with no gene set in range, so no result table is written.
+    local_global_stub("run_fgsea_core", function(...) data.frame())
+    fx <- make_flat_fixture()
+    run_flat_fixture(fx)
+
+    f <- file.path(fx$out_dir, "Enrichment", "enrichment_manifest.csv")
+    expect_true(file.exists(f))
+    m <- read.csv(f, stringsAsFactors = FALSE)
+    expect_gt(nrow(m), 0)
+    expect_true(all(m$evaluated))
+    expect_true(all(m$status == "empty"))
+    expect_length(list.files(file.path(fx$out_dir, "Enrichment"),
+                             pattern = "_fgsea\\.csv$"), 0L)
+})
+
+test_that("a stale enrichment manifest is removed when enrichment does not run", {
+    out <- withr::local_tempdir()
+    dir.create(file.path(out, "Enrichment"))
+    stale <- file.path(out, "Enrichment", "enrichment_manifest.csv")
+    writeLines("analysis,evaluated", stale)
+    cfg <- list(modes = list(rna = list(enrichment = list(enabled = FALSE))))
+    suppressMessages(mod_rnaseq_pathway(list(tables = list()), NULL, cfg, out))
+    expect_false(file.exists(stale))
+})
+
+# Run the report's pathway-setup chunk against an Enrichment directory.
+report_enrichment_gate <- function(enrich_dir) {
+    rmd <- readLines(file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd"),
+                     warn = FALSE)
+    start <- grep("^```\\{r pathway-setup\\}", rmd)
+    end   <- start + which(grepl("^```\\s*$", rmd[(start + 1):length(rmd)]))[1]
+    env <- new.env(parent = globalenv())
+    env$enrich_dir      <- enrich_dir
+    env$enrich_plot_dir <- file.path(enrich_dir, "plots")
+    env$cfg             <- list(modes = list(rna = list()))
+    eval(parse(text = rmd[(start + 1):(end - 1)]), envir = env)
+    env$has_enrichment
+}
+
+test_that("the RNA report detects an offline run that wrote no result table", {
+    d <- withr::local_tempdir()
+    expect_false(report_enrichment_gate(d))                        # nothing ran
+
+    manifest <- data.frame(analysis = "GSEA", database = "KEGG", group = "fc",
+                           item = "c1", evaluated = TRUE, status = "empty",
+                           n_significant = 0L, stringsAsFactors = FALSE)
+    write.csv(manifest, file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
+    expect_true(report_enrichment_gate(d))                         # ran, nothing significant
+
+    manifest$evaluated <- FALSE; manifest$status <- "failed"
+    write.csv(manifest, file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
+    expect_false(report_enrichment_gate(d))                        # every unit failed
+
+    writeLines("pathway,padj", file.path(d, "pathway_c1_KEGG_fgsea.csv"))
+    expect_true(report_enrichment_gate(d))                         # online flat files
+})
+
 test_that("clusterProfiler engine writes no flat fgsea file and clears an old one", {
     skip_if_not_installed("clusterProfiler")
     skip_if_not_installed("BiocParallel")
