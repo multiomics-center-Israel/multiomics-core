@@ -218,6 +218,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # 5. Run fGSEA / ORA per contrast
     # ------------------------------------------------------------------
     pw_method  <- pw_cfg$method   %||% "fgsea"
+    # The online path keeps its own size limits; enrichment.gsea.* belongs to
+    # the offline path (resolve_rna_gsea_settings()), which only supplies the seed here.
+    pw_min     <- pw_cfg$min_size %||% 10
+    pw_max     <- pw_cfg$max_size %||% 500
     gsea_set   <- resolve_rna_gsea_settings(config)
 
     # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
@@ -233,8 +237,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         gene_sets          = gene_sets,
         annotation         = annotation_df,
         method             = pw_method,
-        min_size           = gsea_set$min_size,
-        max_size           = gsea_set$max_size,
+        min_size           = pw_min,
+        max_size           = pw_max,
         seed               = gsea_set$seed,
         p_cutoff           = rna_de_cfg$p_cutoff %||% rna_de_cfg$padj_cutoff %||% 0.05,
         lfc_cutoff         = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)

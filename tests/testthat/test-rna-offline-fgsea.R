@@ -66,11 +66,12 @@ test_that("term2gene_to_gene_sets works without TERM2NAME", {
 # Settings resolver and validator
 # ---------------------------------------------------------------------------
 
-test_that("resolve_rna_gsea_settings defaults to fgsea, 10/500 and params.seed", {
+test_that("resolve_rna_gsea_settings defaults to fgsea, the earlier offline limits and params.seed", {
     s <- resolve_rna_gsea_settings(list(modes = list(rna = list())))
     expect_identical(s$engine, "fgsea")
-    expect_equal(s$min_size, 10)
-    expect_equal(s$max_size, 500)
+    expect_equal(s$min_size, 4)
+    expect_true("max_size" %in% names(s))
+    expect_null(s$max_size)          # = all annotated genes, per database
     expect_equal(s$seed, 1L)
 
     s2 <- resolve_rna_gsea_settings(list(params = list(seed = 42L),
@@ -78,13 +79,14 @@ test_that("resolve_rna_gsea_settings defaults to fgsea, 10/500 and params.seed",
     expect_equal(s2$seed, 42L)
 })
 
-test_that("resolve_rna_gsea_settings reads enrichment.gsea, then pathway, sizes", {
+test_that("resolve_rna_gsea_settings reads enrichment.gsea sizes and ignores the online pathway block", {
     cfg <- list(modes = list(rna = list(
         pathway    = list(min_size = 15, max_size = 300),
         enrichment = list(gsea_engine = "clusterProfiler"))))
     s <- resolve_rna_gsea_settings(cfg)
     expect_identical(s$engine, "clusterProfiler")
-    expect_equal(c(s$min_size, s$max_size), c(15, 300))
+    expect_equal(s$min_size, 4)
+    expect_null(s$max_size)
 
     cfg$modes$rna$enrichment$gsea <- list(min_size = 5, max_size = 200)
     s <- resolve_rna_gsea_settings(cfg)
@@ -167,12 +169,16 @@ test_that("run_fgsea_core tests an unsigned ranking with scoreType 'pos'", {
     expect_error(run_fgsea_core(pos, sets, score_type = "bad"))
 })
 
-test_that("the RNA config template declares the fgsea engine and size limits", {
+test_that("the RNA config template declares the fgsea engine and leaves the size limits at their defaults", {
     tmpl <- yaml::read_yaml(file.path(root_dir, "config", "templates", "rna_config.yaml"))
     enr <- tmpl$modes$rna$enrichment
     expect_identical(enr$gsea_engine, "fgsea")
-    expect_equal(enr$gsea$min_size, 10)
-    expect_equal(enr$gsea$max_size, 500)
+    # Set limits would override the earlier offline defaults (4 / all genes).
+    expect_null(enr$gsea$min_size)
+    expect_null(enr$gsea$max_size)
+    s <- resolve_rna_gsea_settings(tmpl)
+    expect_equal(s$min_size, 4)
+    expect_null(s$max_size)
 })
 
 # ---------------------------------------------------------------------------
@@ -198,6 +204,69 @@ test_that("run_gsea_all routes the fgsea engine through run_fgsea_core with gene
     expect_setequal(names(seen$gene_sets), c("pTOP", "pMIX", "pTINY"))
     expect_identical(seen$args, list(min_size = 3, max_size = 40, seed = 7L))
     expect_true(all(out$manifest$status == "empty"))
+})
+
+test_that("run_gsea_all defaults to min 4 and max = unique genes of each TERM2GENE", {
+    skip_if_not_installed("BiocParallel")
+    seen <- new.env()
+    seen$max <- list()
+    local_global_stub("run_fgsea_core", function(ranks, gene_sets, min_size, max_size,
+                                                 seed, n_perm_simple = 10000L,
+                                                 bpparam = NULL) {
+        seen$min <- min_size
+        seen$max[[length(seen$max) + 1]] <- max_size
+        data.frame()
+    })
+    tables <- make_fgsea_tables()
+    # A second database with a different gene count, so the limit is per database.
+    tables$GO_BP <- list(
+        TERM2GENE = data.frame(term = c("go1", "go1", "go2"),
+                               gene = c("g1", "g2", "g2"), stringsAsFactors = FALSE),
+        TERM2NAME = data.frame(term = c("go1", "go2"), name = c("A", "B"),
+                               stringsAsFactors = FALSE))
+    ranked <- list(pval_with_direction = make_fgsea_ranked()$pval_with_direction)
+
+    suppressMessages(run_gsea_all(ranked, tables, output_dir = NULL, workers = 1))
+
+    expect_equal(seen$min, 4)
+    n_kegg <- length(unique(tables$KEGG$TERM2GENE[, 2]))
+    expect_setequal(unlist(seen$max), c(n_kegg, 2L))
+
+    # An explicit max_size applies to every database.
+    seen$max <- list()
+    suppressMessages(run_gsea_all(ranked, tables, output_dir = NULL, workers = 1,
+                                  max_size = 30))
+    expect_identical(unique(unlist(seen$max)), 30)
+})
+
+test_that("the online path keeps pathway.min_size/max_size and ignores enrichment.gsea", {
+    gmt <- withr::local_tempfile(fileext = ".gmt")
+    writeLines("SET_A\tdesc A\tg1\tg2\tg3\tg4\tg5", gmt)
+    seen <- new.env()
+    local_global_stub("run_pathway_analysis", function(..., min_size, max_size) {
+        seen$sizes <- c(min_size, max_size)
+        list()
+    })
+    de_res <- list(tables = list(c1 = data.frame(
+        FeatureID = paste0("g", 1:10), log2FoldChange = seq(2, -2, length.out = 10),
+        pvalue = seq(0.001, 0.5, length.out = 10), padj = seq(0.01, 0.6, length.out = 10),
+        stringsAsFactors = FALSE)))
+    run <- function(rna) {
+        cfg <- list(modes = list(rna = rna))
+        out <- withr::local_tempdir()
+        suppressMessages(suppressWarnings(
+            mod_rnaseq_pathway(de_res, list(expr_filt = NULL, meta = NULL), cfg, out)))
+        seen$sizes
+    }
+    base <- list(annotation = list(skip_annotation = TRUE, organism = "Homo sapiens"),
+                 pathway = list(enabled = TRUE, databases = character(0), gmt_file = gmt))
+
+    expect_equal(run(base), c(10, 500))
+
+    base$pathway$min_size <- 3
+    base$pathway$max_size <- 50
+    base$enrichment <- list(gsea = list(min_size = 99, max_size = 999))
+    expect_equal(run(base), c(3, 50))
 })
 
 test_that("engine = 'clusterProfiler' routes to clusterProfiler::GSEA on TERM2GENE", {
