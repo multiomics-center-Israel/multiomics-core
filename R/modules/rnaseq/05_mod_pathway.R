@@ -372,7 +372,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     }
 
     enrich_dir  <- file.path(out_dir, "Enrichment")
-    pval_cutoff <- enr_cfg$pvalue_cutoff %||% 0.05
+    gsea_set    <- resolve_rna_gsea_settings(config)
+    pval_cutoff <- gsea_set$ora_cutoff
     padj_method <- enr_cfg$padj_method   %||% "fdr"
     rna_de_cfg  <- config$modes$rna$de %||% list()
     # GO simplify is MANDATORY for GO results and NOT configurable: the compute
@@ -387,7 +388,6 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # truth for enrichment RNG. Threaded into run_enrichment_jobs() as an explicit
     # future.seed, it makes GSEA identical across worker counts AND independent
     # rebuilds. Falls back to 1L if params$seed is unset.
-    gsea_set    <- resolve_rna_gsea_settings(config)
     enr_seed    <- gsea_set$seed
     # Enrichment output toggles. Rich-by-default: all default TRUE except the
     # high-volume per-pathway heatmaps (opt-in). Set any to false to disable.

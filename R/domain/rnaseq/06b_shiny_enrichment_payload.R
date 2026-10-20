@@ -228,16 +228,16 @@
 #' @noRd
 .build_enrichment_config <- function(pathway_res, config = NULL) {
     enr <- config$modes$rna$enrichment %||% list()
-    pcut <- enr$pvalue_cutoff %||% 0.05
+    cuts <- resolve_rna_gsea_settings(config)
     list(
         # Configured run set -> lets Shiny distinguish "not run" (absent) databases.
         databases_run = as.character(enr$databases %||%
             unique(pathway_res$enrichment_manifest$database)),
         # Ranking methods present (internal keys; Shiny maps to display labels).
         rankings       = names(pathway_res$gsea_rankings %||% list()),
-        pvalue_cutoff  = pcut,
-        # The cutoff the module filtered GSEA tables with (one resolver).
-        gsea_pvalue_cutoff = resolve_rna_gsea_settings(config)$sig_cutoff,
+        # The cutoffs the module ran ORA and filtered GSEA with (one resolver).
+        pvalue_cutoff  = cuts$ora_cutoff,
+        gsea_pvalue_cutoff = cuts$sig_cutoff,
         padj_method    = enr$padj_method %||% "fdr"
     )
 }
