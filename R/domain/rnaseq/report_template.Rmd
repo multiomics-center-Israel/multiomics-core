@@ -2730,8 +2730,17 @@ cat("\n---\n\n")
 # Enrichment / Pathway Analysis
 
 ```{r pathway-setup}
-# Check if enrichment results exist
-has_enrichment <- dir.exists(enrich_dir) && length(list.files(enrich_dir, pattern = "\\.csv$")) > 0
+# Did enrichment run? The offline path records every evaluated unit in
+# enrichment_manifest.csv, including units with nothing significant, which
+# write no result table; the online path leaves its flat CSVs here.
+manifest_file <- file.path(enrich_dir, "enrichment_manifest.csv")
+enr_manifest <- if (file.exists(manifest_file)) {
+    tryCatch(read.csv(manifest_file, stringsAsFactors = FALSE), error = function(e) NULL)
+} else NULL
+offline_ran <- !is.null(enr_manifest) && "evaluated" %in% names(enr_manifest) &&
+    any(as.logical(enr_manifest$evaluated), na.rm = TRUE)
+flat_csvs <- setdiff(list.files(enrich_dir, pattern = "\\.csv$"), basename(manifest_file))
+has_enrichment <- offline_ran || (dir.exists(enrich_dir) && length(flat_csvs) > 0)
 has_pathway_plots <- dir.exists(enrich_plot_dir) && length(list.files(enrich_plot_dir, pattern = "\\.png$")) > 0
 # The cutoff the pipeline filtered GSEA tables with; padj <= gsea_cut is significant.
 gsea_cut <- resolve_rna_gsea_settings(cfg)$sig_cutoff
@@ -2833,6 +2842,10 @@ if (length(fgsea_tables) > 0) {
             cat("\n\n")
         }
     }
+} else if (offline_ran) {
+    cat("Enrichment ran, but wrote no fGSEA summary table. Every evaluated unit, ",
+        "including those with no significant gene set, is listed in ",
+        "`Enrichment/enrichment_manifest.csv`.\n")
 } else {
     cat("No fGSEA result files found.\n")
 }
