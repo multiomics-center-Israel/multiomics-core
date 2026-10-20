@@ -2748,8 +2748,11 @@ offline_ran <- !is.null(enr_manifest) && "evaluated" %in% names(enr_manifest) &&
 flat_csvs <- setdiff(list.files(enrich_dir, pattern = "\\.csv$"), basename(manifest_file))
 has_enrichment <- offline_ran || (dir.exists(enrich_dir) && length(flat_csvs) > 0)
 has_pathway_plots <- dir.exists(enrich_plot_dir) && length(list.files(enrich_plot_dir, pattern = "\\.png$")) > 0
-# The cutoff the pipeline filtered GSEA tables with; padj <= gsea_cut is significant.
-gsea_cut <- resolve_rna_gsea_settings(cfg)$sig_cutoff
+# The cutoffs enrichment ran with: a GSEA set is significant at padj <= gsea_cut;
+# offline ORA was run with ora_cut as clusterProfiler's pvalueCutoff.
+enr_settings <- resolve_rna_gsea_settings(cfg)
+gsea_cut <- enr_settings$sig_cutoff
+ora_cut  <- enr_settings$ora_cutoff
 ```
 
 ```{r pathway-skip, eval=!has_enrichment, results='asis'}
@@ -2995,9 +2998,51 @@ n_de <- if (!is.null(de_summary_full)) {
     if (!is.na(pass_col)) sum(de_summary_full[[pass_col]] == TRUE, na.rm = TRUE) else "N"
 } else "N"
 
-# Pathway info
-pathway_method <- rna_cfg$pathway$method %||% "fGSEA"
-pathway_dbs <- paste(rna_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and ")
+# Pathway info. Describes the route that ran: the offline path from its
+# manifest (evaluated units only), the online path from its fgsea tables. ORA
+# and GSEA use different cutoffs, so each is stated with its own.
+pathway_methods_text <- if (offline_ran) {
+    ran <- enr_manifest[as.logical(enr_manifest$evaluated) %in% TRUE, , drop = FALSE]
+    gsea_ran <- ran[ran$analysis == "GSEA", , drop = FALSE]
+    ora_ran  <- ran[ran$analysis == "ORA", , drop = FALSE]
+    parts <- character(0)
+    if (nrow(gsea_ran) > 0) {
+        fgsea_engine <- identical(enr_settings$engine, "fgsea")
+        ranking_labels <- c(
+            fc                  = "log2 fold change",
+            pval_with_direction = "signed -log10 p-value",
+            pval_wo_direction   = "unsigned -log10 p-value")
+        rankings <- sort(unique(gsea_ran$group))
+        rankings <- ifelse(rankings %in% names(ranking_labels),
+                           ranking_labels[rankings], rankings)
+        parts <- c(parts, sprintf(paste0(
+            "Gene set enrichment analysis was performed with %s on %s gene sets, ",
+            "ranking genes by %s. Gene sets with %s adjusted p-value ≤ %s were considered ",
+            "significantly enriched."),
+            if (fgsea_engine) "fgsea" else "clusterProfiler::GSEA",
+            paste(sort(unique(gsea_ran$database)), collapse = ", "),
+            paste(rankings, collapse = "; "),
+            if (fgsea_engine) "a Benjamini-Hochberg" else "an",
+            format(gsea_cut)))
+    }
+    if (nrow(ora_ran) > 0) {
+        parts <- c(parts, sprintf(paste0(
+            "Over-representation analysis was performed with clusterProfiler::enricher on %s ",
+            "gene sets for the differentially expressed gene lists and gene clusters, with ",
+            "an adjusted p-value cutoff of %s."),
+            paste(sort(unique(ora_ran$database)), collapse = ", "), format(ora_cut)))
+    }
+    paste(parts, collapse = " ")
+} else if (length(list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$")) > 0) {
+    sprintf(paste0(
+        "Pathway enrichment analysis was conducted using %s on %s gene sets. ",
+        "fGSEA gene sets with adjusted p-value ≤ %s are reported as significant."),
+        rna_cfg$pathway$method %||% "fGSEA",
+        paste(rna_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and "),
+        format(gsea_cut))
+} else {
+    ""
+}
 
 cat("**RNA-seq Analysis Methods**\n\n")
 
@@ -3029,19 +3074,14 @@ format(as.numeric(n_genes_final), big.mark = ","),
 format(as.numeric(n_de), big.mark = ",")
 ))
 
-cat(sprintf(
-"Pathway enrichment analysis was conducted using %s on %s gene sets. ",
-pathway_method, pathway_dbs
-))
-
-cat("Pathways with adjusted p-value < 0.05 were considered significantly enriched.\n\n")
+cat(pathway_methods_text, "\n\n")
 
 cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.",
-rna_filt$methods, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). %s",
+rna_filt$methods, norm_method, de_method, padj_cut, lfc_cut, pathway_methods_text
 ))
 
 cat("\n</div>\n")
