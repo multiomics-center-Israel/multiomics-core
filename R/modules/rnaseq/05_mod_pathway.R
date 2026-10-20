@@ -571,7 +571,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     ranked_genes <- build_ranked_gene_lists(de_tables)
 
     gsea_dir  <- file.path(enrich_dir, "GSEA")
-    gsea_pval <- enr_cfg$gsea_pvalue_cutoff %||% pval_cutoff
+    gsea_pval <- gsea_set$sig_cutoff
     gsea_padj <- enr_cfg$gsea_padj_method   %||% padj_method
     # `workers` is defined once above and controls both ORA and GSEA.
     # `per_pathway_artifacts` and the plot toggles are resolved once at the top.

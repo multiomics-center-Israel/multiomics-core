@@ -236,7 +236,8 @@
         # Ranking methods present (internal keys; Shiny maps to display labels).
         rankings       = names(pathway_res$gsea_rankings %||% list()),
         pvalue_cutoff  = pcut,
-        gsea_pvalue_cutoff = enr$gsea_pvalue_cutoff %||% pcut,
+        # The cutoff the module filtered GSEA tables with (one resolver).
+        gsea_pvalue_cutoff = resolve_rna_gsea_settings(config)$sig_cutoff,
         padj_method    = enr$padj_method %||% "fdr"
     )
 }

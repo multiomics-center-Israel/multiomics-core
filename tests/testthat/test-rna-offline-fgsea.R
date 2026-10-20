@@ -93,6 +93,35 @@ test_that("resolve_rna_gsea_settings reads enrichment.gsea sizes and ignores the
     expect_equal(c(s$min_size, s$max_size), c(5, 200))
 })
 
+test_that("resolve_rna_gsea_settings resolves one GSEA significance cutoff", {
+    cfg <- function(enr) list(modes = list(rna = list(enrichment = enr)))
+    expect_equal(resolve_rna_gsea_settings(cfg(list()))$sig_cutoff, 0.05)
+    expect_equal(resolve_rna_gsea_settings(cfg(list(pvalue_cutoff = 0.1)))$sig_cutoff, 0.1)
+    expect_equal(resolve_rna_gsea_settings(
+        cfg(list(pvalue_cutoff = 0.1, gsea_pvalue_cutoff = 0.2)))$sig_cutoff, 0.2)
+    # The DE cutoff is not part of the chain (the module never used it).
+    expect_equal(resolve_rna_gsea_settings(list(modes = list(rna = list(
+        de = list(p_cutoff = 0.01)))))$sig_cutoff, 0.05)
+})
+
+test_that("module, Shiny payload and report read the same GSEA cutoff, with <=", {
+    cfg <- list(modes = list(rna = list(enrichment = list(pvalue_cutoff = 0.1))))
+    expect_equal(.build_enrichment_config(list(), cfg)$gsea_pvalue_cutoff,
+                 resolve_rna_gsea_settings(cfg)$sig_cutoff)
+
+    # A set exactly at the cutoff counts as significant.
+    tab <- data.frame(ID = c("a", "b"), padj = c(0.1, 0.10001))
+    expect_identical(.gsea_significant_rows(tab, 0.1)$ID, "a")
+
+    rmd <- readLines(file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd"),
+                     warn = FALSE)
+    expect_true(any(grepl("resolve_rna_gsea_settings(cfg)$sig_cutoff", rmd, fixed = TRUE)))
+    gsea_filters <- grep("fgsea_df$padj", rmd, fixed = TRUE, value = TRUE)
+    expect_gt(length(gsea_filters), 0)
+    expect_true(all(grepl("<= gsea_cut", gsea_filters, fixed = TRUE)))
+    expect_false(any(grepl("padj < 0.05", rmd, fixed = TRUE)))
+})
+
 test_that("resolve_rna_gsea_settings accepts any case and rejects unknown engines", {
     cfg <- list(modes = list(rna = list(enrichment = list(gsea_engine = "FGSEA"))))
     expect_identical(resolve_rna_gsea_settings(cfg)$engine, "fgsea")
