@@ -384,7 +384,9 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # high-volume per-pathway heatmaps (opt-in). Set any to false to disable.
     #   modes.rna.enrichment.plots.<name> and .gsea.per_pathway_artifacts
     plots_cfg           <- enr_cfg$plots %||% list()
-    gsea_cfg            <- enr_cfg$gsea  %||% list()
+    # [[ ]], not $: with no `gsea` block, enr_cfg$gsea partially matches a
+    # single gsea_* key (gsea_engine, gsea_pvalue_cutoff, ...) and returns a string.
+    gsea_cfg            <- enr_cfg[["gsea", exact = TRUE]] %||% list()
     do_dotplot          <- isTRUE(plots_cfg$dotplot             %||% TRUE)
     do_ridgeplot        <- isTRUE(plots_cfg$ridgeplot           %||% TRUE)
     do_ridgeplot_all    <- isTRUE(plots_cfg$ridgeplot_all_genes %||% TRUE)
