@@ -2751,10 +2751,15 @@ flat_csvs <- setdiff(list.files(enrich_dir, pattern = "\\.csv$"), basename(manif
 # "not_run": no record of enrichment; "failed": the offline path ran but no unit
 # was evaluated (each one failed, or none could be built); "completed": at least
 # one unit was evaluated (offline) or the online path wrote its tables.
-enr_status <- if (offline_ran) "completed"
-              else if (!is.null(enr_manifest)) "failed"
-              else if (dir.exists(enrich_dir) && length(flat_csvs) > 0) "completed"
-              else "not_run"
+enr_status <- if (offline_ran) {
+    "completed"
+} else if (!is.null(enr_manifest)) {
+    "failed"
+} else if (dir.exists(enrich_dir) && length(flat_csvs) > 0) {
+    "completed"
+} else {
+    "not_run"
+}
 has_enrichment <- identical(enr_status, "completed")
 n_failed_units <- sum(!evaluated)
 n_sig_units <- if (offline_ran && "n_significant" %in% names(enr_manifest)) {
