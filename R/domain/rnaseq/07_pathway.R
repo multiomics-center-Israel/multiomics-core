@@ -133,10 +133,15 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
 #'   NULL, which run_gsea_all() reads as the number of unique genes in each
 #'   database's TERM2GENE table (no upper limit in practice). The
 #'   clusterProfiler engine always uses those defaults.
+#' - `sig_cutoff`: the adjusted-p cutoff at which an offline GSEA set counts
+#'   as significant (`padj <= sig_cutoff`): `enrichment.gsea_pvalue_cutoff`,
+#'   then `enrichment.pvalue_cutoff`, then 0.05. The module, the Shiny payload
+#'   and the RNA report all read it from here.
 #' - `seed`: `params.seed`, default 1.
 #'
 #' @param config Full pipeline config.
-#' @return list(engine, min_size, max_size, seed); `max_size` may be NULL.
+#' @return list(engine, min_size, max_size, sig_cutoff, seed); `max_size` may
+#'   be NULL.
 resolve_rna_gsea_settings <- function(config) {
   rna  <- config$modes$rna %||% list()
   enr  <- rna$enrichment %||% list()
@@ -160,6 +165,7 @@ resolve_rna_gsea_settings <- function(config) {
     engine   = engine,
     min_size = gsea$min_size %||% 4,
     max_size = gsea$max_size,
+    sig_cutoff = enr$gsea_pvalue_cutoff %||% enr$pvalue_cutoff %||% 0.05,
     seed     = config$params$seed %||% 1L
   )
 }

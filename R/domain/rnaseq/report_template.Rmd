@@ -2739,6 +2739,8 @@ cat("\n---\n\n")
 # Check if enrichment results exist
 has_enrichment <- dir.exists(enrich_dir) && length(list.files(enrich_dir, pattern = "\\.csv$")) > 0
 has_pathway_plots <- dir.exists(enrich_plot_dir) && length(list.files(enrich_plot_dir, pattern = "\\.png$")) > 0
+# The cutoff the pipeline filtered GSEA tables with; padj <= gsea_cut is significant.
+gsea_cut <- resolve_rna_gsea_settings(cfg)$sig_cutoff
 ```
 
 ```{r pathway-skip, eval=!has_enrichment, results='asis'}
@@ -2763,7 +2765,7 @@ if (file.exists(anno_file)) {
 **Key metrics:**
 
 - **NES (Normalized Enrichment Score)**: The primary statistic from fGSEA. Positive NES indicates the pathway is enriched in **up-regulated** genes; negative NES indicates enrichment in **down-regulated** genes. The magnitude reflects the degree of enrichment.
-- **padj**: Benjamini-Hochberg adjusted p-value (FDR). Pathways with padj < 0.05 are considered significant.
+- **padj**: Benjamini-Hochberg adjusted p-value (FDR). Pathways with padj ≤ `r gsea_cut` are considered significant.
 - **size**: Number of genes in the pathway that were present in the dataset.
 
 ## fGSEA Results {.tabset}
@@ -2778,7 +2780,7 @@ if (length(fgsea_files) > 0) {
         label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
         label_clean <- gsub("_", " ", label)
         fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
-        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj < 0.05, ]
+        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj <= gsea_cut, ]
         if (nrow(sig) > 0) {
             sig <- sig[order(sig$padj), ]
             if ("pathway_name" %in% names(sig)) {
@@ -2802,7 +2804,8 @@ if (length(fgsea_tables) > 0) {
         tbl <- fgsea_tables[[i]]
         cat(sprintf("\n### %s {.tabset}\n\n", tbl$label))
         if (is.null(tbl$data)) {
-            cat("No significant pathways (padj < 0.05) for this contrast/database.\n\n")
+            cat(sprintf("No significant pathways (padj ≤ %s) for this contrast/database.\n\n",
+                        format(gsea_cut)))
             next
         }
         sig_show <- tbl$data
@@ -2876,7 +2879,7 @@ if (length(fgsea_files) > 0) {
         cat(sprintf("\n### %s\n\n", label_clean))
 
         fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
-        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj < 0.05, ]
+        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj <= gsea_cut, ]
 
         if (nrow(sig) > 0 && "leadingEdge" %in% names(sig)) {
             sig <- head(sig[order(sig$padj), ], 10)  # Top 10 pathways
