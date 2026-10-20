@@ -3055,7 +3055,11 @@ run_gsea_all <- function(ranked_genes,
                     annotation_col = annotation_col,
                     plots          = isTRUE(per_pathway_artifacts),
                     heatmaps       = isTRUE(pathway_heatmaps),
-                    sig_cutoff     = pvalueCutoff
+                    sig_cutoff     = pvalueCutoff,
+                    # Passed directly so the tables and heatmaps do not need
+                    # plot_obj, which is NULL for fgsea when DOSE is missing.
+                    ranked         = ranked_genes[[ranking_method]][[contrast]],
+                    gene_sets      = if (use_fgsea) gene_sets_by_db[[db_name]] else NULL
                 )
             }
 
@@ -3161,7 +3165,13 @@ run_gsea_all <- function(ranked_genes,
 #' `plots = FALSE`, deriving their gene sets in memory without writing any
 #' core-gene CSV.
 #'
-#' @param gsea_result gseaResult S4 object from clusterProfiler::GSEA()
+#' Only the gseaplot2 PNGs need the gseaResult. The core-gene CSVs and the
+#' heatmaps take the ranking and the gene sets from `ranked` / `gene_sets` when
+#' given, so they are still written when no gseaResult can be built (DOSE
+#' unavailable for the fgsea engine).
+#'
+#' @param gsea_result gseaResult S4 object (clusterProfiler::GSEA(), or
+#'   .fgsea_as_gsea_result()), or NULL to skip the gseaplot2 PNGs only.
 #' @param res_df Data.frame version of the result (with padj, pathway, etc.)
 #' @param output_dir The per_pathway/ directory for this GSEA unit.
 #' @param gene_context Optional per-gene data.frame (first column = gene ID)
@@ -3173,15 +3183,23 @@ run_gsea_all <- function(ranked_genes,
 #' @param sig_cutoff Effective adjusted-p cutoff selecting which pathways get
 #'   artifacts (the configured GSEA cutoff; default 0.05).
 #' @param max_heatmap_genes Cap on genes drawn per heatmap (guards huge sets).
+#' @param ranked Optional named ranking vector the unit was scored on; defaults
+#'   to `gsea_result@geneList`.
+#' @param gene_sets Optional named list of gene sets the unit was scored on;
+#'   defaults to `gsea_result@geneSets`.
 #' @noRd
 save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
                                             gene_context = NULL, expr_mat = NULL,
                                             annotation_col = NULL,
                                             plots = TRUE, heatmaps = FALSE,
                                             sig_cutoff = 0.05,
-                                            max_heatmap_genes = 500) {
+                                            max_heatmap_genes = 500,
+                                            ranked = NULL, gene_sets = NULL) {
 
-    if (is.null(gsea_result) || is.null(output_dir)) return(invisible(NULL))
+    if (is.null(output_dir)) return(invisible(NULL))
+    if (is.null(ranked) && !is.null(gsea_result)) ranked <- gsea_result@geneList
+    if (is.null(gene_sets) && !is.null(gsea_result)) gene_sets <- gsea_result@geneSets
+    if (is.null(ranked)) return(invisible(NULL))
 
     sig_rows <- .gsea_significant_rows(res_df, sig_cutoff)
     if (nrow(sig_rows) == 0) return(invisible(NULL))
@@ -3207,7 +3225,7 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
     ctx_key <- if (!is.null(gene_context) && ncol(gene_context) > 0) {
         names(gene_context)[1]
     } else NULL
-    gene_list <- gsea_result@geneList  # full ranked vector (gene -> value)
+    gene_list <- ranked  # full ranked vector (gene -> value)
 
     # Match the pathway's genes to expression rows on the `Gene:`-normalized key
     # (DE/pathway IDs may have the prefix stripped while expr rownames retain it —
@@ -3250,7 +3268,7 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
         pw_title   <- sig_rows$Description[i]
 
         # --- GSEA plot (enrichplot::gseaplot2) ---
-        if (isTRUE(plots) && has_enrichplot) {
+        if (isTRUE(plots) && has_enrichplot && !is.null(gsea_result)) {
             tryCatch({
                 plot_file <- file.path(plots_dir, paste0(safe_id, ".png"))
                 png(plot_file, width = 800, height = 640, res = 120)
@@ -3304,7 +3322,7 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
 
         # --- Per-pathway expression heatmaps (all genes + core genes) ---
         if (do_heatmaps) {
-            all_genes <- tryCatch(as.character(gsea_result@geneSets[[pathway_id]]),
+            all_genes <- tryCatch(as.character(gene_sets[[pathway_id]]),
                                   error = function(e) character(0))
             write_pathway_heatmap(all_genes, file.path(hm_all_dir, paste0(safe_id, ".png")),
                                   paste0(pw_title, " (all genes)"))
