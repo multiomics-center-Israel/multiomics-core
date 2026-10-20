@@ -972,13 +972,24 @@ run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) 
 #' @param n_perm_simple Number of permutations for the initial simple step.
 #' @param bpparam Optional BiocParallel backend passed to fgsea; NULL keeps
 #'   fgsea's default.
+#' @param score_type fgsea's scoreType. NULL (default) picks "pos" when no
+#'   rank is negative and "std" otherwise. Unsigned rankings (p-value without
+#'   direction, min p over contrasts) under "std" make fgsea test sets at the
+#'   bottom of the ranking as if it were the negative tail; their p-value is
+#'   NA, which also drops them from the BH family.
 #' @return data.frame with fgsea's columns (pathway, pval, padj, log2err, ES,
 #'   NES, size, leadingEdge), leadingEdge collapsed to a comma-separated
 #'   string; zero rows when no set passes the size limits.
 run_fgsea_core <- function(ranks, gene_sets, min_size = 10, max_size = 500,
-                           seed = 1L, n_perm_simple = 10000L, bpparam = NULL) {
+                           seed = 1L, n_perm_simple = 10000L, bpparam = NULL,
+                           score_type = NULL) {
+    if (is.null(score_type)) {
+        score_type <- if (length(ranks) > 0 && all(ranks >= 0, na.rm = TRUE)) "pos" else "std"
+    }
+    score_type <- match.arg(score_type, c("std", "pos", "neg"))
     args <- list(pathways = gene_sets, stats = ranks, minSize = min_size,
-                 maxSize = max_size, nPermSimple = n_perm_simple)
+                 maxSize = max_size, nPermSimple = n_perm_simple,
+                 scoreType = score_type)
     if (!is.null(bpparam)) args$BPPARAM <- bpparam
     res <- withr::with_seed(seed, do.call(fgsea::fgsea, args))
     df <- as.data.frame(res)

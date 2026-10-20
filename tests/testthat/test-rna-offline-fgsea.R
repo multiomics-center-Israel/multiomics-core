@@ -121,6 +121,39 @@ test_that("validate_rna_config checks gsea_engine and the gsea size limits", {
     expect_error(validate_rna_config(bad), "min_size")
 })
 
+test_that("a non-BH gsea_padj_method warns under the fgsea engine only", {
+    cfg <- list(id_columns = list(gene_id = "gene_id"),
+                files = list(counts = "counts.csv", metadata = "metadata.csv"),
+                enrichment = list(gsea_padj_method = "bonferroni"))
+    expect_warning(validate_rna_config(cfg), "clusterProfiler engine only")
+    cfg$enrichment$gsea_engine <- "fgsea"
+    expect_warning(validate_rna_config(cfg), "clusterProfiler engine only")
+    cfg$enrichment$gsea_engine <- "clusterProfiler"
+    expect_no_warning(validate_rna_config(cfg))
+    cfg$enrichment <- list(gsea_engine = "fgsea", gsea_padj_method = "BH")
+    expect_no_warning(validate_rna_config(cfg))
+})
+
+test_that("run_fgsea_core tests an unsigned ranking with scoreType 'pos'", {
+    skip_if_not_installed("fgsea")
+    genes <- paste0("g", 1:200)
+    pos <- setNames(seq(10, 0.05, length.out = 200), genes)   # all > 0, like -log10(p)
+    sets <- list(top = genes[1:20], bottom = genes[181:200], mid = genes[seq(5, 200, by = 10)])
+
+    expect_no_warning(res <- run_fgsea_core(pos, sets, min_size = 5, n_perm_simple = 1000))
+    # Under "std" the bottom set is tested as a negative tail and gets pval NA.
+    expect_false(anyNA(res$pval))
+    expect_equal(nrow(res), 3L)
+    expect_lt(res$pval[res$pathway == "top"], 0.05)
+    expect_equal(res$pval[res$pathway == "bottom"], 1)
+
+    # A signed ranking keeps "std" (a set at the bottom is negatively enriched).
+    signed <- setNames(seq(5, -5, length.out = 200), genes)
+    res_s <- suppressWarnings(run_fgsea_core(signed, sets, min_size = 5, n_perm_simple = 1000))
+    expect_lt(res_s$NES[res_s$pathway == "bottom"], 0)
+    expect_error(run_fgsea_core(pos, sets, score_type = "bad"))
+})
+
 test_that("the RNA config template declares the fgsea engine and size limits", {
     tmpl <- yaml::read_yaml(file.path(root_dir, "config", "templates", "rna_config.yaml"))
     enr <- tmpl$modes$rna$enrichment
