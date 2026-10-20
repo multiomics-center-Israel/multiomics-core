@@ -103,13 +103,17 @@ option_b <- function(runs, cn, squeeze_df = c("residual", "barnard_rubin")) {
     limma::zscoreT(t_b, df = df_sq + sq$df.prior)
 }
 
+# Overlap of the top and bottom k of two rankings, on the features finite in
+# both. k is cut to the number of such features and returned, so a row says
+# how many it compared (top-100 of 20 features is all 20, a trivial 1.0).
 topk_overlap <- function(a, b, k) {
     ok <- is.finite(a) & is.finite(b)
     a <- a[ok]; b <- b[ok]
     k <- min(k, length(a))
+    if (k == 0) return(c(top = NA_real_, bottom = NA_real_, k = 0))
     top <- length(intersect(order(-a)[1:k], order(-b)[1:k])) / k
     bot <- length(intersect(order(a)[1:k], order(b)[1:k])) / k
-    c(top = top, bottom = bot)
+    c(top = top, bottom = bot, k = k)
 }
 
 pairwise_compare <- function(df, k) {
@@ -120,7 +124,8 @@ pairwise_compare <- function(df, k) {
         ov <- topk_overlap(a, b, k)
         data.frame(ranking_a = pairs[1, j], ranking_b = pairs[2, j],
                    spearman = stats::cor(a, b, method = "spearman", use = "complete.obs"),
-                   top_k_overlap = ov[["top"]], bottom_k_overlap = ov[["bottom"]], k = k)
+                   top_k_overlap = ov[["top"]], bottom_k_overlap = ov[["bottom"]],
+                   k_requested = k, k = ov[["k"]])
     }))
 }
 
@@ -166,7 +171,8 @@ for (cn in contrasts) {
             data.frame(contrast = key, left_out = i,
                        spearman = stats::cor(pa$z_pooled, z_i, method = "spearman",
                                              use = "complete.obs"),
-                       top_k_overlap = ov[["top"]], bottom_k_overlap = ov[["bottom"]], k = k)
+                       top_k_overlap = ov[["top"]], bottom_k_overlap = ov[["bottom"]],
+                   k_requested = k, k = ov[["k"]])
         }))
     }
 
