@@ -881,18 +881,28 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #'
 #' Applies the rule fgsea applies internally (unique members found in the
 #' ranking, then \code{min_size <= size <= max_size}), so a method given these
-#' sets tests exactly the sets fgsea tests, with the same members.
+#' sets tests exactly the sets fgsea tests, with the same members. One
+#' exception: a set holding every ranked gene is dropped (with a message),
+#' because a competitive test has no genes outside it to compare against.
 #'
 #' @param gs Named list of character vectors (one gene set per element).
 #' @param ranks Named numeric vector of ranks.
 #' @param min_size,max_size Inclusive set-size window after intersection.
-#' @return Named list of character vectors, each a subset of \code{names(ranks)}.
+#' @return Named list of character vectors, each a proper subset of
+#'   \code{names(ranks)}.
 #' @keywords internal
 .filter_sets_to_ranks <- function(gs, ranks, min_size, max_size) {
     ids <- names(ranks)
     kept <- lapply(gs, function(p) ids[unique(stats::na.omit(match(p, ids)))])
     sizes <- lengths(kept)
-    kept[sizes >= min_size & sizes <= max_size]
+    kept <- kept[sizes >= min_size & sizes <= max_size]
+    full <- lengths(kept) == length(ids)
+    if (any(full)) {
+        message("    cameraPR: dropped ", sum(full), " set(s) holding every ranked gene ",
+                "(nothing outside the set to compare): ",
+                paste(names(kept)[full], collapse = ", "))
+    }
+    kept[!full]
 }
 
 #' Competitive gene-set test on a pre-ranked statistic (limma::cameraPR)
@@ -937,6 +947,13 @@ run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) 
     if (any(vapply(index, anyNA, logical(1)))) {
         stop("run_camerapr(): every set member must be in names(ranks); filter the ",
              "sets with .filter_sets_to_ranks() first.", call. = FALSE)
+    }
+    # cameraPR divides by the number of genes outside the set, so a set of
+    # every ranked gene gives a non-finite statistic written as a normal row.
+    if (any(lengths(index) >= length(ranks))) {
+        stop("run_camerapr(): a set holds every ranked gene, so there is nothing ",
+             "outside it to compare; filter the sets with .filter_sets_to_ranks() first.",
+             call. = FALSE)
     }
     tab <- limma::cameraPR(ranks, index, use.ranks = use_ranks,
                            inter.gene.cor = inter_gene_cor, sort = FALSE)
@@ -1046,7 +1063,8 @@ run_pathway_analysis <- function(de_tables,
 
                 # ---- cameraPR ----
                 # Same ranking and the same filtered sets as fgsea, so the two
-                # tables cover identical sets with identical members.
+                # tables cover identical sets with identical members (except a
+                # set of every ranked gene, which cameraPR cannot test).
                 if ("camerapr" %in% method) {
                     ranks <- .build_fgsea_ranks(res)
                     sets <- .filter_sets_to_ranks(gs, ranks, min_size, max_size)

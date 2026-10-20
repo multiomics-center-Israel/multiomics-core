@@ -62,6 +62,16 @@ test_that("the set filter reproduces fgsea's size rule", {
     expect_equal(kept$s1, c("a", "b"))
 })
 
+test_that("a set holding every ranked gene is not passed to cameraPR", {
+    ranks <- setNames(c(5, 4, 3, -1, -2), letters[1:5])
+    gs <- list(all = c(letters[1:5], "z"), part = c("a", "b", "c"))
+    expect_message(kept <- .filter_sets_to_ranks(gs, ranks, min_size = 2, max_size = 10),
+                   "dropped 1 set\\(s\\) holding every ranked gene.*: all")
+    expect_named(kept, "part")
+    expect_error(run_camerapr(ranks, list(all = letters[1:5])),
+                 "holds every ranked gene")
+})
+
 test_that("cameraPR reports an FDR for a single set", {
     ranks <- setNames(c(5, 4, 3, -1, -2, -3, 0.5, -0.5), letters[1:8])
     out <- run_camerapr(ranks, list(only = c("a", "b", "c")))
