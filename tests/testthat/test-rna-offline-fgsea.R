@@ -551,6 +551,73 @@ test_that("the RNA report detects an offline run that wrote no result table", {
     expect_true(report_enrichment_gate(d))                         # online flat files
 })
 
+# Evaluate the report's pathway Methods block, after its pathway-setup chunk,
+# against an Enrichment directory and config.
+report_methods_text <- function(enrich_dir, rna_cfg = list()) {
+    rmd <- readLines(file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd"),
+                     warn = FALSE)
+    env <- new.env(parent = globalenv())
+    env$enrich_dir      <- enrich_dir
+    env$enrich_plot_dir <- file.path(enrich_dir, "plots")
+    env$cfg             <- list(modes = list(rna = rna_cfg))
+    env$rna_cfg         <- rna_cfg
+    setup <- grep("^```\\{r pathway-setup\\}", rmd)
+    setup_end <- setup + which(grepl("^```\\s*$", rmd[(setup + 1):length(rmd)]))[1]
+    eval(parse(text = rmd[(setup + 1):(setup_end - 1)]), envir = env)
+    # The block is one if/else expression: grow it until it parses.
+    start <- grep("^pathway_methods_text <- ", rmd)
+    for (end in start:length(rmd)) {
+        expr <- tryCatch(parse(text = rmd[start:end]), error = function(e) NULL)
+        if (!is.null(expr)) break
+    }
+    eval(expr, envir = env)
+    env$pathway_methods_text
+}
+
+write_manifest <- function(d, rows) {
+    write.csv(do.call(rbind, rows), file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
+}
+manifest_row <- function(analysis, database, group, evaluated = TRUE) {
+    data.frame(analysis = analysis, database = database, group = group, item = "c1",
+               evaluated = evaluated, status = if (evaluated) "empty" else "failed",
+               n_significant = if (evaluated) 0L else NA_integer_, stringsAsFactors = FALSE)
+}
+
+test_that("Methods state the GSEA and ORA cutoffs separately, for what ran", {
+    d <- withr::local_tempdir()
+    rna <- list(enrichment = list(pvalue_cutoff = 0.04, gsea_pvalue_cutoff = 0.03))
+
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc"),
+                           manifest_row("GSEA", "GO_BP", "pval_with_direction"),
+                           manifest_row("ORA", "KEGG", "contrasts"),
+                           manifest_row("GSEA", "GO_MF", "fc", evaluated = FALSE)))
+    txt <- report_methods_text(d, rna)
+    expect_match(txt, "fgsea on GO_BP, KEGG gene sets", fixed = TRUE)   # failed GO_MF left out
+    expect_match(txt, "log2 fold change; signed -log10 p-value", fixed = TRUE)
+    expect_match(txt, "Benjamini-Hochberg adjusted p-value ≤ 0.03", fixed = TRUE)
+    expect_match(txt, "enricher on KEGG gene sets", fixed = TRUE)
+    expect_match(txt, "adjusted p-value cutoff of 0.04", fixed = TRUE)
+    expect_false(grepl("0.05", txt, fixed = TRUE))
+
+    # GSEA only: no ORA sentence.
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc")))
+    txt <- report_methods_text(d, rna)
+    expect_false(grepl("Over-representation", txt, fixed = TRUE))
+
+    # clusterProfiler engine: no Benjamini-Hochberg claim.
+    rna$enrichment$gsea_engine <- "clusterProfiler"
+    expect_match(report_methods_text(d, rna), "clusterProfiler::GSEA", fixed = TRUE)
+    expect_false(grepl("Benjamini", report_methods_text(d, rna), fixed = TRUE))
+})
+
+test_that("Methods say nothing about pathways when enrichment did not run", {
+    d <- withr::local_tempdir()
+    expect_identical(report_methods_text(d), "")
+    # Online flat fgsea files: the online sentence, with the GSEA cutoff.
+    writeLines("pathway,padj", file.path(d, "pathway_c1_KEGG_fgsea.csv"))
+    expect_match(report_methods_text(d), "adjusted p-value ≤ 0.05 are reported", fixed = TRUE)
+})
+
 test_that("clusterProfiler engine writes no flat fgsea file and clears an old one", {
     skip_if_not_installed("clusterProfiler")
     skip_if_not_installed("BiocParallel")
