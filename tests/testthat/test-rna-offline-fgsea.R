@@ -121,6 +121,19 @@ test_that("validate_rna_config checks gsea_engine and the gsea size limits", {
     expect_error(validate_rna_config(bad), "min_size")
 })
 
+test_that("gsea_engine without a gsea block is not read as the gsea block", {
+    # gsea_engine is the only gsea* key, so enrichment$gsea would partially
+    # match it and hand back the string "fgsea".
+    cfg <- list(id_columns = list(gene_id = "gene_id"),
+                files = list(counts = "counts.csv", metadata = "metadata.csv"),
+                enrichment = list(gsea_engine = "fgsea"))
+    expect_true(validate_rna_config(cfg))
+
+    s <- resolve_rna_gsea_settings(list(modes = list(rna = list(
+        enrichment = list(gsea_engine = "fgsea")))))
+    expect_identical(s$engine, "fgsea")
+})
+
 test_that("a non-BH gsea_padj_method warns under the fgsea engine only", {
     cfg <- list(id_columns = list(gene_id = "gene_id"),
                 files = list(counts = "counts.csv", metadata = "metadata.csv"),
@@ -339,6 +352,17 @@ test_that("offline fgsea run writes pathway_<contrast>_<db>_fgsea.csv with the o
     expect_identical(unique(tab$ranking_method), "pval_with_direction")
 
     # In memory, the same table sits under <db>_fgsea for the contrast.
+    expect_true("KEGG_fgsea" %in% names(res$pathway_results$c1))
+})
+
+test_that(".run_local_enrichment runs with gsea_engine set and no gsea block", {
+    skip_if_not_installed("fgsea")
+    skip_if_not_installed("BiocParallel")
+    fx <- make_flat_fixture(engine = "fgsea")
+    # Leave gsea_engine as the only gsea* key: enr_cfg$gsea would partially
+    # match it and fail on $per_pathway_artifacts.
+    fx$config$modes$rna$enrichment$gsea <- NULL
+    res <- run_flat_fixture(fx)
     expect_true("KEGG_fgsea" %in% names(res$pathway_results$c1))
 })
 
