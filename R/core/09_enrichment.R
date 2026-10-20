@@ -2284,12 +2284,14 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
 
 #' Shape one offline fgsea table for storage
 #'
-#' Orders rows by p-value, adds the identifying columns and pathway names, and
-#' adds clusterProfiler-named copies of the statistics (ID, Description,
-#' setSize, enrichmentScore, pvalue, p.adjust, core_enrichment with "/"
-#' separators). The copies keep the readers written for the earlier
-#' clusterProfiler tables working: the Shiny enrichment payload, the per-pathway
-#' writer and the pathway-membership builder. No statistic is recomputed.
+#' Gives the table the identifying columns the earlier clusterProfiler tables
+#' had, so their readers (the Shiny enrichment payload, the per-pathway writer,
+#' the pathway-membership builder, the multiomics collector) see the same
+#' contract: `ID` is the term ID, `pathway` and `Description` the term name
+#' (the ID where the term has no name), `setSize`, `enrichmentScore`, `pvalue`,
+#' `p.adjust`/`padj` and `core_enrichment` ("/"-separated). fgsea's own `pval`,
+#' `ES`, `size` and `leadingEdge` stay alongside. No `method` column is added,
+#' as none was before. No statistic is recomputed.
 #'
 #' @param df Output of run_fgsea_core() (at least one row).
 #' @param gene_sets The gene-set list the job was scored on (carries the
@@ -2297,45 +2299,27 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
 #' @param db_name Database name.
 #' @param contrast Contrast (or `any_contrast`).
 #' @param ranking_method Ranking method the job used.
-#' @param method Value for the `method` column ("fgsea" for the primary ranking,
-#'   "fgsea_<ranking>" for the others).
-#' @return data.frame with the online fgsea columns plus `ranking_method` and
-#'   the clusterProfiler-named copies.
+#' @return data.frame, ordered by p-value.
 #' @noRd
-.format_offline_fgsea <- function(df, gene_sets, db_name, contrast,
-                                  ranking_method, method) {
+.format_offline_fgsea <- function(df, gene_sets, db_name, contrast, ranking_method) {
     df <- df[order(df$pval, df$pathway), , drop = FALSE]
     rownames(df) <- NULL
     df$contrast       <- contrast
     df$database       <- db_name
-    df$method         <- method
     df$ranking_method <- ranking_method
     df <- add_pathway_names(df, db_name, gene_sets)
 
     named <- !is.na(df$pathway_name) & nzchar(df$pathway_name)
     df$ID              <- df$pathway
     df$Description     <- ifelse(named, df$pathway_name, df$pathway)
+    df$pathway         <- df$Description
+    df$pathway_name    <- NULL
     df$setSize         <- df$size
     df$enrichmentScore <- df$ES
     df$pvalue          <- df$pval
     df$p.adjust        <- df$padj
     df$core_enrichment <- gsub(",", "/", df$leadingEdge, fixed = TRUE)
     df
-}
-
-#' Drop the clusterProfiler-named copies from an offline fgsea table
-#'
-#' Leaves the columns the online path writes (plus `ranking_method`), for the
-#' flat pathway_<contrast>_<db>_fgsea.csv files.
-#'
-#' @param df A table from .format_offline_fgsea().
-#' @return The same table without ID, Description, setSize, enrichmentScore,
-#'   pvalue, p.adjust and core_enrichment.
-#' @noRd
-.online_fgsea_columns <- function(df) {
-    copies <- c("ID", "Description", "setSize", "enrichmentScore", "pvalue",
-                "p.adjust", "core_enrichment")
-    df[, setdiff(names(df), copies), drop = FALSE]
 }
 
 #' Wrap significant offline fgsea rows in a gseaResult for the plot helpers
@@ -2399,15 +2383,17 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
 #' in parallel when future.apply is available.
 #'
 #' With engine "fgsea" (default) every job goes through run_fgsea_core(), the
-#' fgsea call the online path uses, and every tested gene set is stored; the
-#' significance cutoff only selects what is plotted and counted. The
-#' `primary_ranking` table of each contrast and database is stored under
-#' `<db>_fgsea` with `method = "fgsea"`, the key and value the online path and
-#' its readers use; the other rankings keep `<db>_gsea_<ranking>` with
-#' `method = "fgsea_<ranking>"`, so a reader looking for the fgsea table
-#' finds one table per contrast and database. With engine "clusterProfiler"
-#' the earlier clusterProfiler::GSEA() tables are produced unchanged (only
-#' significant sets, keys `<db>_gsea_<ranking>`).
+#' fgsea call the online path uses. Every ranking is treated alike, with no
+#' primary one: each unit's full table (every tested gene set) is written to
+#' its results.csv, and the returned results hold only the sets at
+#' padj <= pvalueCutoff, under `<db>_gsea_<ranking>`, in the column layout of
+#' the clusterProfiler tables (see .format_offline_fgsea()). That is the
+#' in-memory contract the clusterProfiler engine produces too, so downstream
+#' readers see no change of shape. In particular the multiomics collector
+#' still pools all rankings of the RNA layer (no `method` column, so
+#' select_layer_method_rows() keeps every row); that is kept for compatibility
+#' only, pending a scientific review of the multiomics integration, not
+#' because pooling the minimum p-value across rankings has been approved.
 #'
 #' @param ranked_genes Output of build_ranked_gene_lists()
 #' @param local_tables Output of load_local_pathway_tables()
@@ -2427,7 +2413,6 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
 #' @param min_size,max_size Gene-set size limits for the fgsea engine. The
 #'   defaults are those of the earlier offline runs: 4, and NULL, which means
 #'   the number of unique genes in each database's TERM2GENE table.
-#' @param primary_ranking Ranking stored under `<db>_fgsea` (fgsea engine).
 #' @return Nested list compatible with downstream consumers:
 #'   contrast -> db_method_key -> data.frame with padj, NES, etc.
 run_gsea_all <- function(ranked_genes,
@@ -2448,8 +2433,7 @@ run_gsea_all <- function(ranked_genes,
                          seed = 1L,
                          engine = "fgsea",
                          min_size = 4,
-                         max_size = NULL,
-                         primary_ranking = "pval_with_direction") {
+                         max_size = NULL) {
 
     engine <- match.arg(engine, c("fgsea", "clusterProfiler"))
     use_fgsea <- identical(engine, "fgsea")
@@ -2561,9 +2545,7 @@ run_gsea_all <- function(ranked_genes,
         ranking_method <- jr$ranking_method
         contrast       <- jr$contrast
         res            <- jr$gsea_result
-        is_primary     <- use_fgsea && identical(ranking_method, primary_ranking)
-        result_key     <- if (is_primary) paste0(db_name, "_fgsea") else
-            paste0(db_name, "_gsea_", ranking_method)
+        result_key     <- paste0(db_name, "_gsea_", ranking_method)
 
         # TECHNICAL FAILURE: the worker caught an error (class "gsea_error"), or —
         # defensively — returned no result object at all. This is NOT a successful
@@ -2595,8 +2577,7 @@ run_gsea_all <- function(ranked_genes,
 
         if (use_fgsea) {
             res_df <- .format_offline_fgsea(
-                res, gene_sets_by_db[[db_name]], db_name, contrast, ranking_method,
-                method = if (is_primary) "fgsea" else paste0("fgsea_", ranking_method))
+                res, gene_sets_by_db[[db_name]], db_name, contrast, ranking_method)
         } else {
             # Convert to data.frame for storage and downstream compatibility
             res_df <- as.data.frame(res)
@@ -2613,25 +2594,30 @@ run_gsea_all <- function(ranked_genes,
             }
         }
 
-        # Store in nested structure
-        if (is.null(results[[contrast]])) results[[contrast]] <- list()
-        results[[contrast]][[result_key]] <- res_df
-
         sig_df <- .gsea_significant_rows(res_df, pvalueCutoff)
         n_sig  <- nrow(sig_df)
         message("  ", db_name, " | ", ranking_method, " | ", contrast,
                 ": ", n_sig, " significant (padj <= ", pvalueCutoff, ")")
 
-        # Availability manifest + storage index for this stored unit. A stored
-        # table is a successful evaluation; status tracks whether it cleared the
-        # significance cutoff.
+        # In memory, only the significant sets, as the clusterProfiler engine
+        # (whose result is already cut at pvalueCutoff) has always stored; the
+        # full fgsea table goes to results.csv below. A unit with nothing
+        # significant is then stored nowhere in memory, as before.
+        stored <- if (use_fgsea) sig_df else res_df
+        if (nrow(stored) > 0) {
+            if (is.null(results[[contrast]])) results[[contrast]] <- list()
+            results[[contrast]][[result_key]] <- stored
+            index_rows[[length(index_rows) + 1]] <- data.frame(
+                analysis = "GSEA", database = db_name, group = ranking_method,
+                item = contrast, container = contrast, storage_key = result_key,
+                has_simplify = FALSE, simplify_key = NA_character_,
+                stringsAsFactors = FALSE)
+        }
+
+        # Availability manifest: an evaluated unit; status tracks whether it
+        # cleared the significance cutoff.
         manifest_rows[[length(manifest_rows) + 1]] <-
             gsea_manifest_row(if (n_sig > 0) "significant" else "empty", n_sig)
-        index_rows[[length(index_rows) + 1]] <- data.frame(
-            analysis = "GSEA", database = db_name, group = ranking_method,
-            item = contrast, container = contrast, storage_key = result_key,
-            has_simplify = FALSE, simplify_key = NA_character_,
-            stringsAsFactors = FALSE)
 
         # Write CSV
         if (!is.null(output_dir)) {

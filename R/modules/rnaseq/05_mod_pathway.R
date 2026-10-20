@@ -299,11 +299,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 #' with pathway_results a (possibly empty) named list of data.frames carrying a
 #' padj column for downstream compatibility.
 #'
-#' GSEA runs on the engine resolve_rna_gsea_settings() selects. With fgsea (the
-#' default) every tested set is kept, and the pval_with_direction table of each
-#' contrast and database is also written as
-#' Enrichment/pathway_<contrast>_<db>_fgsea.csv, the file the online path
-#' writes and the RNA report reads.
+#' GSEA runs on the engine resolve_rna_gsea_settings() selects. With either
+#' engine every ranking is stored alike under `<db>_gsea_<ranking>`, the
+#' returned tables hold the significant sets only, and with fgsea each unit's
+#' results.csv holds every tested set (see run_gsea_all()).
 #'
 #' @param de_tables Named list of per-contrast DE tables.
 #' @param feature_ids All unique feature IDs (for the overlap guard).
@@ -626,20 +625,6 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         min_size              = gsea_set$min_size,
         max_size              = gsea_set$max_size
     )
-
-    # Flat fgsea files, named and laid out as the online path writes them, so
-    # the RNA report and other readers of pathway_<contrast>_<db>_fgsea.csv
-    # see offline results too. Files from an earlier run are removed first:
-    # a switch to the clusterProfiler engine, or a dropped contrast, would
-    # otherwise leave them to be read as current.
-    old_flat <- list.files(enrich_dir, pattern = "^pathway_.*_fgsea\\.csv$",
-                           full.names = TRUE)
-    if (length(old_flat) > 0) unlink(old_flat)
-    if (identical(gsea_set$engine, "fgsea")) {
-        flat <- lapply(gsea_out$results, function(x) x[grepl("_fgsea$", names(x))])
-        flat <- lapply(flat, function(x) lapply(x, .online_fgsea_columns))
-        save_pathway_results(flat[lengths(flat) > 0], enrich_dir)
-    }
 
     for (contrast in names(gsea_out$results)) {
         if (is.null(pathway_results[[contrast]])) {

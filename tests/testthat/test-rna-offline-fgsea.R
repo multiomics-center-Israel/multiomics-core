@@ -131,7 +131,7 @@ test_that("the pipeline summary counts pathways with the module's cutoffs, not t
     gsea <- data.frame(pathway = paste0("p", 1:4), NES = c(2, -2, 1, 1),
                        padj = c(0.001, 0.03, 0.05, 0.2))
     ora  <- data.frame(pathway = paste0("o", 1:3), padj = c(0.001, 0.03, 0.05))
-    pw   <- list(pathway_results = list(c1 = list(KEGG_fgsea = gsea),
+    pw   <- list(pathway_results = list(c1 = list(KEGG_gsea_fc = gsea),
                                         cluster_ora = list(KEGG_contrasts_c1_ora = ora)))
     stats <- function(rna) collect_pipeline_stats(
         list(modes = list(rna = rna)), pre = list(), de_res = list(), pathway_res = pw)
@@ -356,39 +356,43 @@ test_that("run_gsea_all rejects an unknown engine", {
 # fgsea engine end to end (real fgsea)
 # ---------------------------------------------------------------------------
 
-test_that("fgsea engine keeps every tested set and stores the online fgsea schema", {
+test_that("fgsea engine keeps the clusterProfiler contract in memory and every tested set on disk", {
     skip_if_not_installed("fgsea")
     skip_if_not_installed("BiocParallel")
+    out_dir <- withr::local_tempdir()
 
     out <- suppressWarnings(suppressMessages(run_gsea_all(
-        make_fgsea_ranked(), make_fgsea_tables(), output_dir = NULL, workers = 1,
+        make_fgsea_ranked(), make_fgsea_tables(), output_dir = out_dir, workers = 1,
         seed = 1L, min_size = 5, max_size = 500, dotplot = FALSE)))
 
+    # Every ranking alike, under <db>_gsea_<ranking>; no primary ranking.
     c1 <- out$results$c1
-    expect_setequal(names(c1), c("KEGG_fgsea", "KEGG_gsea_fc"))
+    expect_true(all(grepl("^KEGG_gsea_", names(c1))))
+    expect_false(any(names(c1) == "KEGG_fgsea"))
+    expect_setequal(out$index$storage_key, paste0("KEGG_gsea_", out$index$group))
 
-    prim <- c1$KEGG_fgsea
-    expect_true(all(c("pathway", "pathway_name", "pval", "padj", "NES", "size",
-                      "leadingEdge", "contrast", "database", "method",
-                      "ranking_method") %in% names(prim)))
-    expect_identical(unique(prim$method), "fgsea")
-    expect_identical(unique(prim$ranking_method), "pval_with_direction")
-    expect_identical(unique(c1$KEGG_gsea_fc$method), "fgsea_fc")
+    for (tab in c1) {
+        expect_false("method" %in% names(tab))            # no column main did not have
+        expect_false("pathway_name" %in% names(tab))
+        expect_true(all(tab$padj <= 0.05))                 # significant sets only
+        expect_identical(tab$pathway, tab$Description)    # pathway = the name
+        expect_identical(tab$p.adjust, tab$padj)
+        expect_identical(tab$core_enrichment, gsub(",", "/", tab$leadingEdge, fixed = TRUE))
+    }
+    pwd <- c1$KEGG_gsea_pval_with_direction
+    expect_identical(pwd$pathway[pwd$ID == "pTOP"], "Top pathway")
 
-    # Both sets within the size limits are kept, the non-enriched one included;
-    # the 3-gene set is below min_size.
-    expect_setequal(prim$pathway, c("pTOP", "pMIX"))
-    expect_true(any(prim$padj > 0.05))
-    expect_identical(prim$pathway_name[prim$pathway == "pTOP"], "Top pathway")
+    # On disk, the full table: the non-enriched set too; the 3-gene set is
+    # below min_size.
+    disk <- read.csv(file.path(out_dir, "KEGG", "ranking_by_pval_with_direction", "c1",
+                               "results.csv"), stringsAsFactors = FALSE)
+    expect_setequal(disk$ID, c("pTOP", "pMIX"))
+    expect_true(any(disk$padj > 0.05))
+    expect_identical(disk$pathway[disk$ID == "pMIX"], "Mixed pathway")
 
-    # clusterProfiler-named copies carry the same values.
-    expect_identical(prim$ID, prim$pathway)
-    expect_identical(prim$p.adjust, prim$padj)
-    expect_identical(prim$core_enrichment, gsub(",", "/", prim$leadingEdge, fixed = TRUE))
-
-    # Index points the primary ranking at <db>_fgsea.
-    idx <- out$index
-    expect_identical(idx$storage_key[idx$group == "pval_with_direction"], "KEGG_fgsea")
+    # The manifest counts the evaluated units whether or not they were stored.
+    expect_true(all(out$manifest$evaluated))
+    expect_equal(nrow(out$manifest), 2L)
 })
 
 test_that("fgsea engine results are identical across runs with the same seed", {
@@ -408,7 +412,7 @@ test_that("the display gseaResult holds only significant rows", {
                      stringsAsFactors = FALSE)
     sets <- structure(list(p1 = paste0("g", 1:10), p2 = paste0("g", 11:20)),
                       descriptions = c(p1 = "One", p2 = "Two"))
-    tab <- .format_offline_fgsea(df, sets, "KEGG", "c1", "pval_with_direction", "fgsea")
+    tab <- .format_offline_fgsea(df, sets, "KEGG", "c1", "pval_with_direction")
     sig <- .gsea_significant_rows(tab, 0.05)
     ranked <- setNames(as.numeric(20:1), paste0("g", 1:20))
 
@@ -462,23 +466,20 @@ run_flat_fixture <- function(fx) {
         out_dir = fx$out_dir, clustering_res = NULL, pre = NULL)))
 }
 
-test_that("offline fgsea run writes pathway_<contrast>_<db>_fgsea.csv with the online columns", {
+test_that("offline fgsea run writes no flat fgsea file and no primary-ranking key", {
     skip_if_not_installed("fgsea")
     skip_if_not_installed("BiocParallel")
     fx <- make_flat_fixture()
     res <- run_flat_fixture(fx)
 
-    f <- file.path(fx$out_dir, "Enrichment", "pathway_c1_KEGG_fgsea.csv")
-    expect_true(file.exists(f))
-    tab <- read.csv(f, stringsAsFactors = FALSE)
-    expect_true(all(c("pathway", "pathway_name", "pval", "padj", "NES", "size",
-                      "leadingEdge") %in% names(tab)))
-    expect_false(any(c("ID", "core_enrichment", "p.adjust") %in% names(tab)))
-    expect_setequal(tab$pathway, c("pTOP", "pMIX"))
-    expect_identical(unique(tab$ranking_method), "pval_with_direction")
-
-    # In memory, the same table sits under <db>_fgsea for the contrast.
-    expect_true("KEGG_fgsea" %in% names(res$pathway_results$c1))
+    expect_length(list.files(file.path(fx$out_dir, "Enrichment"),
+                             pattern = "^pathway_.*_fgsea\\.csv$"), 0L)
+    keys <- unlist(lapply(res$pathway_results, names))
+    expect_false(any(grepl("_fgsea$", keys)))
+    # The full per-ranking tables are on disk.
+    expect_true(file.exists(file.path(fx$out_dir, "Enrichment", "GSEA", "KEGG",
+                                      "ranking_by_pval_with_direction", "c1",
+                                      "results.csv")))
 })
 
 test_that(".run_local_enrichment runs with gsea_engine set and no gsea block", {
@@ -489,7 +490,9 @@ test_that(".run_local_enrichment runs with gsea_engine set and no gsea block", {
     # match it and fail on $per_pathway_artifacts.
     fx$config$modes$rna$enrichment$gsea <- NULL
     res <- run_flat_fixture(fx)
-    expect_true("KEGG_fgsea" %in% names(res$pathway_results$c1))
+    gsea_rows <- res$enrichment_manifest[res$enrichment_manifest$analysis == "GSEA", ]
+    expect_gt(nrow(gsea_rows), 0)
+    expect_true(all(gsea_rows$evaluated))
 })
 
 test_that("offline enrichment records its manifest even when no unit has a table", {
@@ -677,24 +680,22 @@ test_that("Methods say nothing about pathways when enrichment did not run", {
     expect_match(report_methods_text(d), "adjusted p-value ≤ 0.05 are reported", fixed = TRUE)
 })
 
-test_that("clusterProfiler engine writes no flat fgsea file and clears an old one", {
+test_that("clusterProfiler engine writes no flat fgsea file", {
     skip_if_not_installed("clusterProfiler")
     skip_if_not_installed("BiocParallel")
     fx <- make_flat_fixture(engine = "clusterProfiler")
-    enrich_dir <- file.path(fx$out_dir, "Enrichment")
-    dir.create(enrich_dir, recursive = TRUE)
-    stale <- file.path(enrich_dir, "pathway_c1_KEGG_fgsea.csv")
-    writeLines("pathway,padj", stale)
-
     res <- run_flat_fixture(fx)
-    expect_false(file.exists(stale))
-    expect_false(any(grepl("_fgsea$", names(res$pathway_results$c1))))
+    expect_length(list.files(file.path(fx$out_dir, "Enrichment"),
+                             pattern = "^pathway_.*_fgsea\\.csv$"), 0L)
+    expect_false(any(grepl("_fgsea$", unlist(lapply(res$pathway_results, names)))))
 })
 
 # ---------------------------------------------------------------------------
-# Readers of the new tables
+# Readers of the stored tables
 # ---------------------------------------------------------------------------
 
+# In-memory tables as run_gsea_all() stores them with the fgsea engine: the
+# significant rows of .format_offline_fgsea(), one per ranking.
 make_offline_like_results <- function() {
     sets <- structure(list(GO1 = paste0("g", 1:10), GO2 = paste0("g", 11:20)),
                       descriptions = c(GO1 = "Term one", GO2 = "Term two"))
@@ -702,43 +703,34 @@ make_offline_like_results <- function() {
                        padj = c(1e-3, 0.5), log2err = NA_real_, ES = c(0.7, 0.2),
                        NES = c(2, 0.5), size = c(10L, 10L),
                        leadingEdge = c("g1,g2", "g11"), stringsAsFactors = FALSE)
-    list(
-        prim = .format_offline_fgsea(base, sets, "GO_BP", "c1",
-                                     "pval_with_direction", "fgsea"),
-        alt  = .format_offline_fgsea(base, sets, "GO_BP", "c1", "fc", "fgsea_fc"))
+    stored <- function(ranking) .gsea_significant_rows(
+        .format_offline_fgsea(base, sets, "GO_BP", "c1", ranking), 0.05)
+    list(pwd = stored("pval_with_direction"), fc = stored("fc"))
 }
 
-test_that("fact sheet reads the offline flat fgsea file", {
-    tabs <- make_offline_like_results()
-    enrich_dir <- withr::local_tempdir()
-    write.csv(.online_fgsea_columns(tabs$prim),
-              file.path(enrich_dir, "pathway_c1_GO_BP_fgsea.csv"), row.names = FALSE)
-
-    rows <- .facts_rnaseq_enrichment(enrich_dir, 0.05, contrast_names = "c1")
-    expect_length(rows, 1L)
-    txt <- paste(unlist(rows), collapse = " ")
-    expect_match(txt, "2 tested; 1 ranked")
-})
-
-test_that("multiomics method selection keeps only the primary fgsea ranking", {
+test_that("multiomics sees the main-branch shape: no method column, every ranking pooled", {
+    # Pooling every ranking of the RNA layer (select_layer_method_rows() keeps
+    # all rows without a method column) is kept for compatibility only, pending
+    # the multiomics review; it is not an approved choice.
     tabs <- make_offline_like_results()
     rna_pathway_res <- list(pathway_results = list(
-        c1 = list(GO_BP_fgsea = tabs$prim, GO_BP_gsea_fc = tabs$alt)))
+        c1 = list(GO_BP_gsea_pval_with_direction = tabs$pwd, GO_BP_gsea_fc = tabs$fc)))
 
     df <- extract_enrichment_df(rna_pathway_res)
-    expect_equal(nrow(df), 4L)
+    expect_equal(nrow(df), 2L)                      # significant rows only, both rankings
+    expect_false("method" %in% names(df))
     sel <- select_layer_method_rows(df, .raw_p_values(df))
-    expect_identical(sel$method, "fgsea")
-    expect_true(all(df$ranking_method[sel$keep] == "pval_with_direction"))
+    expect_identical(sel$method, "unspecified")
+    expect_true(all(sel$keep))
 })
 
-test_that("Shiny payload keeps significant GSEA rows and drops the leading-edge strings", {
+test_that("Shiny payload keeps pathway as the name and ID as the identifier", {
     tabs <- make_offline_like_results()
     pw <- list(
-        pathway_results = list(c1 = list(GO_BP_fgsea = tabs$prim)),
+        pathway_results = list(c1 = list(GO_BP_gsea_pval_with_direction = tabs$pwd)),
         enrichment_index = data.frame(
             analysis = "GSEA", database = "GO_BP", group = "pval_with_direction",
-            item = "c1", container = "c1", storage_key = "GO_BP_fgsea",
+            item = "c1", container = "c1", storage_key = "GO_BP_gsea_pval_with_direction",
             has_simplify = FALSE, simplify_key = NA_character_,
             stringsAsFactors = FALSE))
     gi <- paste0("g", 1:20)
@@ -746,16 +738,17 @@ test_that("Shiny payload keeps significant GSEA rows and drops the leading-edge 
     out <- .restructure_gsea(pw, gi, sig_cutoff = 0.05)
     tab <- out$gsea$GO_BP$pval_with_direction$c1
     expect_identical(tab$ID, "GO1")
-    expect_false(any(c("core_enrichment", "leadingEdge") %in% names(tab)))
+    expect_identical(tab$pathway, "Term one")
+    expect_false(any(c("core_enrichment", "leadingEdge", "method") %in% names(tab)))
     expect_identical(out$gsea_leading_edge$GO_BP$pval_with_direction$c1$GO1, 1:2)
 })
 
-test_that("pathway membership takes only significant fgsea rows", {
+test_that("pathway membership is keyed by term ID", {
     tabs <- make_offline_like_results()
     lt <- list(GO_BP = list(TERM2GENE = data.frame(
         term = c("GO1", "GO1", "GO2"), gene = c("g1", "g2", "g11"),
         stringsAsFactors = FALSE)))
     mem <- .build_gsea_pathway_membership(
-        list(c1 = list(GO_BP_fgsea = tabs$prim)), lt, sig_cutoff = 0.05)
+        list(c1 = list(GO_BP_gsea_pval_with_direction = tabs$pwd)), lt, sig_cutoff = 0.05)
     expect_identical(names(mem$GO_BP), "GO1")
 })
