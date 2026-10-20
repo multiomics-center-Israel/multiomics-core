@@ -117,6 +117,14 @@ validate_rna_config <- function(cfg) {
                       stats::p.adjust.methods, allow_null = TRUE)
         assert_one_of(e$gsea_engine, "enrichment$gsea_engine",
                       .RNA_GSEA_ENGINES, allow_null = TRUE)
+        # fgsea always reports Benjamini-Hochberg; say so instead of ignoring
+        # a different gsea_padj_method without a word.
+        if (!identical(tolower(e$gsea_engine %||% "fgsea"), "clusterprofiler") &&
+            !is.null(e$gsea_padj_method) && !e$gsea_padj_method %in% c("BH", "fdr")) {
+            warning("enrichment$gsea_padj_method = \"", e$gsea_padj_method,
+                    "\" is used by the clusterProfiler engine only; the fgsea engine ",
+                    "reports Benjamini-Hochberg padj.", call. = FALSE)
+        }
 
         if (!is.null(e$databases)) {
             valid_db <- c("KEGG", "GO_BP", "GO_MF", "GO_CC")
@@ -143,16 +151,19 @@ validate_rna_config <- function(cfg) {
             }
         }
 
-        if (!is.null(e$gsea)) {
-            if (!is.list(e$gsea)) stop("enrichment$gsea must be a mapping.")
-            assert_scalar_bool(e$gsea$per_pathway_artifacts,
+        # [[ ]], not $: with no `gsea` key, e$gsea partially matches a single
+        # gsea_* key (gsea_padj_method, ...) and validates it as the block.
+        g <- e[["gsea"]]
+        if (!is.null(g)) {
+            if (!is.list(g)) stop("enrichment$gsea must be a mapping.")
+            assert_scalar_bool(g$per_pathway_artifacts,
                                "enrichment$gsea$per_pathway_artifacts", allow_null = TRUE)
-            assert_scalar_num(e$gsea$min_size, "enrichment$gsea$min_size",
+            assert_scalar_num(g$min_size, "enrichment$gsea$min_size",
                               allow_null = TRUE, min_val = 1)
-            assert_scalar_num(e$gsea$max_size, "enrichment$gsea$max_size",
+            assert_scalar_num(g$max_size, "enrichment$gsea$max_size",
                               allow_null = TRUE, min_val = 1)
-            if (!is.null(e$gsea$min_size) && !is.null(e$gsea$max_size) &&
-                e$gsea$min_size >= e$gsea$max_size) {
+            if (!is.null(g$min_size) && !is.null(g$max_size) &&
+                g$min_size >= g$max_size) {
                 stop("enrichment$gsea$min_size must be less than enrichment$gsea$max_size.",
                      call. = FALSE)
             }
