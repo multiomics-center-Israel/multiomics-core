@@ -174,3 +174,90 @@ resolve_rna_gsea_settings <- function(config) {
     seed     = config$params$seed %||% 1L
   )
 }
+
+# ==============================================================================
+# OFFLINE GSEA RESULT TABLES (for the RNA report)
+# ==============================================================================
+
+#' Reader-facing names of the offline GSEA rankings
+#'
+#' The rankings are alternative analyses of the same DE results, not
+#' independent evidence; none is primary. `any_contrast` is not a ranking but
+#' the pseudo-contrast of `pval_wo_direction` (minimum p-value across contrasts).
+#' @noRd
+.RNA_GSEA_RANKING_LABELS <- c(
+  fc                  = "log2 fold change",
+  pval_with_direction = "signed -log10 p-value",
+  pval_wo_direction   = "unsigned -log10 p-value"
+)
+
+#' Read the significant rows of every offline GSEA unit, one row per ranking
+#'
+#' Reads each `<db>/ranking_by_<ranking>/<contrast>/results.csv` under
+#' `gsea_root` and keeps the rows at `padj <= sig_cutoff`. Every row is one
+#' pathway in one ranking: p-values are never combined across rankings, and a
+#' pathway significant in several rankings appears once per ranking. Columns
+#' are mapped from either engine's table (fgsea: `pval`, `size`, `leadingEdge`;
+#' clusterProfiler: `pvalue`, `setSize`, `core_enrichment`) without
+#' recomputing anything. `Direction` is left NA for unsigned rankings, where
+#' the sign of NES does not say up or down.
+#'
+#' @param gsea_root The offline GSEA directory (`Enrichment/GSEA`).
+#' @param sig_cutoff Adjusted-p cutoff (resolve_rna_gsea_settings()$sig_cutoff).
+#' @return data.frame with contrast, database, ranking_method, Ranking, Pathway,
+#'   ID, NES, Direction, pval, padj, size and leading_edge (comma-separated gene
+#'   IDs), ordered by contrast, database, Pathway and ranking; zero rows when
+#'   nothing is significant or no table exists.
+read_offline_gsea_tables <- function(gsea_root, sig_cutoff) {
+  cols <- c("contrast", "database", "ranking_method", "Ranking", "Pathway", "ID",
+            "NES", "Direction", "pval", "padj", "size", "leading_edge")
+  empty <- as.data.frame(
+    setNames(replicate(length(cols), character(0), simplify = FALSE), cols),
+    stringsAsFactors = FALSE)
+  files <- if (dir.exists(gsea_root)) {
+    list.files(gsea_root, pattern = "^results\\.csv$", recursive = TRUE,
+               full.names = TRUE)
+  } else character(0)
+  # The fgsea column, or the clusterProfiler one it was copied from.
+  pick <- function(df, a, b) {
+    if (a %in% names(df)) df[[a]] else if (b %in% names(df)) df[[b]] else NA
+  }
+
+  rows <- lapply(files, function(f) {
+    df <- tryCatch(utils::read.csv(f, stringsAsFactors = FALSE),
+                   error = function(e) NULL)
+    if (is.null(df) || !"padj" %in% names(df) || nrow(df) == 0) return(NULL)
+    df <- df[!is.na(df$padj) & df$padj <= sig_cutoff, , drop = FALSE]
+    if (nrow(df) == 0) return(NULL)
+    ranking <- as.character(df$ranking_method)
+    genes <- if ("leadingEdge" %in% names(df)) {
+      as.character(df$leadingEdge)
+    } else {
+      gsub("/", ",", as.character(pick(df, "core_enrichment", "core_enrichment")),
+           fixed = TRUE)
+    }
+    labelled <- ranking %in% names(.RNA_GSEA_RANKING_LABELS)
+    data.frame(
+      contrast       = as.character(df$contrast),
+      database       = as.character(df$database),
+      ranking_method = ranking,
+      Ranking        = ifelse(labelled, unname(.RNA_GSEA_RANKING_LABELS[ranking]), ranking),
+      Pathway        = as.character(pick(df, "Description", "pathway")),
+      ID             = as.character(df$ID),
+      NES            = as.numeric(df$NES),
+      Direction      = ifelse(ranking == "pval_wo_direction", NA_character_,
+                              ifelse(df$NES > 0, "Up-regulated", "Down-regulated")),
+      pval           = as.numeric(pick(df, "pval", "pvalue")),
+      padj           = as.numeric(df$padj),
+      size           = as.integer(pick(df, "size", "setSize")),
+      leading_edge   = genes,
+      stringsAsFactors = FALSE
+    )
+  })
+  out <- do.call(rbind, Filter(Negate(is.null), rows))
+  if (is.null(out)) return(empty)
+  rank_order <- match(out$ranking_method, names(.RNA_GSEA_RANKING_LABELS))
+  out <- out[order(out$contrast, out$database, out$Pathway, rank_order), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
