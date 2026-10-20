@@ -285,8 +285,8 @@ modes:
 
       # gsea_pvalue_cutoff: 0.05
       # Optional GSEA-only significance cutoff (defaults to pvalue_cutoff).
-      # It selects what is plotted and counted; with the fgsea engine every
-      # tested gene set stays in the result tables.
+      # It selects what is plotted, counted and kept in the in-memory results;
+      # with the fgsea engine each unit's results.csv also holds every tested set.
       # gsea_padj_method: "fdr"
       # Optional GSEA-only adjustment method (defaults to padj_method).
       # clusterProfiler engine only; fgsea reports Benjamini-Hochberg padj.
@@ -296,8 +296,8 @@ modes:
       # "fgsea" (default): the same fgsea call as the online workflow and the
       #   proteomics pipeline; gene-set size limits from gsea.min_size/max_size
       #   (default: min 4, no upper limit, as in earlier offline runs),
-      #   seeded from params.seed, all tested gene sets kept. Also writes
-      #   Enrichment/pathway_<contrast>_<db>_fgsea.csv (pval_with_direction ranking).
+      #   seeded from params.seed, every tested gene set written to each unit's
+      #   results.csv. All four rankings are run and stored alike (no primary).
       # "clusterProfiler": the earlier clusterProfiler::GSEA call (min set size 4,
       #   no upper limit, non-significant sets dropped). Use it to reproduce
       #   offline results produced before the fgsea switch.
