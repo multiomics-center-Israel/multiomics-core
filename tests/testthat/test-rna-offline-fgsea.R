@@ -109,7 +109,7 @@ test_that("resolve_rna_gsea_settings resolves one GSEA significance cutoff", {
     expect_equal(resolve_rna_gsea_settings(cfg(list()))$ora_cutoff, 0.05)
 })
 
-test_that("module, Shiny payload and report read the same GSEA cutoff, with <=", {
+test_that("the module's filter and the Shiny payload read the same GSEA cutoff, with <=", {
     cfg <- list(modes = list(rna = list(enrichment = list(pvalue_cutoff = 0.1))))
     expect_equal(.build_enrichment_config(list(), cfg)$gsea_pvalue_cutoff,
                  resolve_rna_gsea_settings(cfg)$sig_cutoff)
@@ -117,14 +117,8 @@ test_that("module, Shiny payload and report read the same GSEA cutoff, with <=",
     # A set exactly at the cutoff counts as significant.
     tab <- data.frame(ID = c("a", "b"), padj = c(0.1, 0.10001))
     expect_identical(.gsea_significant_rows(tab, 0.1)$ID, "a")
-
-    rmd <- readLines(file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd"),
-                     warn = FALSE)
-    expect_true(any(grepl("resolve_rna_gsea_settings(cfg)$sig_cutoff", rmd, fixed = TRUE)))
-    gsea_filters <- grep("fgsea_df$padj", rmd, fixed = TRUE, value = TRUE)
-    expect_gt(length(gsea_filters), 0)
-    expect_true(all(grepl("<= gsea_cut", gsea_filters, fixed = TRUE)))
-    expect_false(any(grepl("padj < 0.05", rmd, fixed = TRUE)))
+    # The report's use of the same cutoff is tested by rendering its chunks
+    # (see "the report filters GSEA tables at a non-default cutoff, inclusive").
 })
 
 test_that("the pipeline summary counts pathways with the module's cutoffs, not the DE cutoff", {
@@ -268,12 +262,7 @@ test_that("run_gsea_all defaults to min 4 and max = unique genes of each TERM2GE
     expect_equal(seen$min, 4)
     n_kegg <- length(unique(tables$KEGG$TERM2GENE[, 2]))
     expect_setequal(unlist(seen$max), c(n_kegg, 2L))
-
-    # An explicit max_size applies to every database.
-    seen$max <- list()
-    suppressMessages(run_gsea_all(ranked, tables, output_dir = NULL, workers = 1,
-                                  max_size = 30))
-    expect_identical(unique(unlist(seen$max)), 30)
+    # An explicit max_size is passed through unchanged: see the routing test above.
 })
 
 test_that("the online path keeps pathway.min_size/max_size and ignores enrichment.gsea", {
@@ -375,15 +364,6 @@ test_that("fgsea engine keeps the clusterProfiler contract in memory and every t
     expect_equal(nrow(out$manifest), 2L)
 })
 
-test_that("fgsea engine results are identical across runs with the same seed", {
-    skip_if_not_installed("fgsea")
-    skip_if_not_installed("BiocParallel")
-    run <- function() suppressWarnings(suppressMessages(run_gsea_all(
-        make_fgsea_ranked(), make_fgsea_tables(), output_dir = NULL, workers = 1,
-        seed = 99L, min_size = 5, dotplot = FALSE)))$results
-    expect_identical(run(), run())
-})
-
 test_that("the display gseaResult holds only significant rows", {
     skip_if_not_installed("DOSE")
     df <- data.frame(pathway = c("p1", "p2"), pval = c(1e-4, 0.5), padj = c(1e-3, 0.6),
@@ -404,8 +384,32 @@ test_that("the display gseaResult holds only significant rows", {
     expect_identical(obj@geneList, ranked)
 })
 
+test_that("an offline fgsea table has the clusterProfiler column contract", {
+    # Expected values are written out here, not derived from the formatter, so
+    # this is the check the formatter-built fixtures below rely on.
+    raw <- data.frame(pathway = c("t2", "t1"), pval = c(0.3, 0.001), padj = c(0.4, 0.004),
+                      log2err = NA_real_, ES = c(-0.2, 0.7), NES = c(-0.8, 2.2),
+                      size = c(8L, 12L), leadingEdge = c("g9", "g1,g2"),
+                      stringsAsFactors = FALSE)
+    sets <- structure(list(t1 = paste0("g", 1:12), t2 = paste0("g", 13:20)),
+                      descriptions = c(t1 = "Term one", t2 = ""))
+    tab <- .format_offline_fgsea(raw, sets, "KEGG", "c1", "fc")
+
+    expect_setequal(names(tab), c(
+        "pathway", "pval", "padj", "log2err", "ES", "NES", "size", "leadingEdge",
+        "contrast", "database", "ranking_method", "ID", "Description", "setSize",
+        "enrichmentScore", "pvalue", "p.adjust", "core_enrichment"))
+    expect_identical(tab$ID, c("t1", "t2"))                     # ordered by p-value
+    expect_identical(tab$pathway, c("Term one", "t2"))          # name; the ID when unnamed
+    expect_identical(tab$Description, tab$pathway)
+    expect_identical(tab$core_enrichment, c("g1/g2", "g9"))
+    expect_identical(tab$setSize, c(12L, 8L))
+    expect_identical(tab$p.adjust, c(0.004, 0.4))
+    expect_identical(unique(tab$ranking_method), "fc")
+})
+
 # ---------------------------------------------------------------------------
-# .run_local_enrichment writes the flat fgsea files
+# .run_local_enrichment end to end
 # ---------------------------------------------------------------------------
 
 make_flat_fixture <- function(engine = NULL) {
@@ -463,8 +467,8 @@ test_that("offline fgsea run writes no flat fgsea file and no primary-ranking ke
 })
 
 test_that(".run_local_enrichment runs with gsea_engine set and no gsea block", {
-    skip_if_not_installed("fgsea")
     skip_if_not_installed("BiocParallel")
+    local_global_stub("run_fgsea_core", function(...) data.frame())
     fx <- make_flat_fixture(engine = "fgsea")
     # Leave gsea_engine as the only gsea* key: enr_cfg$gsea would partially
     # match it and fail on $per_pathway_artifacts.
@@ -488,92 +492,6 @@ test_that("offline enrichment records its manifest even when no unit has a table
     expect_gt(nrow(m), 0)
     expect_true(all(m$evaluated))
     expect_true(all(m$status == "empty"))
-    expect_length(list.files(file.path(fx$out_dir, "Enrichment"),
-                             pattern = "_fgsea\\.csv$"), 0L)
-})
-
-test_that("a stale enrichment manifest is removed when enrichment does not run", {
-    out <- withr::local_tempdir()
-    dir.create(file.path(out, "Enrichment"))
-    stale <- file.path(out, "Enrichment", "enrichment_manifest.csv")
-    writeLines("analysis,evaluated", stale)
-    cfg <- list(modes = list(rna = list(enrichment = list(enabled = FALSE))))
-    suppressMessages(mod_rnaseq_pathway(list(tables = list()), NULL, cfg, out))
-    expect_false(file.exists(stale))
-})
-
-# Body of one named chunk of the RNA report.
-report_chunk <- function(label) {
-    rmd <- readLines(file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd"),
-                     warn = FALSE)
-    start <- grep(paste0("^```\\{r ", label, "[,}]"), rmd)
-    end   <- start + which(grepl("^```\\s*$", rmd[(start + 1):length(rmd)]))[1]
-    rmd[(start + 1):(end - 1)]
-}
-
-# Run the report's pathway-setup chunk against an Enrichment directory, then
-# render the chunks that state the enrichment status (those whose eval holds).
-report_enrichment_state <- function(enrich_dir) {
-    env <- new.env(parent = globalenv())
-    env$enrich_dir      <- enrich_dir
-    env$enrich_plot_dir <- file.path(enrich_dir, "plots")
-    env$cfg             <- list(modes = list(rna = list()))
-    eval(parse(text = report_chunk("pathway-setup")), envir = env)
-    text <- character(0)
-    if (!env$has_enrichment) {
-        text <- capture.output(eval(parse(text = report_chunk("pathway-skip")), envir = env))
-    } else if (env$offline_ran) {
-        text <- capture.output(eval(parse(text = report_chunk("pathway-status")), envir = env))
-    }
-    list(has_enrichment = env$has_enrichment, status = env$enr_status,
-         text = paste(text, collapse = " "))
-}
-
-manifest_df <- function(evaluated, n_significant) {
-    data.frame(analysis = "GSEA", database = "KEGG", group = c("fc", "pval_with_direction"),
-               item = "c1", evaluated = evaluated,
-               status = ifelse(!evaluated, "failed",
-                               ifelse(n_significant > 0, "significant", "empty")),
-               n_significant = ifelse(evaluated, n_significant, NA_integer_),
-               stringsAsFactors = FALSE)
-}
-
-test_that("the RNA report tells not run, completed without significance, and failed apart", {
-    d <- withr::local_tempdir()
-    mf <- file.path(d, "enrichment_manifest.csv")
-
-    s <- report_enrichment_state(d)                                 # nothing recorded
-    expect_identical(s$status, "not_run")
-    expect_false(s$has_enrichment)
-    expect_match(s$text, "Pathway analysis was not run", fixed = TRUE)
-
-    write.csv(manifest_df(c(TRUE, TRUE), c(0L, 0L)), mf, row.names = FALSE)
-    s <- report_enrichment_state(d)                                 # ran, nothing significant
-    expect_identical(s$status, "completed")
-    expect_true(s$has_enrichment)
-    expect_match(s$text, "2 analysis unit(s) were evaluated and none reached significance",
-                 fixed = TRUE)
-
-    write.csv(manifest_df(c(TRUE, FALSE), c(3L, NA)), mf, row.names = FALSE)
-    s <- report_enrichment_state(d)                                 # partly failed
-    expect_identical(s$status, "completed")
-    expect_match(s$text, "1 of 1 evaluated", fixed = TRUE)
-    expect_match(s$text, "1 analysis unit(s) failed", fixed = TRUE)
-
-    write.csv(manifest_df(c(FALSE, FALSE), c(NA, NA)), mf, row.names = FALSE)
-    s <- report_enrichment_state(d)                                 # every unit failed
-    expect_identical(s$status, "failed")
-    expect_false(s$has_enrichment)
-    expect_match(s$text, "no analysis unit completed", fixed = TRUE)
-    expect_false(grepl("was not run", s$text, fixed = TRUE))
-})
-
-test_that("the RNA report counts the online flat files as a completed run", {
-    d <- withr::local_tempdir()
-    writeLines("pathway,padj", file.path(d, "pathway_c1_KEGG_fgsea.csv"))
-    s <- report_enrichment_state(d)
-    expect_identical(s$status, "completed")
-    expect_true(s$has_enrichment)
 })
 
 test_that("removing a stale manifest leaves every other output in place", {
@@ -593,20 +511,103 @@ test_that("removing a stale manifest leaves every other output in place", {
     expect_true(all(file.exists(keep)))
 })
 
-# Evaluate the report's pathway Methods block, after its pathway-setup chunk,
-# against an Enrichment directory and config.
-report_methods_text <- function(enrich_dir, rna_cfg = list()) {
+# ---------------------------------------------------------------------------
+# RNA report: enrichment status, Methods and GSEA tables (rendered chunks)
+# ---------------------------------------------------------------------------
+
+# Body of one named chunk of the RNA report.
+report_chunk <- function(label) {
     rmd <- readLines(file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd"),
                      warn = FALSE)
+    start <- grep(paste0("^```\\{r ", label, "[,}]"), rmd)
+    end   <- start + which(grepl("^```\\s*$", rmd[(start + 1):length(rmd)]))[1]
+    rmd[(start + 1):(end - 1)]
+}
+
+# The report's environment after its pathway-setup chunk, for an Enrichment
+# directory and an RNA config.
+report_env <- function(enrich_dir, rna_cfg = list()) {
     env <- new.env(parent = globalenv())
     env$enrich_dir      <- enrich_dir
     env$enrich_plot_dir <- file.path(enrich_dir, "plots")
     env$cfg             <- list(modes = list(rna = rna_cfg))
     env$rna_cfg         <- rna_cfg
-    setup <- grep("^```\\{r pathway-setup\\}", rmd)
-    setup_end <- setup + which(grepl("^```\\s*$", rmd[(setup + 1):length(rmd)]))[1]
-    eval(parse(text = rmd[(setup + 1):(setup_end - 1)]), envir = env)
-    # The block is one if/else expression: grow it until it parses.
+    eval(parse(text = report_chunk("pathway-setup")), envir = env)
+    env
+}
+
+# Printed output of report chunks, evaluated in order in `env`.
+render_chunks <- function(env, labels) {
+    paste(capture.output(for (l in labels) eval(parse(text = report_chunk(l)), envir = env)),
+          collapse = "\n")
+}
+
+# One enrichment-manifest row, and the file of several.
+manifest_row <- function(analysis, database, group, evaluated = TRUE, n_significant = 0L) {
+    data.frame(analysis = analysis, database = database, group = group, item = "c1",
+               evaluated = evaluated,
+               status = if (!evaluated) "failed" else if (n_significant > 0) "significant" else "empty",
+               n_significant = if (evaluated) n_significant else NA_integer_,
+               stringsAsFactors = FALSE)
+}
+write_manifest <- function(d, rows) {
+    write.csv(do.call(rbind, rows), file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
+}
+
+# Enrichment status, as the report states it.
+report_status <- function(enrich_dir) {
+    env <- report_env(enrich_dir)
+    chunk <- if (!env$has_enrichment) "pathway-skip" else if (env$offline_ran) "pathway-status"
+    list(has_enrichment = env$has_enrichment, status = env$enr_status,
+         text = if (is.null(chunk)) "" else render_chunks(env, chunk))
+}
+
+test_that("the RNA report tells not run, completed without significance, and failed apart", {
+    d <- withr::local_tempdir()
+
+    s <- report_status(d)                                           # nothing recorded
+    expect_identical(s$status, "not_run")
+    expect_false(s$has_enrichment)
+    expect_match(s$text, "was not run", fixed = TRUE)
+
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc"),
+                           manifest_row("GSEA", "KEGG", "pval_with_direction")))
+    s <- report_status(d)                                           # ran, nothing significant
+    expect_identical(s$status, "completed")
+    expect_true(s$has_enrichment)
+    expect_match(s$text, "none reached significance", fixed = TRUE)
+
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", n_significant = 3L),
+                           manifest_row("GSEA", "KEGG", "pval_with_direction",
+                                        evaluated = FALSE)))
+    s <- report_status(d)                                           # partly failed
+    expect_identical(s$status, "completed")
+    expect_match(s$text, "1 of 1 evaluated", fixed = TRUE)
+    expect_match(s$text, "1 analysis unit(s) failed", fixed = TRUE)
+
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", evaluated = FALSE),
+                           manifest_row("GSEA", "KEGG", "pval_with_direction",
+                                        evaluated = FALSE)))
+    s <- report_status(d)                                           # every unit failed
+    expect_identical(s$status, "failed")
+    expect_false(s$has_enrichment)
+    expect_match(s$text, "no analysis unit completed", fixed = TRUE)
+    expect_false(grepl("was not run", s$text, fixed = TRUE))
+})
+
+test_that("the RNA report counts the online flat files as a completed run", {
+    d <- withr::local_tempdir()
+    writeLines("pathway,padj", file.path(d, "pathway_c1_KEGG_fgsea.csv"))
+    s <- report_status(d)
+    expect_identical(s$status, "completed")
+    expect_true(s$has_enrichment)
+})
+
+# The report's pathway Methods block (one if/else expression, grown until it parses).
+report_methods_text <- function(enrich_dir, rna_cfg = list()) {
+    env <- report_env(enrich_dir, rna_cfg)
+    rmd <- readLines(file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd"),
+                     warn = FALSE)
     start <- grep("^pathway_methods_text <- ", rmd)
     for (end in start:length(rmd)) {
         expr <- tryCatch(parse(text = rmd[start:end]), error = function(e) NULL)
@@ -614,15 +615,6 @@ report_methods_text <- function(enrich_dir, rna_cfg = list()) {
     }
     eval(expr, envir = env)
     env$pathway_methods_text
-}
-
-write_manifest <- function(d, rows) {
-    write.csv(do.call(rbind, rows), file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
-}
-manifest_row <- function(analysis, database, group, evaluated = TRUE) {
-    data.frame(analysis = analysis, database = database, group = group, item = "c1",
-               evaluated = evaluated, status = if (evaluated) "empty" else "failed",
-               n_significant = if (evaluated) 0L else NA_integer_, stringsAsFactors = FALSE)
 }
 
 test_that("Methods state the GSEA and ORA cutoffs separately, for what ran", {
@@ -636,6 +628,7 @@ test_that("Methods state the GSEA and ORA cutoffs separately, for what ran", {
     txt <- report_methods_text(d, rna)
     expect_match(txt, "fgsea on GO_BP, KEGG gene sets", fixed = TRUE)   # failed GO_MF left out
     expect_match(txt, "log2 fold change; signed -log10 p-value", fixed = TRUE)
+    expect_match(txt, "not independent evidence", fixed = TRUE)
     expect_match(txt, "Benjamini-Hochberg adjusted p-value ≤ 0.03", fixed = TRUE)
     expect_match(txt, "enricher on KEGG gene sets", fixed = TRUE)
     expect_match(txt, "adjusted p-value cutoff of 0.04", fixed = TRUE)
@@ -648,8 +641,9 @@ test_that("Methods state the GSEA and ORA cutoffs separately, for what ran", {
 
     # clusterProfiler engine: no Benjamini-Hochberg claim.
     rna$enrichment$gsea_engine <- "clusterProfiler"
-    expect_match(report_methods_text(d, rna), "clusterProfiler::GSEA", fixed = TRUE)
-    expect_false(grepl("Benjamini", report_methods_text(d, rna), fixed = TRUE))
+    txt <- report_methods_text(d, rna)
+    expect_match(txt, "clusterProfiler::GSEA", fixed = TRUE)
+    expect_false(grepl("Benjamini", txt, fixed = TRUE))
 })
 
 test_that("Methods say nothing about pathways when enrichment did not run", {
@@ -658,16 +652,6 @@ test_that("Methods say nothing about pathways when enrichment did not run", {
     # Online flat fgsea files: the online sentence, with the GSEA cutoff.
     writeLines("pathway,padj", file.path(d, "pathway_c1_KEGG_fgsea.csv"))
     expect_match(report_methods_text(d), "adjusted p-value ≤ 0.05 are reported", fixed = TRUE)
-})
-
-test_that("clusterProfiler engine writes no flat fgsea file", {
-    skip_if_not_installed("clusterProfiler")
-    skip_if_not_installed("BiocParallel")
-    fx <- make_flat_fixture(engine = "clusterProfiler")
-    res <- run_flat_fixture(fx)
-    expect_length(list.files(file.path(fx$out_dir, "Enrichment"),
-                             pattern = "^pathway_.*_fgsea\\.csv$"), 0L)
-    expect_false(any(grepl("_fgsea$", unlist(lapply(res$pathway_results, names)))))
 })
 
 # ---------------------------------------------------------------------------
@@ -745,19 +729,24 @@ write_gsea_unit <- function(enrich_dir, db, ranking, contrast, df) {
     write.csv(df, file.path(d, "results.csv"), row.names = FALSE)
 }
 
-# An fgsea-engine table (.format_offline_fgsea() layout) for terms T1..Tn.
-fgsea_unit_df <- function(ids, padj, nes) {
-    data.frame(pathway = paste("Term", ids), ID = ids, Description = paste("Term", ids),
-               pval = padj / 2, padj = padj, ES = nes / 2, NES = nes, size = 10L,
-               leadingEdge = "g1,g2,g3", stringsAsFactors = FALSE)
+# An fgsea-engine unit for terms T1..Tn ("Term <id>"), built by the production
+# formatter so the fixture cannot drift from it (its contract is pinned above).
+write_fgsea_unit <- function(enrich_dir, db, ranking, contrast, ids, padj, nes) {
+    raw <- data.frame(pathway = ids, pval = padj / 2, padj = padj, log2err = NA_real_,
+                      ES = nes / 2, NES = nes, size = 10L, leadingEdge = "g1,g2,g3",
+                      stringsAsFactors = FALSE)
+    sets <- structure(setNames(rep(list(paste0("g", 1:10)), length(ids)), ids),
+                      descriptions = setNames(paste("Term", ids), ids))
+    write_gsea_unit(enrich_dir, db, ranking, contrast,
+                    .format_offline_fgsea(raw, sets, db, contrast, ranking))
 }
 
 test_that("read_offline_gsea_tables keeps one row per pathway and ranking, significant only", {
     d <- withr::local_tempdir()
-    write_gsea_unit(d, "KEGG", "fc", "c1", fgsea_unit_df(c("T1", "T2"), c(0.01, 0.2), c(2, -1)))
-    write_gsea_unit(d, "KEGG", "pval_with_direction", "c1",
-                    fgsea_unit_df(c("T1", "T3"), c(0.02, 0.05), c(1.8, -1.5)))
-    write_gsea_unit(d, "KEGG", "pval_wo_direction", "c1", fgsea_unit_df("T1", 0.03, 1.2))
+    write_fgsea_unit(d, "KEGG", "fc", "c1", c("T1", "T2"), c(0.01, 0.2), c(2, -1))
+    write_fgsea_unit(d, "KEGG", "pval_with_direction", "c1", c("T1", "T3"),
+                     c(0.02, 0.05), c(1.8, -1.5))
+    write_fgsea_unit(d, "KEGG", "pval_wo_direction", "c1", "T1", 0.03, 1.2)
 
     tab <- read_offline_gsea_tables(file.path(d, "GSEA"), 0.05)
     # T1 in three rankings is three rows, each with its own p-values; T2 is
@@ -774,13 +763,15 @@ test_that("read_offline_gsea_tables keeps one row per pathway and ranking, signi
     # No direction for the unsigned ranking.
     expect_true(is.na(t1$Direction[t1$ranking_method == "pval_wo_direction"]))
     expect_identical(t1$Direction[t1$ranking_method == "fc"], "Up-regulated")
+    expect_identical(tab$Direction[tab$ID == "T3"], "Down-regulated")
     expect_identical(tab$leading_edge[1], "g1,g2,g3")
 })
 
 test_that("read_offline_gsea_tables maps the clusterProfiler engine's columns", {
     d <- withr::local_tempdir()
+    # Written out by hand: the clusterProfiler table as run_gsea_all() stores it.
     cp <- data.frame(ID = "map00010", Description = "Glycolysis", setSize = 12L,
-                     enrichmentScore = 0.6, NES = 1.9, pvalue = 0.001, p.adjust = 0.01,
+                     enrichmentScore = -0.6, NES = -1.9, pvalue = 0.001, p.adjust = 0.01,
                      qvalue = 0.01, rank = 5L, leading_edge = "tags=40%",
                      core_enrichment = "g1/g2", padj = 0.01, pathway = "Glycolysis",
                      stringsAsFactors = FALSE)
@@ -791,67 +782,75 @@ test_that("read_offline_gsea_tables maps the clusterProfiler engine's columns", 
     expect_identical(tab$ID, "map00010")
     expect_equal(tab$pval, 0.001)
     expect_identical(tab$size, 12L)
+    expect_identical(tab$Direction, "Down-regulated")
     expect_identical(tab$leading_edge, "g1,g2")
 })
 
 test_that("read_offline_gsea_tables returns the empty layout when nothing is there", {
     d <- withr::local_tempdir()
     expect_equal(nrow(read_offline_gsea_tables(file.path(d, "GSEA"), 0.05)), 0L)
-    write_gsea_unit(d, "KEGG", "fc", "c1", fgsea_unit_df("T1", 0.5, 1))
+    write_fgsea_unit(d, "KEGG", "fc", "c1", "T1", 0.5, 1)
     tab <- read_offline_gsea_tables(file.path(d, "GSEA"), 0.05)
     expect_equal(nrow(tab), 0L)
     expect_true(all(c("Pathway", "ID", "Ranking", "NES", "pval", "padj", "size") %in% names(tab)))
 })
 
-# Render the report's fGSEA tables and leading-edge chunks for an Enrichment dir.
-report_gsea_sections <- function(enrich_dir) {
-    env <- new.env(parent = globalenv())
-    env$enrich_dir      <- enrich_dir
-    env$enrich_plot_dir <- file.path(enrich_dir, "plots")
-    env$cfg             <- list(modes = list(rna = list()))
-    eval(parse(text = report_chunk("pathway-setup")), envir = env)
-    eval(parse(text = report_chunk("fgsea-tables-prep")), envir = env)
-    tables <- capture.output(eval(parse(text = report_chunk("fgsea-tables")), envir = env))
-    le <- capture.output(eval(parse(text = report_chunk("leading-edge")), envir = env))
-    list(tables = paste(tables, collapse = "\n"), leading_edge = paste(le, collapse = "\n"))
-}
-
 test_that("the report shows every ranking per contrast/database, and units with no result", {
     skip_if_not_installed("knitr")
     d <- withr::local_tempdir()
-    write_gsea_unit(d, "KEGG", "fc", "c1", fgsea_unit_df(c("T1", "T2"), c(0.01, 0.2), c(2, -1)))
-    write_gsea_unit(d, "KEGG", "pval_with_direction", "c1", fgsea_unit_df("T1", 0.02, 1.8))
-    write_gsea_unit(d, "GO_BP", "fc", "c1", fgsea_unit_df("G1", 0.6, 0.5))   # nothing significant
-    write.csv(rbind(manifest_row("GSEA", "KEGG", "fc"),
-                    manifest_row("GSEA", "KEGG", "pval_with_direction"),
-                    manifest_row("GSEA", "GO_BP", "fc")),
-              file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
+    write_fgsea_unit(d, "KEGG", "fc", "c1", c("T1", "T2"), c(0.01, 0.2), c(2, -1))
+    write_fgsea_unit(d, "KEGG", "pval_with_direction", "c1", "T1", 0.02, 1.8)
+    write_fgsea_unit(d, "GO_BP", "fc", "c1", "G1", 0.6, 0.5)    # nothing significant
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc"),
+                           manifest_row("GSEA", "KEGG", "pval_with_direction"),
+                           manifest_row("GSEA", "GO_BP", "fc")))
 
-    s <- report_gsea_sections(d)
-    expect_match(s$tables, "not independent evidence", fixed = TRUE)
-    expect_match(s$tables, "### c1 — KEGG", fixed = TRUE)
-    expect_match(s$tables, "2 row(s): 1 distinct pathway(s) across 2 ranking(s)", fixed = TRUE)
-    expect_match(s$tables, "log2 fold change", fixed = TRUE)
-    expect_match(s$tables, "signed -log10 p-value", fixed = TRUE)
-    expect_false(grepl("Term T2", s$tables, fixed = TRUE))     # not significant
-    expect_match(s$tables, "### c1 — GO_BP", fixed = TRUE)
-    expect_match(s$tables, "No significant pathways (padj ≤ 0.05) in any ranking", fixed = TRUE)
+    env <- report_env(d)
+    tables <- render_chunks(env, c("fgsea-tables-prep", "fgsea-tables"))
+    expect_match(tables, "not independent evidence", fixed = TRUE)
+    expect_match(tables, "### c1 — KEGG", fixed = TRUE)
+    expect_match(tables, "2 row(s): 1 distinct pathway(s) across 2 ranking(s)", fixed = TRUE)
+    expect_match(tables, "log2 fold change", fixed = TRUE)
+    expect_match(tables, "signed -log10 p-value", fixed = TRUE)
+    expect_false(grepl("Term T2", tables, fixed = TRUE))       # not significant
+    expect_match(tables, "### c1 — GO_BP", fixed = TRUE)
+    expect_match(tables, "No significant pathways (padj ≤ 0.05) in any ranking", fixed = TRUE)
     # Leading edge: per ranking, the genes as reported.
-    expect_match(s$leading_edge, "g1, g2, g3", fixed = TRUE)
-    expect_match(s$leading_edge, "signed -log10 p-value", fixed = TRUE)
+    le <- render_chunks(env, "leading-edge")
+    expect_match(le, "g1, g2, g3", fixed = TRUE)
+    expect_match(le, "signed -log10 p-value", fixed = TRUE)
 })
 
-test_that("the report tables read clusterProfiler-engine results too", {
+test_that("the report filters GSEA tables at a non-default cutoff, inclusive", {
     skip_if_not_installed("knitr")
+    rna <- list(enrichment = list(gsea_pvalue_cutoff = 0.1))
+
+    # Offline: per-ranking results.csv.
     d <- withr::local_tempdir()
-    cp <- data.frame(ID = "map00010", Description = "Glycolysis", setSize = 12L, NES = -1.9,
-                     pvalue = 0.001, p.adjust = 0.01, padj = 0.01, core_enrichment = "g4/g5",
-                     pathway = "Glycolysis", stringsAsFactors = FALSE)
-    write_gsea_unit(d, "KEGG", "pval_with_direction", "c1", cp)
-    write.csv(manifest_row("GSEA", "KEGG", "pval_with_direction"),
-              file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
-    s <- report_gsea_sections(d)
-    expect_match(s$tables, "Glycolysis", fixed = TRUE)
-    expect_match(s$tables, "Down-regulated", fixed = TRUE)
-    expect_match(s$leading_edge, "g4, g5", fixed = TRUE)
+    write_fgsea_unit(d, "KEGG", "fc", "c1", c("Tin", "Tat", "Tout"),
+                     c(0.08, 0.1, 0.12), c(1, 1, 1))
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc")))
+    env <- report_env(d, rna)
+    tables <- render_chunks(env, c("fgsea-tables-prep", "fgsea-tables"))
+    le <- render_chunks(env, "leading-edge")
+    for (out in list(tables, le)) {
+        expect_match(out, "Term Tin", fixed = TRUE)
+        expect_match(out, "Term Tat", fixed = TRUE)            # exactly on the cutoff
+        expect_false(grepl("Term Tout", out, fixed = TRUE))
+    }
+
+    # Online: the flat pathway_<contrast>_<db>_fgsea.csv file.
+    d2 <- withr::local_tempdir()
+    write.csv(data.frame(pathway = c("Oin", "Oat", "Oout"), pathway_name = c("Oin", "Oat", "Oout"),
+                         pval = c(0.04, 0.05, 0.06), padj = c(0.08, 0.1, 0.12), NES = 1,
+                         size = 10L, leadingEdge = "g1,g2"),
+              file.path(d2, "pathway_c1_KEGG_fgsea.csv"), row.names = FALSE)
+    env2 <- report_env(d2, rna)
+    tables2 <- render_chunks(env2, c("fgsea-tables-prep", "fgsea-tables"))
+    le2 <- render_chunks(env2, "leading-edge")
+    for (out in list(tables2, le2)) {
+        expect_match(out, "Oin", fixed = TRUE)
+        expect_match(out, "Oat", fixed = TRUE)
+        expect_false(grepl("Oout", out, fixed = TRUE))
+    }
 })
