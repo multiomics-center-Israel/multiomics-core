@@ -732,3 +732,126 @@ test_that("pathway membership is keyed by term ID", {
         list(c1 = list(GO_BP_gsea_pval_with_direction = tabs$pwd)), lt, sig_cutoff = 0.05)
     expect_identical(names(mem$GO_BP), "GO1")
 })
+
+# ---------------------------------------------------------------------------
+# Report: offline GSEA tables, one row per pathway and ranking
+# ---------------------------------------------------------------------------
+
+# One unit's results.csv, laid out as run_gsea_all() writes it.
+write_gsea_unit <- function(enrich_dir, db, ranking, contrast, df) {
+    d <- file.path(enrich_dir, "GSEA", db, paste0("ranking_by_", ranking), contrast)
+    dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    df$contrast <- contrast; df$database <- db; df$ranking_method <- ranking
+    write.csv(df, file.path(d, "results.csv"), row.names = FALSE)
+}
+
+# An fgsea-engine table (.format_offline_fgsea() layout) for terms T1..Tn.
+fgsea_unit_df <- function(ids, padj, nes) {
+    data.frame(pathway = paste("Term", ids), ID = ids, Description = paste("Term", ids),
+               pval = padj / 2, padj = padj, ES = nes / 2, NES = nes, size = 10L,
+               leadingEdge = "g1,g2,g3", stringsAsFactors = FALSE)
+}
+
+test_that("read_offline_gsea_tables keeps one row per pathway and ranking, significant only", {
+    d <- withr::local_tempdir()
+    write_gsea_unit(d, "KEGG", "fc", "c1", fgsea_unit_df(c("T1", "T2"), c(0.01, 0.2), c(2, -1)))
+    write_gsea_unit(d, "KEGG", "pval_with_direction", "c1",
+                    fgsea_unit_df(c("T1", "T3"), c(0.02, 0.05), c(1.8, -1.5)))
+    write_gsea_unit(d, "KEGG", "pval_wo_direction", "c1", fgsea_unit_df("T1", 0.03, 1.2))
+
+    tab <- read_offline_gsea_tables(file.path(d, "GSEA"), 0.05)
+    # T1 in three rankings is three rows, each with its own p-values; T2 is
+    # not significant; T3 sits exactly on the cutoff.
+    expect_equal(nrow(tab), 4L)
+    t1 <- tab[tab$ID == "T1", ]
+    expect_equal(nrow(t1), 3L)
+    expect_setequal(t1$padj, c(0.01, 0.02, 0.03))
+    expect_identical(t1$Ranking, c("log2 fold change", "signed -log10 p-value",
+                                   "unsigned -log10 p-value"))
+    expect_false("T2" %in% tab$ID)
+    expect_true("T3" %in% tab$ID)
+    expect_identical(tab$Pathway[tab$ID == "T3"], "Term T3")
+    # No direction for the unsigned ranking.
+    expect_true(is.na(t1$Direction[t1$ranking_method == "pval_wo_direction"]))
+    expect_identical(t1$Direction[t1$ranking_method == "fc"], "Up-regulated")
+    expect_identical(tab$leading_edge[1], "g1,g2,g3")
+})
+
+test_that("read_offline_gsea_tables maps the clusterProfiler engine's columns", {
+    d <- withr::local_tempdir()
+    cp <- data.frame(ID = "map00010", Description = "Glycolysis", setSize = 12L,
+                     enrichmentScore = 0.6, NES = 1.9, pvalue = 0.001, p.adjust = 0.01,
+                     qvalue = 0.01, rank = 5L, leading_edge = "tags=40%",
+                     core_enrichment = "g1/g2", padj = 0.01, pathway = "Glycolysis",
+                     stringsAsFactors = FALSE)
+    write_gsea_unit(d, "KEGG", "fc", "c1", cp)
+    tab <- read_offline_gsea_tables(file.path(d, "GSEA"), 0.05)
+    expect_equal(nrow(tab), 1L)
+    expect_identical(tab$Pathway, "Glycolysis")
+    expect_identical(tab$ID, "map00010")
+    expect_equal(tab$pval, 0.001)
+    expect_identical(tab$size, 12L)
+    expect_identical(tab$leading_edge, "g1,g2")
+})
+
+test_that("read_offline_gsea_tables returns the empty layout when nothing is there", {
+    d <- withr::local_tempdir()
+    expect_equal(nrow(read_offline_gsea_tables(file.path(d, "GSEA"), 0.05)), 0L)
+    write_gsea_unit(d, "KEGG", "fc", "c1", fgsea_unit_df("T1", 0.5, 1))
+    tab <- read_offline_gsea_tables(file.path(d, "GSEA"), 0.05)
+    expect_equal(nrow(tab), 0L)
+    expect_true(all(c("Pathway", "ID", "Ranking", "NES", "pval", "padj", "size") %in% names(tab)))
+})
+
+# Render the report's fGSEA tables and leading-edge chunks for an Enrichment dir.
+report_gsea_sections <- function(enrich_dir) {
+    env <- new.env(parent = globalenv())
+    env$enrich_dir      <- enrich_dir
+    env$enrich_plot_dir <- file.path(enrich_dir, "plots")
+    env$cfg             <- list(modes = list(rna = list()))
+    eval(parse(text = report_chunk("pathway-setup")), envir = env)
+    eval(parse(text = report_chunk("fgsea-tables-prep")), envir = env)
+    tables <- capture.output(eval(parse(text = report_chunk("fgsea-tables")), envir = env))
+    le <- capture.output(eval(parse(text = report_chunk("leading-edge")), envir = env))
+    list(tables = paste(tables, collapse = "\n"), leading_edge = paste(le, collapse = "\n"))
+}
+
+test_that("the report shows every ranking per contrast/database, and units with no result", {
+    skip_if_not_installed("knitr")
+    d <- withr::local_tempdir()
+    write_gsea_unit(d, "KEGG", "fc", "c1", fgsea_unit_df(c("T1", "T2"), c(0.01, 0.2), c(2, -1)))
+    write_gsea_unit(d, "KEGG", "pval_with_direction", "c1", fgsea_unit_df("T1", 0.02, 1.8))
+    write_gsea_unit(d, "GO_BP", "fc", "c1", fgsea_unit_df("G1", 0.6, 0.5))   # nothing significant
+    write.csv(rbind(manifest_row("GSEA", "KEGG", "fc"),
+                    manifest_row("GSEA", "KEGG", "pval_with_direction"),
+                    manifest_row("GSEA", "GO_BP", "fc")),
+              file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
+
+    s <- report_gsea_sections(d)
+    expect_match(s$tables, "not independent evidence", fixed = TRUE)
+    expect_match(s$tables, "### c1 — KEGG", fixed = TRUE)
+    expect_match(s$tables, "2 row(s): 1 distinct pathway(s) across 2 ranking(s)", fixed = TRUE)
+    expect_match(s$tables, "log2 fold change", fixed = TRUE)
+    expect_match(s$tables, "signed -log10 p-value", fixed = TRUE)
+    expect_false(grepl("Term T2", s$tables, fixed = TRUE))     # not significant
+    expect_match(s$tables, "### c1 — GO_BP", fixed = TRUE)
+    expect_match(s$tables, "No significant pathways (padj ≤ 0.05) in any ranking", fixed = TRUE)
+    # Leading edge: per ranking, the genes as reported.
+    expect_match(s$leading_edge, "g1, g2, g3", fixed = TRUE)
+    expect_match(s$leading_edge, "signed -log10 p-value", fixed = TRUE)
+})
+
+test_that("the report tables read clusterProfiler-engine results too", {
+    skip_if_not_installed("knitr")
+    d <- withr::local_tempdir()
+    cp <- data.frame(ID = "map00010", Description = "Glycolysis", setSize = 12L, NES = -1.9,
+                     pvalue = 0.001, p.adjust = 0.01, padj = 0.01, core_enrichment = "g4/g5",
+                     pathway = "Glycolysis", stringsAsFactors = FALSE)
+    write_gsea_unit(d, "KEGG", "pval_with_direction", "c1", cp)
+    write.csv(manifest_row("GSEA", "KEGG", "pval_with_direction"),
+              file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
+    s <- report_gsea_sections(d)
+    expect_match(s$tables, "Glycolysis", fixed = TRUE)
+    expect_match(s$tables, "Down-regulated", fixed = TRUE)
+    expect_match(s$leading_edge, "g4, g5", fixed = TRUE)
+})

@@ -2820,8 +2820,23 @@ if (file.exists(anno_file)) {
 ## fGSEA Results {.tabset}
 
 ```{r fgsea-tables-prep, eval=has_enrichment, include=FALSE}
-# Pre-load fGSEA data for rendering in regular (non-asis) chunks
-fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+# Offline: the significant rows of every ranking's results.csv, one row per
+# pathway and ranking, and the evaluated (contrast, database) units from the
+# manifest, so a unit with nothing significant is still shown. Online: the
+# flat pathway_<contrast>_<db>_fgsea.csv files.
+offline_gsea <- NULL
+offline_units <- NULL
+if (offline_ran) {
+    offline_gsea <- read_offline_gsea_tables(file.path(enrich_dir, "GSEA"), gsea_cut)
+    gsea_ran <- enr_manifest[enr_manifest$analysis == "GSEA" & evaluated, , drop = FALSE]
+    offline_units <- unique(data.frame(contrast = as.character(gsea_ran$item),
+                                       database = as.character(gsea_ran$database),
+                                       stringsAsFactors = FALSE))
+    offline_units <- offline_units[order(offline_units$contrast, offline_units$database), ,
+                                   drop = FALSE]
+}
+fgsea_files <- if (offline_ran) character(0) else
+    list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
 fgsea_tables <- list()
 if (length(fgsea_files) > 0) {
     for (i in seq_along(fgsea_files)) {
@@ -2848,7 +2863,38 @@ if (length(fgsea_files) > 0) {
 ```
 
 ```{r fgsea-tables, eval=has_enrichment, results='asis'}
-if (length(fgsea_tables) > 0) {
+if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
+    cat("GSEA was run with several gene rankings. They are alternative analyses of ",
+        "the same differential-expression results, not independent evidence, and none ",
+        "is primary. Each row below is one pathway in one ranking: a pathway significant ",
+        "under several rankings appears once per ranking, and p-values are not combined ",
+        "across rankings. Only pathways with adjusted p-value ≤ ", format(gsea_cut),
+        " are shown; every tested pathway is in ",
+        "`Enrichment/GSEA/<database>/ranking_by_<ranking>/<contrast>/results.csv`. ",
+        "Direction is not given for the unsigned ranking, whose NES sign does not mean ",
+        "up or down.\n\n", sep = "")
+    for (u in seq_len(nrow(offline_units))) {
+        cn <- offline_units$contrast[u]; db <- offline_units$database[u]
+        cat(sprintf("\n### %s — %s\n\n", cn, db))
+        if (identical(cn, "any_contrast")) {
+            cat("Genes ranked by their minimum p-value across all contrasts (unsigned).\n\n")
+        }
+        rows <- offline_gsea[offline_gsea$contrast == cn & offline_gsea$database == db, ,
+                             drop = FALSE]
+        if (nrow(rows) == 0) {
+            cat(sprintf("No significant pathways (padj ≤ %s) in any ranking for this contrast/database.\n\n",
+                        format(gsea_cut)))
+            next
+        }
+        cat(sprintf("%d row(s): %d distinct pathway(s) across %d ranking(s).\n\n",
+                    nrow(rows), length(unique(rows$ID)), length(unique(rows$Ranking))))
+        print(knitr::kable(
+            rows[, c("Pathway", "ID", "Ranking", "NES", "Direction", "pval", "padj", "size")],
+            caption = sprintf("Significant pathways by ranking — %s, %s", cn, db),
+            row.names = FALSE, digits = 4))
+        cat("\n\n")
+    }
+} else if (length(fgsea_tables) > 0) {
     for (i in seq_along(fgsea_tables)) {
         tbl <- fgsea_tables[[i]]
         cat(sprintf("\n### %s {.tabset}\n\n", tbl$label))
@@ -2889,8 +2935,7 @@ if (length(fgsea_tables) > 0) {
         }
     }
 } else if (offline_ran) {
-    cat("Enrichment ran, but wrote no fGSEA summary table. Every evaluated unit, ",
-        "including those with no significant gene set, is listed in ",
+    cat("No GSEA unit was evaluated in this run. Every evaluated unit is listed in ",
         "`Enrichment/enrichment_manifest.csv`.\n")
 } else {
     cat("No fGSEA result files found.\n")
@@ -2924,7 +2969,43 @@ if (file.exists(anno_file_le)) {
     anno_le <- read.csv(anno_file_le, stringsAsFactors = FALSE)
 }
 
-fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+if (offline_ran && !is.null(offline_gsea) && nrow(offline_gsea) > 0) {
+    # The leading edge each ranking's GSEA reported (fgsea's leadingEdge, or
+    # clusterProfiler's core_enrichment), unchanged; top 10 pathways per ranking.
+    for (key in unique(paste(offline_gsea$contrast, offline_gsea$database, sep = "\r"))) {
+        rows <- offline_gsea[paste(offline_gsea$contrast, offline_gsea$database, sep = "\r") == key, ,
+                             drop = FALSE]
+        cat(sprintf("\n### %s — %s\n\n", rows$contrast[1], rows$database[1]))
+        le_rows <- do.call(rbind, lapply(split(rows, rows$ranking_method), function(r) {
+            head(r[order(r$padj), , drop = FALSE], 10)
+        }))
+        le_df <- data.frame(
+            Pathway = le_rows$Pathway,
+            ID = le_rows$ID,
+            Ranking = le_rows$Ranking,
+            NES = round(le_rows$NES, 2),
+            padj = signif(le_rows$padj, 3),
+            `Leading Edge Genes` = vapply(strsplit(le_rows$leading_edge, ",", fixed = TRUE),
+                function(g) {
+                    g <- g[!is.na(g) & nzchar(g)]
+                    if (!is.null(anno_le)) {
+                        sym <- anno_le$symbol[match(g, anno_le$gene_id)]
+                        g[!is.na(sym)] <- sym[!is.na(sym)]
+                    }
+                    paste(head(g, 15), collapse = ", ")
+                }, character(1)),
+            check.names = FALSE, stringsAsFactors = FALSE)
+        print(knitr::kable(le_df, caption = sprintf("Leading edge genes, top pathways per ranking — %s, %s",
+                                                    rows$contrast[1], rows$database[1]),
+                           row.names = FALSE))
+        cat("\n\n")
+    }
+} else if (offline_ran) {
+    cat("No significant pathways with leading edge information.\n\n")
+}
+
+fgsea_files <- if (offline_ran) character(0) else
+    list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
 if (length(fgsea_files) > 0) {
     for (ff in fgsea_files) {
         label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
@@ -3045,17 +3126,14 @@ pathway_methods_text <- if (offline_ran) {
     parts <- character(0)
     if (nrow(gsea_ran) > 0) {
         fgsea_engine <- identical(enr_settings$engine, "fgsea")
-        ranking_labels <- c(
-            fc                  = "log2 fold change",
-            pval_with_direction = "signed -log10 p-value",
-            pval_wo_direction   = "unsigned -log10 p-value")
         rankings <- sort(unique(gsea_ran$group))
-        rankings <- ifelse(rankings %in% names(ranking_labels),
-                           ranking_labels[rankings], rankings)
+        rankings <- ifelse(rankings %in% names(.RNA_GSEA_RANKING_LABELS),
+                           .RNA_GSEA_RANKING_LABELS[rankings], rankings)
         parts <- c(parts, sprintf(paste0(
             "Gene set enrichment analysis was performed with %s on %s gene sets, ",
-            "ranking genes by %s. Gene sets with %s adjusted p-value ≤ %s were considered ",
-            "significantly enriched."),
+            "ranking genes by %s; these are alternative rankings of the same results, not ",
+            "independent evidence, and each is reported on its own. Gene sets with %s ",
+            "adjusted p-value ≤ %s were considered significantly enriched."),
             if (fgsea_engine) "fgsea" else "clusterProfiler::GSEA",
             paste(sort(unique(gsea_ran$database)), collapse = ", "),
             paste(rankings, collapse = "; "),
