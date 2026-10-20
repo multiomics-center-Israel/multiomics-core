@@ -102,6 +102,11 @@ test_that("resolve_rna_gsea_settings resolves one GSEA significance cutoff", {
     # The DE cutoff is not part of the chain (the module never used it).
     expect_equal(resolve_rna_gsea_settings(list(modes = list(rna = list(
         de = list(p_cutoff = 0.01)))))$sig_cutoff, 0.05)
+
+    # ORA runs at enrichment.pvalue_cutoff only; gsea_pvalue_cutoff does not reach it.
+    s <- resolve_rna_gsea_settings(cfg(list(pvalue_cutoff = 0.1, gsea_pvalue_cutoff = 0.2)))
+    expect_equal(s$ora_cutoff, 0.1)
+    expect_equal(resolve_rna_gsea_settings(cfg(list()))$ora_cutoff, 0.05)
 })
 
 test_that("module, Shiny payload and report read the same GSEA cutoff, with <=", {
@@ -120,6 +125,29 @@ test_that("module, Shiny payload and report read the same GSEA cutoff, with <=",
     expect_gt(length(gsea_filters), 0)
     expect_true(all(grepl("<= gsea_cut", gsea_filters, fixed = TRUE)))
     expect_false(any(grepl("padj < 0.05", rmd, fixed = TRUE)))
+})
+
+test_that("the pipeline summary counts pathways with the module's cutoffs, not the DE cutoff", {
+    gsea <- data.frame(pathway = paste0("p", 1:4), NES = c(2, -2, 1, 1),
+                       padj = c(0.001, 0.03, 0.05, 0.2))
+    ora  <- data.frame(pathway = paste0("o", 1:3), padj = c(0.001, 0.03, 0.05))
+    pw   <- list(pathway_results = list(c1 = list(KEGG_fgsea = gsea),
+                                        cluster_ora = list(KEGG_contrasts_c1_ora = ora)))
+    stats <- function(rna) collect_pipeline_stats(
+        list(modes = list(rna = rna)), pre = list(), de_res = list(), pathway_res = pw)
+
+    # DE cutoff differs from the (unset) enrichment cutoffs: the module runs at
+    # 0.05, so the summary must too. Before, both fell back to de.p_cutoff (0.01).
+    s <- stats(list(de = list(p_cutoff = 0.01)))
+    expect_equal(s$pathway$total, 3 + 2)   # GSEA padj <= 0.05: 3; ORA padj < 0.05: 2
+    expect_equal(s$methods$pathway_p_cutoff, 0.05)
+
+    # Separate GSEA and ORA cutoffs are each applied to their own tables.
+    s <- stats(list(de = list(p_cutoff = 0.01),
+                    enrichment = list(pvalue_cutoff = 0.04, gsea_pvalue_cutoff = 0.03)))
+    expect_equal(s$pathway$total, 2 + 2)   # GSEA <= 0.03: 2; ORA < 0.04: 2
+    expect_equal(c(s$pathway$up, s$pathway$down), c(1, 1))
+    expect_equal(s$methods$pathway_p_cutoff, 0.03)
 })
 
 test_that("resolve_rna_gsea_settings accepts any case and rejects unknown engines", {
