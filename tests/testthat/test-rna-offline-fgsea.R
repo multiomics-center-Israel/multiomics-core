@@ -499,36 +499,95 @@ test_that("a stale enrichment manifest is removed when enrichment does not run",
     expect_false(file.exists(stale))
 })
 
-# Run the report's pathway-setup chunk against an Enrichment directory.
-report_enrichment_gate <- function(enrich_dir) {
+# Body of one named chunk of the RNA report.
+report_chunk <- function(label) {
     rmd <- readLines(file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd"),
                      warn = FALSE)
-    start <- grep("^```\\{r pathway-setup\\}", rmd)
+    start <- grep(paste0("^```\\{r ", label, "[,}]"), rmd)
     end   <- start + which(grepl("^```\\s*$", rmd[(start + 1):length(rmd)]))[1]
+    rmd[(start + 1):(end - 1)]
+}
+
+# Run the report's pathway-setup chunk against an Enrichment directory, then
+# render the chunks that state the enrichment status (those whose eval holds).
+report_enrichment_state <- function(enrich_dir) {
     env <- new.env(parent = globalenv())
     env$enrich_dir      <- enrich_dir
     env$enrich_plot_dir <- file.path(enrich_dir, "plots")
     env$cfg             <- list(modes = list(rna = list()))
-    eval(parse(text = rmd[(start + 1):(end - 1)]), envir = env)
-    env$has_enrichment
+    eval(parse(text = report_chunk("pathway-setup")), envir = env)
+    text <- character(0)
+    if (!env$has_enrichment) {
+        text <- capture.output(eval(parse(text = report_chunk("pathway-skip")), envir = env))
+    } else if (env$offline_ran) {
+        text <- capture.output(eval(parse(text = report_chunk("pathway-status")), envir = env))
+    }
+    list(has_enrichment = env$has_enrichment, status = env$enr_status,
+         text = paste(text, collapse = " "))
 }
 
-test_that("the RNA report detects an offline run that wrote no result table", {
+manifest_df <- function(evaluated, n_significant) {
+    data.frame(analysis = "GSEA", database = "KEGG", group = c("fc", "pval_with_direction"),
+               item = "c1", evaluated = evaluated,
+               status = ifelse(!evaluated, "failed",
+                               ifelse(n_significant > 0, "significant", "empty")),
+               n_significant = ifelse(evaluated, n_significant, NA_integer_),
+               stringsAsFactors = FALSE)
+}
+
+test_that("the RNA report tells not run, completed without significance, and failed apart", {
     d <- withr::local_tempdir()
-    expect_false(report_enrichment_gate(d))                        # nothing ran
+    mf <- file.path(d, "enrichment_manifest.csv")
 
-    manifest <- data.frame(analysis = "GSEA", database = "KEGG", group = "fc",
-                           item = "c1", evaluated = TRUE, status = "empty",
-                           n_significant = 0L, stringsAsFactors = FALSE)
-    write.csv(manifest, file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
-    expect_true(report_enrichment_gate(d))                         # ran, nothing significant
+    s <- report_enrichment_state(d)                                 # nothing recorded
+    expect_identical(s$status, "not_run")
+    expect_false(s$has_enrichment)
+    expect_match(s$text, "Pathway analysis was not run", fixed = TRUE)
 
-    manifest$evaluated <- FALSE; manifest$status <- "failed"
-    write.csv(manifest, file.path(d, "enrichment_manifest.csv"), row.names = FALSE)
-    expect_false(report_enrichment_gate(d))                        # every unit failed
+    write.csv(manifest_df(c(TRUE, TRUE), c(0L, 0L)), mf, row.names = FALSE)
+    s <- report_enrichment_state(d)                                 # ran, nothing significant
+    expect_identical(s$status, "completed")
+    expect_true(s$has_enrichment)
+    expect_match(s$text, "2 analysis unit(s) were evaluated and none reached significance",
+                 fixed = TRUE)
 
+    write.csv(manifest_df(c(TRUE, FALSE), c(3L, NA)), mf, row.names = FALSE)
+    s <- report_enrichment_state(d)                                 # partly failed
+    expect_identical(s$status, "completed")
+    expect_match(s$text, "1 of 1 evaluated", fixed = TRUE)
+    expect_match(s$text, "1 analysis unit(s) failed", fixed = TRUE)
+
+    write.csv(manifest_df(c(FALSE, FALSE), c(NA, NA)), mf, row.names = FALSE)
+    s <- report_enrichment_state(d)                                 # every unit failed
+    expect_identical(s$status, "failed")
+    expect_false(s$has_enrichment)
+    expect_match(s$text, "no analysis unit completed", fixed = TRUE)
+    expect_false(grepl("was not run", s$text, fixed = TRUE))
+})
+
+test_that("the RNA report counts the online flat files as a completed run", {
+    d <- withr::local_tempdir()
     writeLines("pathway,padj", file.path(d, "pathway_c1_KEGG_fgsea.csv"))
-    expect_true(report_enrichment_gate(d))                         # online flat files
+    s <- report_enrichment_state(d)
+    expect_identical(s$status, "completed")
+    expect_true(s$has_enrichment)
+})
+
+test_that("removing a stale manifest leaves every other output in place", {
+    out <- withr::local_tempdir()
+    enr <- file.path(out, "Enrichment")
+    dir.create(file.path(enr, "GSEA", "KEGG"), recursive = TRUE)
+    keep <- c(file.path(enr, "pathway_c1_KEGG_fgsea.csv"),
+              file.path(enr, "gene_annotation.csv"),
+              file.path(enr, "GSEA", "KEGG", "results.csv"),
+              file.path(out, "enrichment_manifest.csv"))   # same name, outside Enrichment/
+    for (f in keep) writeLines("x", f)
+    writeLines("analysis,evaluated", file.path(enr, "enrichment_manifest.csv"))
+
+    cfg <- list(modes = list(rna = list(enrichment = list(enabled = FALSE))))
+    suppressMessages(mod_rnaseq_pathway(list(tables = list()), NULL, cfg, out))
+    expect_false(file.exists(file.path(enr, "enrichment_manifest.csv")))
+    expect_true(all(file.exists(keep)))
 })
 
 # Evaluate the report's pathway Methods block, after its pathway-setup chunk,

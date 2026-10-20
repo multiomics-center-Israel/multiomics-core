@@ -2743,10 +2743,23 @@ manifest_file <- file.path(enrich_dir, "enrichment_manifest.csv")
 enr_manifest <- if (file.exists(manifest_file)) {
     tryCatch(read.csv(manifest_file, stringsAsFactors = FALSE), error = function(e) NULL)
 } else NULL
-offline_ran <- !is.null(enr_manifest) && "evaluated" %in% names(enr_manifest) &&
-    any(as.logical(enr_manifest$evaluated), na.rm = TRUE)
+evaluated <- if (!is.null(enr_manifest) && "evaluated" %in% names(enr_manifest)) {
+    as.logical(enr_manifest$evaluated) %in% TRUE
+} else logical(0)
+offline_ran <- any(evaluated)
 flat_csvs <- setdiff(list.files(enrich_dir, pattern = "\\.csv$"), basename(manifest_file))
-has_enrichment <- offline_ran || (dir.exists(enrich_dir) && length(flat_csvs) > 0)
+# "not_run": no record of enrichment; "failed": the offline path ran but no unit
+# was evaluated (each one failed, or none could be built); "completed": at least
+# one unit was evaluated (offline) or the online path wrote its tables.
+enr_status <- if (offline_ran) "completed"
+              else if (!is.null(enr_manifest)) "failed"
+              else if (dir.exists(enrich_dir) && length(flat_csvs) > 0) "completed"
+              else "not_run"
+has_enrichment <- identical(enr_status, "completed")
+n_failed_units <- sum(!evaluated)
+n_sig_units <- if (offline_ran && "n_significant" %in% names(enr_manifest)) {
+    sum(enr_manifest$n_significant[evaluated] > 0, na.rm = TRUE)
+} else NA_integer_
 has_pathway_plots <- dir.exists(enrich_plot_dir) && length(list.files(enrich_plot_dir, pattern = "\\.png$")) > 0
 # The cutoffs enrichment ran with: a GSEA set is significant at padj <= gsea_cut;
 # offline ORA was run with ora_cut as clusterProfiler's pvalueCutoff.
@@ -2756,9 +2769,33 @@ ora_cut  <- enr_settings$ora_cutoff
 ```
 
 ```{r pathway-skip, eval=!has_enrichment, results='asis'}
-cat("Pathway analysis was not run or produced no results. To enable it, set ",
-    "`pathway.enabled: true` in the configuration file and ensure the required ",
-    "R packages are installed (fgsea, org.*.eg.db, clusterProfiler).\n")
+if (identical(enr_status, "failed")) {
+    cat("Pathway analysis was run, but no analysis unit completed: every ORA/GSEA ",
+        "unit failed or none could be built (", nrow(enr_manifest), " recorded in ",
+        "`Enrichment/enrichment_manifest.csv`). See the pipeline log for the errors.\n",
+        sep = "")
+} else {
+    cat("Pathway analysis was not run. To enable it, set ",
+        "`pathway.enabled: true` in the configuration file and ensure the required ",
+        "R packages are installed (fgsea, org.*.eg.db, clusterProfiler).\n")
+}
+```
+
+```{r pathway-status, eval=has_enrichment && offline_ran, results='asis'}
+if (identical(n_sig_units, 0L)) {
+    cat(sprintf(paste0(
+        "Pathway analysis completed: %d analysis unit(s) were evaluated and none ",
+        "reached significance (GSEA adjusted p-value ≤ %s; ORA adjusted p-value ",
+        "cutoff %s).\n\n"), sum(evaluated), format(gsea_cut), format(ora_cut)))
+} else {
+    cat(sprintf("Pathway analysis completed: %d of %d evaluated analysis unit(s) have significant results.\n\n",
+                n_sig_units, sum(evaluated)))
+}
+if (n_failed_units > 0) {
+    cat(sprintf(paste0(
+        "%d analysis unit(s) failed and are not shown; they are listed with ",
+        "status \"failed\" in `Enrichment/enrichment_manifest.csv`.\n\n"), n_failed_units))
+}
 ```
 
 ```{r pathway-annotation, eval=has_enrichment}
