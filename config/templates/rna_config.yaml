@@ -56,15 +56,29 @@ modes:
       method: "TMMlogCPM"   # "TMMlogCPM" | "VST"
       prior.count: 1
 
-    # Feature filtering
+    # Feature filtering (applied before normalization and downstream QC/PCA)
     filtering:
+      # Choose one:
+      #   adaptive    - find a data-driven CPM/TPM threshold (default).
+      #   fixed       - use fixed_threshold in CPM/TPM units.
+      #   deseq2_only - remove only genes with zero total raw counts.
+      #   none        - keep all genes (preprocessed inputs also skip filtering).
+      mode: "adaptive"
+      # For adaptive/fixed: retain a gene if it passes the threshold in
+      # at least half the non-missing samples of ANY one group.
+      # Choose the grouping variable to match the biological design.
       group_col: "line"
-      # Auto-filter calculates threshold based on CPM distribution.
-      # You can override limits here:
+      # Used only when mode: "fixed" (default if omitted: 1.0).
+      # fixed_threshold: 1.0
+      # Used only when mode: "adaptive"; a KDE-based threshold is
+      # constrained to [min, max], with fallback if no valley is found.
       auto_filter:
         min: 0.5
         max: 2.0
         fallback: 1.0
+      # For tximport inputs, filtering uses abundance (TPM).
+      # For count matrices, it uses TPM if gene lengths are available,
+      # otherwise CPM. The deseq2_only path uses raw counts.
 
     # Optional sample filtering by metadata (if you support it in code)
     # sample_filter:
