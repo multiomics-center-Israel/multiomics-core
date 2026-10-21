@@ -58,9 +58,21 @@ modes:
 
     # Feature filtering
     filtering:
+      # mode: "adaptive" (default) | "fixed" | "deseq2_only" | "none"
+      #   adaptive:    threshold = first valley right of the lowest peak in a density
+      #                of log2(CPM + 0.1) over all genes and samples, clamped to
+      #                [auto_filter$min, auto_filter$max]; auto_filter$fallback if no valley
+      #   fixed:       threshold = fixed_threshold
+      #   deseq2_only: removes only genes whose counts are zero in every sample
+      #   none:        keeps every gene
+      # adaptive/fixed rule: a gene is kept if, in at least one group of group_col, at
+      # least half (rounded up) of the samples with a non-missing value reach the
+      # threshold. Filtering is on CPM (TPM for tximport input), and is skipped for
+      # preprocessed input whatever the mode. Any other mode value runs as adaptive.
+      # mode: "adaptive"
+      # fixed_threshold: 1.0
       group_col: "line"
-      # Auto-filter calculates threshold based on CPM distribution.
-      # You can override limits here:
+      # Limits for the adaptive threshold:
       auto_filter:
         min: 0.5
         max: 2.0

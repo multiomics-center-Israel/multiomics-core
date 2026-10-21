@@ -199,3 +199,130 @@ run_auto_filter_pipeline <- function(cpm_mat, meta, sample_col, group_col,
     ))
 }
 
+# ==============================================================================
+# 4. Reader-facing description of the filter that ran
+# ==============================================================================
+
+#' Describe the RNA-seq gene filter that actually ran
+#'
+#' The one reading of what \code{preprocess_rna()} recorded about gene
+#' filtering, shared by the HTML report and the pipeline summary so that both
+#' describe the same run. The mode, the matrix filtered on, the threshold and
+#' the grouping column come from \code{pre$info}, not from the config: the
+#' runtime treats an unrecognised mode as adaptive and skips filtering for
+#' preprocessed input whatever the mode says. The config is read only for the
+#' adaptive search range and fallback, with the defaults
+#' \code{preprocess_rna()} applies.
+#'
+#' @param info The \code{info} list of the object returned by
+#'   \code{preprocess_rna()}, or NULL when it is not available (e.g. a report
+#'   re-knit by hand); the description then says so instead of guessing.
+#' @param filtering_cfg The \code{modes$rna$filtering} config list (may be NULL).
+#' @return A list with \code{mode} (\code{"adaptive"}, \code{"fixed"},
+#'   \code{"deseq2_only"}, \code{"none"}, \code{"preprocessed"} or
+#'   \code{"unknown"}), \code{applied} (logical: a gene filter removed genes by
+#'   rule), \code{matrix} (matrix the threshold was applied to, e.g. \code{"CPM"},
+#'   or NA when no threshold was applied), \code{group_col}
+#'   (grouping column of the group rule, or NA), \code{threshold}
+#'   (numeric or NA), \code{threshold_label}, \code{rule} (or NULL),
+#'   \code{short} (one-line label), \code{methods} (reader-facing paragraph)
+#'   and \code{de_note} (DESeq2 independent filtering, or NULL).
+describe_rna_filtering <- function(info, filtering_cfg = NULL) {
+    filter_norm <- info$filter_norm %||% NA_character_
+    mode <- info$filter_mode %||% (
+        if (filter_norm %in% c("preprocessed", "none")) filter_norm else "unknown"
+    )
+
+    unit <- if (grepl("^TPM", filter_norm)) "TPM" else if (identical(filter_norm, "CPM")) "CPM" else NA_character_
+    unit_label <- if (identical(filter_norm, "TPM (tximport)")) "TPM (tximport abundance)" else unit
+    num <- function(x) format(signif(as.numeric(x), 3))
+
+    thr <- suppressWarnings(as.numeric(info$filter_threshold %||% NA))[1]
+    has_thr <- mode %in% c("adaptive", "fixed") && !is.na(thr)
+    threshold_label <- if (has_thr) {
+        sprintf("%s %s", num(thr), unit)
+    } else if (mode == "unknown") {
+        "N/A (not recorded for this report)"
+    } else {
+        "N/A (no threshold-based filtering)"
+    }
+
+    group <- info$filter_group_col %||% NA_character_
+    group_txt <- if (is.na(group)) "the grouping column" else sprintf("'%s'", group)
+    rule <- if (mode %in% c("adaptive", "fixed")) {
+        sprintf(paste0(
+            "A gene was kept if, in at least one group of %s, at least half ",
+            "(rounded up) of the samples with a non-missing value had %s \u2265 the threshold."
+        ), group_txt, unit)
+    } else {
+        NULL
+    }
+
+    methods <- switch(mode,
+        adaptive = paste(
+            sprintf(paste0(
+                "Lowly expressed genes were filtered on %s values. The threshold was selected ",
+                "automatically from a kernel density estimate of log2(%s + 0.1) values pooled over ",
+                "all genes and samples, taking the first local minimum to the right of the ",
+                "lowest-expression peak. The threshold is constrained to %s\u2013%s %s (a value ",
+                "outside this range is set to the nearest limit), and %s %s is used when the ",
+                "density has fewer than two peaks or no such minimum. The threshold applied in ",
+                "this run was %s."
+            ), unit_label, unit,
+            num(filtering_cfg$auto_filter$min %||% 0.5), num(filtering_cfg$auto_filter$max %||% 2.0),
+            unit, num(filtering_cfg$auto_filter$fallback %||% 1.0), unit, threshold_label),
+            rule),
+        fixed = paste(
+            sprintf("Lowly expressed genes were filtered on %s values with a fixed threshold of %s.",
+                    unit_label, threshold_label),
+            rule),
+        deseq2_only = paste(
+            "Only genes with a total count of zero across all samples were removed;",
+            "no expression threshold was applied."),
+        none = paste0(
+            "No gene filtering was applied; all genes were kept.",
+            if (identical(info$expr_work_method, "VST") &&
+                isTRUE(info$n_genes_filt < info$n_genes_raw)) {
+                " Genes with a zero count in every sample were dropped before the variance-stabilizing transformation."
+            } else ""),
+        preprocessed = paste(
+            "Gene filtering was skipped because the input was a preprocessed expression",
+            "matrix; all features were kept."),
+        "The gene filter applied in this run is not recorded for this report."
+    )
+
+    short <- switch(mode,
+        adaptive = sprintf("adaptive (KDE valley), threshold %s", threshold_label),
+        fixed = sprintf("fixed threshold %s", threshold_label),
+        deseq2_only = "zero-count genes removed (no expression threshold)",
+        none = "none",
+        preprocessed = "skipped (preprocessed input)",
+        "not recorded"
+    )
+
+    # DESeq2 runs on count input only; it is a separate DE-stage step that the
+    # deseq2_only mode name invites readers to confuse with the gene filter.
+    de_note <- if (mode %in% c("adaptive", "fixed", "deseq2_only", "none")) {
+        paste(
+            "Separately, when DESeq2 performs the differential-expression testing, its",
+            "independent filtering does not change which genes were kept above; it sets",
+            "adjusted p-values to NA for genes with low mean normalized counts."
+        )
+    } else {
+        NULL
+    }
+
+    list(
+        mode = mode,
+        applied = mode %in% c("adaptive", "fixed", "deseq2_only"),
+        matrix = if (mode %in% c("adaptive", "fixed")) unit_label else NA_character_,
+        group_col = if (mode %in% c("adaptive", "fixed")) group else NA_character_,
+        threshold = if (has_thr) thr else NA_real_,
+        threshold_label = threshold_label,
+        rule = rule,
+        short = short,
+        methods = methods,
+        de_note = de_note
+    )
+}
+
