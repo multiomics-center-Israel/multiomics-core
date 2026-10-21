@@ -76,6 +76,22 @@ validate_rna_config <- function(cfg) {
         d <- cfg$de
         assert_scalar_num(d$padj_cutoff, "de$padj_cutoff", allow_null = TRUE, min_val = 0, max_val = 1)
         assert_scalar_num(d$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
+        assert_scalar_chr(d$block_col, "de$block_col", allow_null = TRUE)
+        # Blocking is wired into the DESeq2 count path only; the preprocessed
+        # (limma) and pre-computed paths would silently fit or load an unpaired
+        # result, hiding a design error.
+        if (!is.null(d$block_col) && nzchar(d$block_col)) {
+            has_precomputed <- length(unlist(cfg$files$de_table)) > 0 &&
+                all(nzchar(unlist(cfg$files$de_table)))
+            if (is_preprocessed || has_precomputed) {
+                stop("de$block_col is set, but blocking applies only when DESeq2 is fitted ",
+                     "on counts.\n",
+                     "  This config uses ",
+                     if (has_precomputed) "pre-computed DE tables (files$de_table)" else
+                         "preprocessed input (input$format: preprocessed)",
+                     ", so the pairing would be ignored. Remove de$block_col, or supply raw counts.")
+            }
+        }
     }
 
     # 6. Annotation (optional)

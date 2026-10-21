@@ -7,8 +7,12 @@
 #'   For tximport, must contain 'counts', 'abundance', and 'length' matrices.
 #' @param meta Data frame with sample metadata
 #' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator
-#' @param de_cfg List with DE configuration (p_cutoff, linear_fc_cutoff, sample_col, sample_alignment, etc.)
-#' @return List with 'dds' (DESeqDataSet) and 'tables' (list of DE result data frames)
+#' @param de_cfg List with DE configuration (p_cutoff, linear_fc_cutoff, sample_col, sample_alignment, etc.).
+#'   When \code{block_col} names a metadata column, it is added to the design
+#'   as a fixed term (\code{~ block_col + Factor}) so that samples are compared
+#'   within blocks; see \code{resolve_de_block()}.
+#' @return List with 'dds' (DESeqDataSet), 'tables' (list of DE result data
+#'   frames) and 'info' (method, deseq_mode, design, block_col, n_blocks).
 #' @export
 run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
     # Validate contrasts
@@ -58,6 +62,38 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
         sample_col = sample_col,
         lenient_alignment = lenient_alignment
     )
+
+    # Pairing enters DESeq2 as a fixed term (~ block + factor). DESeq2 has no
+    # random effect, so each extra block level costs one residual degree of
+    # freedom; the check below stops before DESeq() on a design it cannot fit.
+    block_col <- NULL
+    block <- resolve_de_block(as.data.frame(SummarizedExperiment::colData(dds0)),
+                              list(de = de_cfg), sample_col)
+    if (!is.null(block)) {
+        block_col <- de_cfg$block_col
+        if (identical(block_col, factor_col)) {
+            stop("de$block_col '", block_col, "' is the contrast factor itself.\n",
+                 "  Point de$block_col at the pairing unit (donor, line, subject), ",
+                 "not at the column the contrasts compare.")
+        }
+        dds0[[block_col]] <- block
+        design_formula <- stats::as.formula(paste0("~ ", block_col, " + ", factor_col))
+        mm <- stats::model.matrix(design_formula,
+                                  data = as.data.frame(SummarizedExperiment::colData(dds0)))
+        if (qr(mm)$rank < ncol(mm) || nrow(mm) <= ncol(mm)) {
+            stop("The paired design ", paste(deparse(design_formula), collapse = ""),
+                 " cannot be fitted: ", ncol(mm), " coefficients, rank ", qr(mm)$rank,
+                 ", ", nrow(mm), " samples.\n",
+                 "  This happens when every level of '", block_col, "' holds a single level of '",
+                 factor_col, "', or when there are too few samples for one coefficient per block.\n",
+                 "  Check that each block contains samples from more than one group, ",
+                 "or remove de$block_col to fit the unpaired design.")
+        }
+        DESeq2::design(dds0) <- design_formula
+        message(sprintf("[run_deseq2_de] Paired design %s: %d blocks of '%s', %d residual df",
+                        paste(deparse(design_formula), collapse = ""), nlevels(block),
+                        block_col, nrow(mm) - ncol(mm)))
+    }
 
     # DESeq2 mode selection from config
     deseq_mode <- de_cfg$deseq_mode %||% "default"
@@ -124,10 +160,18 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
         tables[[cn]] <- tab
     }
 
-    # Return both dds and tables for Shiny export
+    # info records the model that was fitted, so reports describe what ran
+    # (describe_rna_de()) rather than what the config asked for.
     return(list(
         dds = dds,
-        tables = tables
+        tables = tables,
+        info = list(
+            method     = "deseq2",
+            deseq_mode = deseq_mode,
+            design     = paste(deparse(design_formula), collapse = ""),
+            block_col  = block_col,
+            n_blocks   = if (is.null(block)) NA_integer_ else nlevels(block)
+        )
     ))
 }
 
@@ -308,7 +352,8 @@ build_de_summary_counts <- function(summary_df, contrasts_df) {
 #' @param meta Data frame with sample metadata.
 #' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator.
 #' @param de_cfg DE configuration list.
-#' @return List with 'dds' (NULL) and 'tables' (named list of DE result data frames).
+#' @return List with 'dds' (NULL), 'tables' (named list of DE result data frames)
+#'   and 'info' (method, design, block_col).
 run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg) {
     if (!requireNamespace("limma", quietly = TRUE)) {
         stop("Package 'limma' is required for DE on preprocessed data.", call. = FALSE)
@@ -348,7 +393,8 @@ run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg) {
 
     message("[run_limma_rna_de] Using limma for preprocessed data")
 
-    design <- stats::model.matrix(stats::as.formula(paste0("~ 0 + ", factor_col)), data = meta)
+    design_formula <- stats::as.formula(paste0("~ 0 + ", factor_col))
+    design <- stats::model.matrix(design_formula, data = meta)
     colnames(design) <- safe_levels
 
     # Build contrast formulas
@@ -388,7 +434,10 @@ run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg) {
 
     list(
         dds    = NULL,
-        tables = tables
+        tables = tables,
+        info   = list(method = "limma",
+                      design = paste(deparse(design_formula), collapse = ""),
+                      block_col = NULL)
     )
 }
 
@@ -401,7 +450,8 @@ run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg) {
 #' @param config Full pipeline config.
 #' @param contrasts_df Optional contrasts data frame (with Contrast_name column).
 #'   When provided, contrast names from this table are used instead of filenames.
-#' @return List with 'dds' (NULL) and 'tables' (named list of DE data frames).
+#' @return List with 'dds' (NULL), 'tables' (named list of DE data frames) and
+#'   'info' (method "precomputed").
 load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
     cfg <- config$modes$rna
 
@@ -567,6 +617,7 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
 
     list(
         dds    = NULL,
-        tables = tables
+        tables = tables,
+        info   = list(method = "precomputed", design = NA_character_, block_col = NULL)
     )
 }

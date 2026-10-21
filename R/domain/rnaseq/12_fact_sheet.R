@@ -15,9 +15,11 @@
 #'   counts, which cannot be recovered from the matrices alone.
 #' @param inputs Optional loaded inputs; used for the contrast names.
 #' @param run_dir Optional run root, for the execution_info provenance rows.
+#' @param de_info Optional \code{info} list of \code{mod_rnaseq_de()}'s result;
+#'   the DE-model row describes it via \code{describe_rna_de()}.
 #' @return A data.frame with columns claim, value, source_file.
 build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
-                                    run_dir = NULL) {
+                                    run_dir = NULL, de_info = NULL) {
     dirs <- create_legacy_output_dirs(out_dir, create = FALSE)
     de_cfg <- config$modes$rna$de %||% list()
     # Exactly the resolution the DE code uses (R/domain/rnaseq/04_de_summary.R:100,148).
@@ -38,7 +40,7 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
     contrast_names <- if (!is.null(inputs$contrasts)) as.character(inputs$contrasts$Contrast_name) else character(0)
 
     bind_facts(
-        .facts_rnaseq_cohort(counts, final, pre, inputs, config, p_cut, fc_cut),
+        .facts_rnaseq_cohort(counts, final, pre, inputs, config, p_cut, fc_cut, de_info),
         .facts_rnaseq_de(final, de_counts, de_cfg),
         .facts_rnaseq_structure(norm, norm_path, pre, config),
         .facts_rnaseq_enrichment(dirs$enrichment, p_cut, contrast_names, gsea_cut),
@@ -79,7 +81,8 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
 
 #' Cohort, filtering and analysis settings rows
 #' @keywords internal
-.facts_rnaseq_cohort <- function(counts, final, pre, inputs, config, p_cut, fc_cut) {
+.facts_rnaseq_cohort <- function(counts, final, pre, inputs, config, p_cut, fc_cut,
+                                 de_info = NULL) {
     sample_cols <- if (!is.null(counts)) setdiff(names(counts), names(counts)[1]) else NULL
 
     group_desc <- NULL
@@ -110,8 +113,10 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
                      if (de_uses_adjusted_p(config$modes$rna$de, "rna")) "adjusted p" else "raw p",
                      p_cut, fc_cut),
              "../execution_info/config_used.yaml"),
-        fact("DESeq2 mode", config$modes$rna$de$deseq_mode %||% "default",
-             "../execution_info/config_used.yaml")
+        # The model that was fitted, not de$method: a paired config fits a
+        # different design, and preprocessed input is tested with limma.
+        fact("DE model", describe_rna_de(de_info)$short,
+             "DE step (mod_rnaseq_de info)")
     )
 }
 
