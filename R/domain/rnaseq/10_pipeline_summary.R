@@ -197,8 +197,10 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
             normalization = rna_cfg$normalization$method %||% "TMM",
             log_offset    = resolve_rna_log_offset(rna_cfg$normalization)$label,
             filtering = describe_rna_filtering(pre$info, rna_cfg$filtering),
-            de_method = rna_cfg$de$method %||% "deseq2",
-            de_mode   = rna_cfg$de$deseq_mode %||% "default",
+            # The fitted model (describe_rna_de()), not de$method: the config
+            # key does not say whether a block was used or limma ran instead.
+            de_method = describe_rna_de(de_res$info)$label,
+            de_model  = describe_rna_de(de_res$info),
             p_cutoff  = rna_cfg$de$p_cutoff %||% 0.05,
             fc_cutoff = rna_cfg$de$linear_fc_cutoff %||% 1.0,
             pathway_method = rna_cfg$pathway$method %||% "fgsea",
@@ -487,7 +489,7 @@ generate_flowchart_html <- function(stats) {
     ))
 
     # --- QC / DE split (always 2 branches) ---
-    de_method <- toupper(stats$methods$de_method)
+    de_method <- stats$methods$de_method
     de_detail <- sprintf("%s &middot; %s DE genes", de_method,
                          format(stats$de$total, big.mark = ","))
 
@@ -641,10 +643,9 @@ generate_summary_body_r <- function(stats) {
     step6 <- build_step_html(6, "\u2696", "Normalization", "phase-norm", "downstream", norm_desc, norm_tags)
 
     # DE
-    de_label <- toupper(stats$methods$de_method)
-    de_desc <- sprintf("%s %s test (%s mode). Significance: adj. p-value &le; %s and |linear FC| &ge; %s. FDR via Benjamini-Hochberg.",
-        de_label, if (stats$methods$de_mode == "default") "Wald" else stats$methods$de_mode,
-        stats$methods$de_mode, stats$methods$p_cutoff, stats$methods$fc_cutoff)
+    de_label <- stats$methods$de_method
+    de_desc <- sprintf("%s Significance: adj. p-value &le; %s and |linear FC| &ge; %s. FDR via Benjamini-Hochberg.",
+        esc(stats$methods$de_model$methods), stats$methods$p_cutoff, stats$methods$fc_cutoff)
     de_stats <- build_stats_row(
         list(value = format(stats$de$total, big.mark = ","), label = "DE genes", color = "var(--accent-violet)"),
         list(value = format(stats$de$up, big.mark = ","), label = "up", color = "var(--accent-green)"),
