@@ -473,6 +473,10 @@ methods_de_phrase <- function(de_cfg, method) {
 #' @param hier_file Path to the hierarchical clustering heatmap, or NULL. The
 #'   clustering sentence needs this as well as the enable flags, for the same
 #'   reason.
+#' @param go_simplify_summary_file Path to the GO simplification summary
+#'   (\code{Enrichment/simplified/go_simplification_summary.csv}), or NULL. The
+#'   simplification sentence is emitted only when this file records a table that
+#'   was simplified.
 #' @return Named list of character scalars: \code{data_processing},
 #'   \code{missing_values}, \code{differential}, \code{consensus},
 #'   \code{quality_control}, \code{downstream}, \code{software},
@@ -480,7 +484,8 @@ methods_de_phrase <- function(de_cfg, method) {
 #'   apply are NULL.
 build_proteomics_methods_text <- function(config, de_method = "limma",
                                           n_included = NA_integer_, run_dir = NULL,
-                                          pca_cc_file = NULL, hier_file = NULL) {
+                                          pca_cc_file = NULL, hier_file = NULL,
+                                          go_simplify_summary_file = NULL) {
     cfg <- config$modes$proteomics %||% list()
     de_cfg <- cfg$de %||% list()
     imp_cfg <- cfg$imputation %||% list()
@@ -759,6 +764,8 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                                 pw_desc,
                                 paste(cfg$pathway$databases %||% c("GO", "KEGG", "Reactome"),
                                       collapse = ", ")))
+        go_simplify_text <- describe_go_simplification(go_simplify_summary_file)
+        if (!is.null(go_simplify_text)) down <- c(down, go_simplify_text)
     }
     if (isTRUE(cfg$ppi$enabled)) {
         down <- c(down, paste0("Protein-protein interaction networks were constructed using ",
