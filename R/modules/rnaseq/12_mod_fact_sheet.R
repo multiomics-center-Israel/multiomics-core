@@ -19,6 +19,7 @@
 #' @param run_dir Run root, for the execution_info rows.
 #' @param outputs_legacy Ignored; declares the dependency on the written TSVs.
 #' @param pathway_res Ignored; declares the dependency on the enrichment files.
+#' @param de_res Optional DE result; its \code{info} names the fitted model.
 #' @param execution_info Ignored; declares the dependency on the execution_info
 #'   files. Naming run_dir alone depends on a directory string, not on its
 #'   writer, so a fresh or parallel run could reach here first and record the
@@ -27,11 +28,11 @@
 #' @export
 mod_rnaseq_fact_sheet <- function(pre, inputs, config, out_dir, run_dir = NULL,
                                   outputs_legacy = NULL, pathway_res = NULL,
-                                  execution_info = NULL) {
+                                  execution_info = NULL, de_res = NULL) {
     sheet <- tryCatch(
         build_rnaseq_fact_sheet(
             out_dir = out_dir, config = config, pre = pre,
-            inputs = inputs, run_dir = run_dir
+            inputs = inputs, run_dir = run_dir, de_info = de_res$info
         ),
         error = function(e) {
             # A fact sheet is a convenience artifact. It must never be the

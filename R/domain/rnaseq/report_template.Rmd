@@ -16,6 +16,7 @@ output:
     code_folding: hide
 params:
   rna_info: NULL
+  de_info: NULL
 ---
 
 ```{r setup, include=FALSE}
@@ -188,6 +189,9 @@ rna_cfg <- cfg$modes$rna
 # the filter that ran (params$rna_info = preprocess_rna()'s info), not the
 # filtering config keys.
 rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
+# Likewise every DE-model sentence reads the model that was fitted
+# (params$de_info = mod_rnaseq_de()'s info), not de$method / de$block_col.
+rna_de <- describe_rna_de(params$de_info)
 
 # Section visibility flags (default-off for MA + p-value distribution after
 # Apr 2026 reviewer feedback; toggle on via report_sections in config).
@@ -302,8 +306,6 @@ cat("## Downstream Analysis (multiomics-core)\n\n")
 
 norm_method <- rna_cfg$normalization$method %||% "TMM"
 prior_ct <- rna_cfg$normalization$prior.count %||% 1
-de_method <- rna_cfg$de$method %||% "deseq2"
-deseq_mode <- rna_cfg$de$deseq_mode %||% "default"
 p_cut <- rna_cfg$de$p_cutoff %||% 0.05
 fc_cut <- rna_cfg$de$linear_fc_cutoff %||% 1.5
 use_adj <- isTRUE(rna_cfg$de$use_adj)
@@ -317,13 +319,12 @@ pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
 cat(sprintf(
     paste0(
         "%s Normalization was performed using the %s method ",
-        "with log2-CPM transformation (prior count = %d). ",
-        "Differential expression was tested using %s (%s test, %s mode). ",
+        "with log2-CPM transformation (prior count = %d). %s ",
         "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
     ),
     rna_filt$methods,
     norm_method, prior_ct,
-    toupper(de_method), "Wald", deseq_mode,
+    rna_de$methods,
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
 ))
@@ -415,7 +416,7 @@ settings <- data.frame(
     "Normalization Method",
     paste0("Prior Count (added before log2 to avoid log(0): log2(CPM + ", prior_count, "))"),
     "Gene Filtering (details under Filtering Strategy)",
-    "DE Method", "DESeq2 Mode",
+    "DE Model",
     "Adjusted p-value Cutoff", "Linear FC Cutoff",
     "Clustering Enabled"
   ),
@@ -423,7 +424,7 @@ settings <- data.frame(
     rna_cfg$normalization$method %||% "N/A",
     prior_count,
     rna_filt$short,
-    rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
+    rna_de$short,
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
     ifelse(isTRUE(rna_cfg$clustering$enabled), "Yes", "No")
   ),
@@ -639,7 +640,7 @@ if (!is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before > 0) {
 }
 .tm_row("DE method",
         sprintf("%s (padj &le; %s, |linear FC| &ge; %s)",
-                toupper(rna_cfg$de$method %||% "DESeq2"),
+                rna_de$short,
                 signif(rna_cfg$de$p_cutoff %||% 0.05, 3),
                 rna_cfg$de$linear_fc_cutoff %||% 1.5))
 cat('</tbody></table>\n')
@@ -1084,7 +1085,7 @@ figure_legend("Expression heatmap with hierarchical row clustering but without c
 
 # Differential Expression Analysis
 
-Differential expression was performed using **DESeq2** (`r rna_cfg$de$deseq_mode` mode).
+`r rna_de$methods`
 Genes were considered significant at adjusted p-value $\leq$ `r rna_cfg$de$p_cutoff`
 and |linear fold change| $\geq$ `r rna_cfg$de$linear_fc_cutoff`.
 
@@ -2967,7 +2968,6 @@ This section provides a summary suitable for publication methods sections.
 ```{r methods-text, results='asis'}
 # Auto-generate methods paragraph based on config
 norm_method <- rna_cfg$normalization$method %||% "TMMlogCPM"
-de_method <- rna_cfg$de$method %||% "DESeq2"
 padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
 lfc_cut <- rna_cfg$de$linear_fc_cutoff %||% 1.5
 
@@ -2997,10 +2997,7 @@ cat(sprintf(
 norm_method
 ))
 
-cat(sprintf(
-"Differential expression analysis was performed using %s with default parameters. ",
-de_method
-))
+cat(rna_de$methods, " ")
 
 cat(sprintf(
 "Genes were considered differentially expressed at adjusted p-value ≤ %.2f and |fold change| ≥ %.1f. ",
@@ -3024,8 +3021,8 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.",
-rna_filt$methods, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. %s Genes were called at adjusted p ≤ %.2f and |FC| ≥ %.1f. Pathway analysis was performed using %s on %s databases.",
+rna_filt$methods, norm_method, rna_de$methods, padj_cut, lfc_cut, pathway_method, pathway_dbs
 ))
 
 cat("\n</div>\n")
