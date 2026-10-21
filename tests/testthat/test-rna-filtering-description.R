@@ -276,8 +276,10 @@ render_filtering_section <- function(dir, params = list()) {
     p_lines <- tmpl[p_start:(front_end - 1L)]
 
     plot_path <- file.path(dir, "filtering_threshold_qc.png")
-    grDevices::png(plot_path, width = 100, height = 100)
-    graphics::plot(1)
+    # Any valid PNG will do. Large enough for the default margins, which a tiny
+    # device rejects with "figure margins too large".
+    grDevices::png(plot_path, width = 400, height = 300)
+    graphics::plot.new()
     grDevices::dev.off()
 
     rmd <- c(
