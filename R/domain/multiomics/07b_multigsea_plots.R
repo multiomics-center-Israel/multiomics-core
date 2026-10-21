@@ -1163,10 +1163,14 @@ run_multigsea_pathview <- function(enrichment_results, mae_data, config, out_dir
 #' @param per_omics_enrichment This run's per-omics enrichment frames
 #'   (`multiomics_cross_enrichment$per_omics`), used by the no-OrgDb pathview
 #'   fallback to select pathways from the current run rather than from whatever
-#'   enrichment CSVs an earlier run left on disk.
+#'   enrichment CSVs an earlier run left on disk. Also the GSEA source for the
+#'   GSEA/pair pathway maps.
+#' @param enzyme_pairs Enzyme-metabolite pair table
+#'   (`multiomics_enzyme_metabolite$pairs`), or NULL; the pathways of its
+#'   changed enzymes get a map.
 #' @return List with: results (data.frame), plots (list of paths)
 run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
-                          per_omics_enrichment = NULL) {
+                          per_omics_enrichment = NULL, enzyme_pairs = NULL) {
 
     message("=== Running Multi-ORA (combined cross-omics ORA) ===")
 
@@ -1449,23 +1453,11 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
         message("  Multi-ORA support plot failed: ", e$message)
     })
 
-    # 4. Pathview maps, preferring pathways supported by >= 2 omics
-    plots$pathview_pdf <- if (!run_pathview) NULL else tryCatch({
-        generate_multi_ora_pathview(
-            combined = combined,
-            de_results = de_results,
-            harmonization_res = harmonization_res,
-            config = config,
-            out_dir = out_dir,
-            min_support = 2
-        )
-    }, error = function(e) {
-        message("  Multi-ORA pathview failed: ", e$message)
-        NULL
-    })
-
-    # 5. Per-omics pathview: top metabolomics pathways + proteomics overlay,
-    #    and top proteomics pathways + metabolomics overlay
+    # 4. Per-omics pathview: top metabolomics pathways + proteomics overlay,
+    #    and top proteomics pathways + metabolomics overlay. Drawn before the
+    #    supported maps so that a pathway both sets select is drawn once, here:
+    #    these maps colour every measured feature, so they already show what
+    #    the significance-filtered supported map would.
     per_omics_pv <- if (!run_pathview) NULL else tryCatch({
         generate_per_omics_pathview(
             per_omics_ora = per_omics_ora,
@@ -1484,6 +1476,39 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
         plots$pathview_metabolomics_pdf <- per_omics_pv$metabolomics_pdf
         plots$pathview_proteomics_pdf <- per_omics_pv$proteomics_pdf
     }
+
+    # 5. Pathview maps, preferring pathways supported by >= 2 omics
+    plots$pathview_pdf <- if (!run_pathview) NULL else tryCatch({
+        generate_multi_ora_pathview(
+            combined = combined,
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            config = config,
+            out_dir = out_dir,
+            min_support = 2,
+            skip_drawn = per_omics_pv$drawn
+        )
+    }, error = function(e) {
+        message("  Multi-ORA pathview failed: ", e$message)
+        NULL
+    })
+
+    # 6. Pathways the two renderers above never see: GSEA calls them enriched,
+    #    or a changed enzyme in the enzyme-metabolite table sits in them, but
+    #    ORA on the short DE list did not.
+    plots$pathview_gsea_pairs_pdf <- if (!run_pathview) NULL else tryCatch(
+        generate_gsea_pair_pathview(
+            per_omics_enrichment = per_omics_enrichment,
+            enzyme_pairs = enzyme_pairs,
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            config = config,
+            out_dir = out_dir
+        ),
+        error = function(e) {
+            message("  GSEA/pair pathview failed: ", conditionMessage(e))
+            NULL
+        })
 
     # --- Per-contrast Multi-ORA ---
     # Re-extract DE tables to get per-contrast names, then run ORA per contrast
@@ -2801,10 +2826,15 @@ select_multi_ora_pathview_pathways <- function(combined, min_support = 2) {
 #' @param config Full config
 #' @param out_dir Output directory for pathview files
 #' @param min_support Minimum n_omics_support to include (default 2)
+#' @param skip_drawn What \code{generate_per_omics_pathview()} already drew
+#'   (its `drawn` element): `contrast`, `gene_layer` and `pathways`. Those
+#'   pathways are not drawn again for that contrast, provided this renderer's
+#'   gene layers are no more than that one -- the per-omics map then shows
+#'   every node this one would colour.
 #' @return Character path to compiled PDF, or NULL
 generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
                                         config, out_dir, min_support = 2,
-                                        top_n = 5) {
+                                        top_n = 5, skip_drawn = NULL) {
 
     if (!requireNamespace("pathview", quietly = TRUE)) {
         message("  Package 'pathview' not installed. Skipping pathway maps.")
@@ -2955,6 +2985,15 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
 
         if (is.null(gene_data) && is.null(cpd_data)) next
 
+        already_drawn <- character(0)
+        if (!is.null(skip_drawn) && length(skip_drawn$pathways) > 0 &&
+            all(names(gene_de_tables) %in% skip_drawn$gene_layer) &&
+            identical(normalize_contrast_key(contrast),
+                      normalize_contrast_key(skip_drawn$contrast))) {
+            already_drawn <- skip_drawn$pathways
+        }
+        de_entrez <- if (is.null(dim(gene_data))) names(gene_data) else rownames(gene_data)
+
         # Run pathview per pathway for this contrast
         out_suffix <- paste0("multi_ora_", safe_contrast)
         contrast_pngs <- character(0)
@@ -2963,9 +3002,14 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
             pid <- supported$ID[i]
             pw_name <- supported$pathway[i]
             clean_pid <- normalize_kegg_pathway_id(pid)
+            if (clean_pid %in% already_drawn) {
+                message("    Pathview: ", pw_name, " (", pid, ") already drawn ",
+                        "with all measured features; not repeated here")
+                next
+            }
 
             tryCatch({
-                pathview::pathview(
+                pv_out <- pathview::pathview(
                     gene.data  = gene_data,
                     cpd.data   = cpd_data,
                     pathway.id = clean_pid,
@@ -2984,6 +3028,8 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
                 )
                 found <- candidates[file.exists(candidates)]
                 if (length(found) > 0) {
+                    label_de_genes_on_pathview(pv_out, file.path(pv_dir, found[1]),
+                                               de_entrez, org_db)
                     contrast_pngs <- c(contrast_pngs, file.path(pv_dir, found[1]))
                     message("    Pathview: ", pw_name, " (", pid, ")")
                 }
@@ -3068,7 +3114,9 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
 #' @param config Full config
 #' @param out_dir Output directory
 #' @param top_n Number of top pathways per omics (default 5)
-#' @return List with paths to compiled PDFs
+#' @return List with paths to compiled PDFs, and `drawn`: the `contrast` and
+#'   `gene_layer` the maps show and the `pathways` (bare map numbers) drawn,
+#'   so the supported renderer can avoid drawing them twice.
 generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
                                         harmonization_res, config, out_dir,
                                         top_n = 5) {
@@ -3090,7 +3138,13 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
     dir.create(pv_dir, recursive = TRUE, showWarnings = FALSE)
 
     # --- Build proteomics gene logFC vector ---
+    # Every measured feature colours a node here, unlike the other renderers;
+    # de_entrez keeps the ones that cleared the node rule, so the changed
+    # genes can still be named on the map.
     gene_data <- NULL
+    gene_layer <- NA_character_
+    drawn_contrast <- NA_character_
+    de_entrez <- character(0)
     if ("proteomics" %in% names(de_results)) {
         de_tables <- extract_de_tables(de_results$proteomics, "proteomics",
                                         harmonization_res)
@@ -3102,6 +3156,9 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
             )
             if (!is.null(id_map) && nrow(id_map) > 0) {
                 df <- de_tables[[1]]
+                gene_layer <- "proteomics"
+                drawn_contrast <- names(de_tables)[1]
+                de_entrez <- changed_feature_entrez(df, id_map)
                 df_mapped <- merge(df, id_map, by = "feature_id")
                 fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID,
                                   mean, na.rm = TRUE)
@@ -3125,6 +3182,9 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
             )
             if (!is.null(id_map) && nrow(id_map) > 0) {
                 df <- de_tables[[1]]
+                gene_layer <- "transcriptomics"
+                drawn_contrast <- names(de_tables)[1]
+                de_entrez <- changed_feature_entrez(df, id_map)
                 df_mapped <- merge(df, id_map, by = "feature_id")
                 fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID,
                                   mean, na.rm = TRUE)
@@ -3152,6 +3212,7 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
                               mean, na.rm = TRUE)
             cpd_data <- as.numeric(cpd_fc)
             names(cpd_data) <- names(cpd_fc)
+            if (is.na(drawn_contrast)) drawn_contrast <- names(de_tables)[1]
             message("  Pathview: ", length(cpd_data),
                     " metabolites with logFC")
         }
@@ -3172,6 +3233,7 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
     on.exit(setwd(cwd), add = TRUE)
 
     results <- list()
+    drawn <- character(0)
 
     # ------------------------------------------------------------------
     # Set 1: Top metabolomics pathways with proteomics enzyme overlay
@@ -3191,7 +3253,7 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
             clean_pid <- normalize_kegg_pathway_id(pid)
 
             tryCatch({
-                pathview::pathview(
+                pv_out <- pathview::pathview(
                     gene.data  = gene_data,
                     cpd.data   = cpd_data,
                     pathway.id = clean_pid,
@@ -3210,6 +3272,11 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
                 )
                 found <- candidates[file.exists(candidates)]
                 if (length(found) > 0) {
+                    # EC-number boxes: name the changed genes above them.
+                    label_de_genes_on_pathview(pv_out, file.path(pv_dir, found[1]),
+                                               de_entrez, org_db,
+                                               skip_if_shown = FALSE)
+                    drawn <- c(drawn, clean_pid)
                     met_pngs <- c(met_pngs, file.path(pv_dir, found[1]))
                     message("    ", pw_name, " (", pid, ")")
                 }
@@ -3262,7 +3329,7 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
             clean_pid <- normalize_kegg_pathway_id(pid)
 
             tryCatch({
-                pathview::pathview(
+                pv_out <- pathview::pathview(
                     gene.data  = gene_data,
                     cpd.data   = cpd_data,
                     pathway.id = clean_pid,
@@ -3281,6 +3348,11 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
                 )
                 found <- candidates[file.exists(candidates)]
                 if (length(found) > 0) {
+                    # EC-number boxes: name the changed genes above them.
+                    label_de_genes_on_pathview(pv_out, file.path(pv_dir, found[1]),
+                                               de_entrez, org_db,
+                                               skip_if_shown = FALSE)
+                    drawn <- c(drawn, clean_pid)
                     prot_pngs <- c(prot_pngs, file.path(pv_dir, found[1]))
                     message("    ", pw_name, " (", pid, ")")
                 }
@@ -3316,5 +3388,7 @@ generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
         return(NULL)
     }
 
+    results$drawn <- list(contrast = drawn_contrast, gene_layer = gene_layer,
+                          pathways = unique(drawn))
     results
 }
