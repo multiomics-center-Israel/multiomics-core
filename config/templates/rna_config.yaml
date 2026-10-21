@@ -94,7 +94,11 @@ modes:
     # Pick the method you implement first; leave defaults conservative.
     # --------------------------------------------------------
     de:
-      method: "deseq2"          # "deseq2" | "limma_voom" (example; depends what you implement)
+      # "deseq2": DESeq2 Wald test on counts.
+      # "limma_voom": TMM (edgeR) + voom + limma; with block_col, the block is a
+      #               random effect via duplicateCorrelation (no df spent per block).
+      # Preprocessed input is always tested with limma, whatever is set here.
+      method: "deseq2"          # "deseq2" | "limma_voom"
       
       # DESeq2 mode: "default" uses modern DESeq2 defaults (betaPrior=FALSE)
       #              "legacy" uses older behavior (betaPrior=TRUE, modelMatrixType="expanded")
@@ -109,6 +113,7 @@ modes:
       # pairing unit (donor, line, subject). DESeq2 then fits ~ block_col + Factor,
       # comparing groups within each block. DESeq2 has no random effect, so each
       # block level beyond the first costs one residual degree of freedom.
+      # limma_voom instead estimates the within-block correlation.
       # Count input only (not input$format: preprocessed or files$de_table).
       block_col: null           # e.g. "Donor"
       # With block_col set: also draw a PCA before and after removing the block

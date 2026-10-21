@@ -328,7 +328,8 @@ cat(sprintf(
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
 ))
-if (!is.null(rna_filt$de_note)) cat(" ", rna_filt$de_note, sep = "")
+# The note is about DESeq2 independent filtering; it does not apply to other fits.
+if (!is.null(rna_filt$de_note) && identical(rna_de$method, "deseq2")) cat(" ", rna_filt$de_note, sep = "")
 
 if (pathway_enabled) {
     cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
@@ -457,7 +458,7 @@ if (rna_filt$mode %in% c("adaptive", "fixed")) {
     cat("Because a gene only has to pass in one group, genes expressed in a single",
         "condition are kept even when they are low elsewhere.\n\n")
 }
-if (!is.null(rna_filt$de_note)) cat(rna_filt$de_note, "\n\n")
+if (!is.null(rna_filt$de_note) && identical(rna_de$method, "deseq2")) cat(rna_filt$de_note, "\n\n")
 
 filter_params <- data.frame(
   Parameter = c(
@@ -2959,7 +2960,7 @@ files_tbl <- data.frame(
     "Excel workbook with all genes and DE statistics (p < 0.05)",
     "Excel workbook with DE genes only (p < 0.05)",
     "Full results table (TSV) — all genes with fold changes, p-values, and pass flags",
-    "DESeq2 summary for significant genes",
+    "DE summary for significant genes",
     "DE gene counts per contrast (up/down/total)",
     "Raw counts matrix after gene filtering",
     "TMMlogCPM-normalized expression matrix"

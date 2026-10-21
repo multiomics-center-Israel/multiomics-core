@@ -66,15 +66,30 @@ validate_rna_config <- function(cfg) {
         assert_scalar_num(d$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
         assert_scalar_chr(d$block_col, "de$block_col", allow_null = TRUE)
         assert_scalar_bool(d$block_pca, "de$block_pca", allow_null = TRUE)
-        # Blocking is wired into the DESeq2 count path only; the preprocessed
-        # (limma) and pre-computed paths would silently fit or load an unpaired
-        # result, hiding a design error.
+        # Only "limma_voom" changes the count-path fit; any other value runs
+        # DESeq2, as it always has, so older configs keep working.
+        de_method <- tolower(d$method %||% "deseq2")
+        if (identical(de_method, "limma_voom") && (is_preprocessed || uses_tximport)) {
+            stop("de$method is 'limma_voom', which needs a raw count matrix.\n",
+                 "  This config uses ",
+                 if (is_preprocessed) "preprocessed input (input$format: preprocessed)" else
+                     "tximport input (files$txi)",
+                 ". Use de$method 'deseq2', or supply a gene-level count matrix.")
+        }
+        if (!de_method %in% c("deseq2", "limma_voom") && !is_preprocessed) {
+            warning("de$method '", d$method, "' is not an RNA-seq count method; ",
+                    "DESeq2 will be fitted. Use 'deseq2' or 'limma_voom'.", call. = FALSE)
+        }
+        # Blocking is wired into the count paths only (DESeq2 fixed term,
+        # limma-voom duplicateCorrelation); the preprocessed (limma) and
+        # pre-computed paths would silently fit or load an unpaired result,
+        # hiding a design error.
         if (!is.null(d$block_col) && nzchar(d$block_col)) {
             has_precomputed <- length(unlist(cfg$files$de_table)) > 0 &&
                 all(nzchar(unlist(cfg$files$de_table)))
             if (is_preprocessed || has_precomputed) {
-                stop("de$block_col is set, but blocking applies only when DESeq2 is fitted ",
-                     "on counts.\n",
+                stop("de$block_col is set, but blocking applies only when DESeq2 or ",
+                     "limma-voom is fitted on counts.\n",
                      "  This config uses ",
                      if (has_precomputed) "pre-computed DE tables (files$de_table)" else
                          "preprocessed input (input$format: preprocessed)",
