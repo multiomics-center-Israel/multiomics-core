@@ -8,7 +8,7 @@
 #' @param info The \code{info} list of \code{mod_rnaseq_de()}'s result, or NULL
 #'   when it is not available (e.g. a report re-knit by hand); the description
 #'   then says so instead of guessing.
-#' @return A list with \code{method} (\code{"deseq2"}, \code{"limma"},
+#' @return A list with \code{method} (\code{"deseq2"}, \code{"limma_voom"}, \code{"limma"},
 #'   \code{"precomputed"} or \code{"unknown"}), \code{label} (method name for
 #'   tables), \code{design} (formula as text, or NA), \code{block_col} (or
 #'   NULL), \code{short} (one-line label) and \code{methods} (reader-facing
@@ -34,6 +34,35 @@ describe_rna_de <- function(info) {
             }
             list(label = "DESeq2",
                  short = sprintf("DESeq2 (%s mode), design %s", mode, design),
+                 methods = methods)
+        },
+        limma_voom = {
+            methods <- sprintf(paste0(
+                "Differential expression was tested with limma-voom: counts were TMM-normalised ",
+                "(edgeR), converted to log2-CPM with voom precision weights, and fitted with ",
+                "moderated t-tests (empirical Bayes variance shrinkage) using the design %s."),
+                design)
+            r <- info$block_correlation
+            if (paired) {
+                methods <- paste(methods, sprintf(paste0(
+                    "Samples sharing a level of %s (%s levels) were treated as correlated: ",
+                    "the within-block correlation was estimated with duplicateCorrelation() ",
+                    "(consensus %.3f) and included in the fit, so %s enters as a random effect ",
+                    "rather than a fixed term. voom and duplicateCorrelation were each run twice."),
+                    block_col, info$n_blocks %||% "its", r, block_col))
+            } else if (!is.null(info$block_requested) && nzchar(info$block_requested)) {
+                methods <- paste(methods, sprintf(paste0(
+                    "Blocking on %s was requested, but duplicateCorrelation() returned a ",
+                    "non-finite consensus, so the model was fitted without blocking."),
+                    info$block_requested))
+            }
+            list(label = "limma-voom",
+                 short = if (paired) {
+                     sprintf("limma-voom, design %s, block %s (consensus correlation %.3f)",
+                             design, block_col, r)
+                 } else {
+                     sprintf("limma-voom, design %s", design)
+                 },
                  methods = methods)
         },
         limma = list(
