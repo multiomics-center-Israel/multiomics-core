@@ -263,11 +263,11 @@ describe_rna_filtering <- function(info, filtering_cfg = NULL) {
             sprintf(paste0(
                 "Lowly expressed genes were filtered on %s values. The threshold was selected ",
                 "automatically from a kernel density estimate of log2(%s + 0.1) values pooled over ",
-                "all genes and samples, taking the first local minimum to the right of the ",
-                "lowest-expression peak. The threshold is constrained to %s\u2013%s %s (a value ",
-                "outside this range is set to the nearest limit), and %s %s is used when the ",
-                "density has fewer than two peaks or no such minimum. The threshold applied in ",
-                "this run was %s."
+                "all genes and samples: with v the position of the first local minimum to the ",
+                "right of the lowest-expression peak, the threshold is 2^v. A threshold outside ",
+                "%s\u2013%s %s is set to the nearest limit; when the density has fewer than two ",
+                "peaks or no such minimum, the fallback of %s %s is used as configured. The ",
+                "threshold applied in this run was %s."
             ), unit_label, unit,
             num(filtering_cfg$auto_filter$min %||% 0.5), num(filtering_cfg$auto_filter$max %||% 2.0),
             unit, num(filtering_cfg$auto_filter$fallback %||% 1.0), unit, threshold_label),

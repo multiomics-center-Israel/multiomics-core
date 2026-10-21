@@ -26,7 +26,10 @@ test_that("adaptive: KDE valley, applied threshold, range, fallback and the half
     expect_match(d$methods, "kernel density estimate", fixed = TRUE)
     expect_match(d$methods, "first local minimum", fixed = TRUE)
     expect_match(d$methods, "0.5–2 CPM", fixed = TRUE)
-    expect_match(d$methods, "1 CPM is used when the density has fewer than two peaks or no such minimum", fixed = TRUE)
+    expect_match(d$methods, "the threshold is 2^v", fixed = TRUE)
+    # The fallback is returned unclamped, so it must not read as constrained.
+    expect_match(d$methods, "the fallback of 1 CPM is used as configured", fixed = TRUE)
+    expect_no_match(d$methods, "constrained", fixed = TRUE)
     expect_match(d$methods, "applied in this run was 0.734 CPM", fixed = TRUE)
     expect_match(d$methods, "at least half (rounded up) of the samples with a non-missing value", fixed = TRUE)
     expect_match(d$methods, "'Condition'", fixed = TRUE)
@@ -248,4 +251,121 @@ test_that("the report template reads the recorded filter and drops the old wordi
                     "adaptive CPM-based gene filtering", "auto_filter$min")) {
         expect_false(grepl(stale, src, fixed = TRUE), info = stale)
     }
+})
+
+# ---- pre$info reaches the rendered report ------------------------------------
+
+RNA_ROOT <- normalizePath(if (dir.exists("R")) "." else "../..", mustWork = FALSE)
+RNA_TEMPLATE <- file.path(RNA_ROOT, "R", "domain", "rnaseq", "report_template.Rmd")
+
+# Pull one named chunk (```{r <label>...} ... ```) out of an Rmd, verbatim.
+extract_rna_chunk <- function(lines, label) {
+    starts <- grep(sprintf("^```\\{r %s[,}]", label), lines)
+    if (length(starts) != 1L) stop("expected exactly one '", label, "' chunk, found ", length(starts))
+    ends <- grep("^```\\s*$", lines)
+    lines[starts:ends[ends > starts][1]]
+}
+
+# Knit a harness made of the template's own params block, its rna_filt line and
+# its filtering chunks, so the test cannot drift from what the report renders.
+# A plot file is always present, as a stale one from an earlier run would be.
+render_filtering_section <- function(dir, params = list()) {
+    tmpl <- readLines(RNA_TEMPLATE, warn = FALSE, encoding = "UTF-8")
+    front_end <- which(tmpl == "---")[2]
+    p_start <- grep("^params:", tmpl[seq_len(front_end)])
+    p_lines <- tmpl[p_start:(front_end - 1L)]
+
+    plot_path <- file.path(dir, "filtering_threshold_qc.png")
+    grDevices::png(plot_path, width = 100, height = 100)
+    graphics::plot(1)
+    grDevices::dev.off()
+
+    rmd <- c(
+        "---", 'title: "filtering render smoke test"',
+        # Not self-contained, so the plot shows up as its own file name rather
+        # than as a data URI that is hard to tell from the theme's assets.
+        "output:", "  html_document:", "    self_contained: false",
+        p_lines, "---", "",
+        "```{r setup-harness, include=FALSE}",
+        "rna_cfg <- list(filtering = list(auto_filter = list(min = 0.5, max = 2, fallback = 1)))",
+        sprintf("filter_plot <- %s", deparse(plot_path)),
+        "figure_legend <- function(text) cat(sprintf(\"<p class='figure-legend'>%s</p>\\n\", text))",
+        grep("^rna_filt <- ", tmpl, value = TRUE),
+        "```", "",
+        extract_rna_chunk(tmpl, "filtering-strategy"), "",
+        extract_rna_chunk(tmpl, "filter-plot"), "",
+        extract_rna_chunk(tmpl, "legend-filter-plot")
+    )
+    path <- file.path(dir, "smoke.Rmd")
+    writeLines(rmd, path, useBytes = TRUE)
+    out <- rmarkdown::render(path, output_file = "smoke.html", output_dir = dir,
+                             params = params, envir = new.env(parent = globalenv()),
+                             quiet = TRUE)
+    gsub("[[:space:]]+", " ", paste(readLines(out, warn = FALSE, encoding = "UTF-8"), collapse = " "))
+}
+
+skip_unless_rna_renderable <- function() {
+    skip_if_not_installed("rmarkdown")
+    skip_if_not(rmarkdown::pandoc_available(), "pandoc not available")
+    skip_if_not(file.exists(RNA_TEMPLATE), "report template not found")
+}
+
+test_that("the report renders the recorded adaptive filter and its threshold plot", {
+    skip_unless_rna_renderable()
+    html <- render_filtering_section(
+        withr::local_tempdir(),
+        list(rna_info = info_for("adaptive", threshold = 0.734)))
+
+    expect_match(html, "applied in this run was 0.734 CPM", fixed = TRUE)
+    expect_match(html, "at least half (rounded up) of the samples with a non-missing value", fixed = TRUE)
+    expect_match(html, "Threshold applied: 0.734 CPM.", fixed = TRUE)
+    expect_match(html, "filtering_threshold_qc.png", fixed = TRUE)
+})
+
+test_that("the report hides a stale threshold plot for a non-adaptive run", {
+    skip_unless_rna_renderable()
+    html <- render_filtering_section(
+        withr::local_tempdir(),
+        list(rna_info = info_for("fixed", threshold = 2)))
+
+    expect_match(html, "fixed threshold of 2 CPM", fixed = TRUE)
+    expect_no_match(html, "figure-legend", fixed = TRUE)
+    expect_no_match(html, "filtering_threshold_qc.png", fixed = TRUE)
+})
+
+test_that("without params$rna_info the report says 'not recorded' and shows no plot", {
+    skip_unless_rna_renderable()
+    html <- render_filtering_section(withr::local_tempdir())
+
+    expect_match(html, "not recorded for this report", fixed = TRUE)
+    expect_no_match(html, "figure-legend", fixed = TRUE)
+    expect_no_match(html, "filtering_threshold_qc.png", fixed = TRUE)
+})
+
+test_that("render_rnaseq_report() forwards pre$info to every render as params$rna_info", {
+    skip_if_not_installed("rmarkdown")
+    # The renderer falls back to the template path under getwd().
+    withr::local_dir(RNA_ROOT)
+    run_dir <- file.path(withr::local_tempdir(), "rna")
+    seen <- list()
+    local_mocked_bindings(
+        render = function(input, output_file, params = NULL, ...) {
+            seen[[length(seen) + 1L]] <<- params
+            file.create(output_file)
+            output_file
+        },
+        .package = "rmarkdown"
+    )
+    info <- info_for("fixed", threshold = 2)
+
+    suppressMessages(render_rnaseq_report(run_dir, config = list(project = list(name = "P")),
+                                          pre_info = info))
+
+    expect_gte(length(seen), 1L)
+    for (p in seen) expect_identical(p$rna_info, info)
+})
+
+test_that("the rna_report target passes rna_pre$info to the renderer", {
+    src <- paste(deparse(body(pipe_rnaseq)), collapse = " ")
+    expect_match(src, "pre_info = rna_pre$info", fixed = TRUE)
 })

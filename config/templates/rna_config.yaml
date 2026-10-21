@@ -56,23 +56,28 @@ modes:
       method: "TMMlogCPM"   # "TMMlogCPM" | "VST"
       prior.count: 1
 
-    # Feature filtering
+    # Feature filtering (applied before normalization and downstream QC/PCA)
     filtering:
-      # mode: "adaptive" (default) | "fixed" | "deseq2_only" | "none"
-      #   adaptive:    threshold = first valley right of the lowest peak in a density
-      #                of log2(CPM + 0.1) over all genes and samples, clamped to
-      #                [auto_filter$min, auto_filter$max]; auto_filter$fallback if no valley
-      #   fixed:       threshold = fixed_threshold
-      #   deseq2_only: removes only genes whose counts are zero in every sample
-      #   none:        keeps every gene
-      # adaptive/fixed rule: a gene is kept if, in at least one group of group_col, at
-      # least half (rounded up) of the samples with a non-missing value reach the
-      # threshold. Filtering is on CPM (TPM for tximport input), and is skipped for
-      # preprocessed input whatever the mode. Any other mode value runs as adaptive.
-      # mode: "adaptive"
-      # fixed_threshold: 1.0
+      # Choose one:
+      #   adaptive    - data-driven threshold (default): 2^v, where v is the first valley
+      #                 right of the lowest peak in a density of log2(CPM + 0.1) over all
+      #                 genes and samples, clamped to [auto_filter$min, auto_filter$max].
+      #                 With fewer than two peaks or no valley, auto_filter$fallback is
+      #                 used as given (not clamped).
+      #   fixed       - threshold = fixed_threshold.
+      #   deseq2_only - removes only genes whose raw counts are zero in every sample.
+      #   none        - keeps every gene.
+      # Any other value runs as adaptive. Preprocessed input skips filtering whatever
+      # the mode.
+      mode: "adaptive"
+      # adaptive/fixed: a gene is kept if, in at least one group of group_col, at least
+      # half (rounded up) of the samples with a non-missing value reach the threshold.
+      # Choose the grouping variable to match the biological design.
       group_col: "line"
-      # Limits for the adaptive threshold:
+      # Units: CPM for count matrices, TPM (abundance) for tximport input.
+      # Used only when mode: "fixed" (default if omitted: 1.0).
+      # fixed_threshold: 1.0
+      # Used only when mode: "adaptive".
       auto_filter:
         min: 0.5
         max: 2.0

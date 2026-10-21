@@ -414,7 +414,7 @@ settings <- data.frame(
   Parameter = c(
     "Normalization Method",
     paste0("Prior Count (added before log2 to avoid log(0): log2(CPM + ", prior_count, "))"),
-    "Gene Filtering", "Filtering Matrix", "Filtering Group Column", "Filtering Threshold Applied",
+    "Gene Filtering (details under Filtering Strategy)",
     "DE Method", "DESeq2 Mode",
     "Adjusted p-value Cutoff", "Linear FC Cutoff",
     "Clustering Enabled"
@@ -423,9 +423,6 @@ settings <- data.frame(
     rna_cfg$normalization$method %||% "N/A",
     prior_count,
     rna_filt$short,
-    if (is.na(rna_filt$matrix)) "N/A" else rna_filt$matrix,
-    if (is.na(rna_filt$group_col)) "N/A (no group-based filtering)" else rna_filt$group_col,
-    rna_filt$threshold_label,
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
     ifelse(isTRUE(rna_cfg$clustering$enabled), "Yes", "No")
@@ -689,18 +686,18 @@ if (!is.na(n_genes_raw) && !is.na(n_genes_filt)) {
 ```
 
 ```{r filter-plot, fig.cap="Filtering threshold selection"}
-# Only the adaptive mode writes this plot; a copy left by an earlier adaptive
-# run must not be shown for a run that filtered another way.
-show_filter_plot <- file.exists(filter_plot) && rna_filt$mode %in% c("adaptive", "unknown")
+# Only the adaptive mode writes this plot. Shown only when this run is known to
+# have filtered adaptively, so a copy left by an earlier run never stands in.
+show_filter_plot <- file.exists(filter_plot) && identical(rna_filt$mode, "adaptive")
 if (show_filter_plot) knitr::include_graphics(filter_plot)
 ```
 
 ```{r legend-filter-plot, results='asis', echo=FALSE}
 if (show_filter_plot) {
     figure_legend(paste(
-        "Filtering threshold selection. Density of log2(expression + 0.1) values pooled over all genes and samples;",
-        "the red line marks the threshold applied: the first local minimum to the right of the lowest-expression peak,",
-        "kept within the configured range, or the fallback value when no such minimum is found.",
+        "Filtering threshold selection. Density of log2(expression + 0.1) values pooled over all genes and samples.",
+        "The red line is drawn at log2 of the threshold applied, which is the selected local minimum unless the",
+        "range limits or the fallback set the threshold (see Filtering Strategy).",
         sprintf("Threshold applied: %s.", rna_filt$threshold_label)))
 }
 ```
