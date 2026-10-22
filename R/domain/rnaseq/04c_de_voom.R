@@ -22,8 +22,9 @@
 #' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator.
 #' @param de_cfg DE configuration list (sample_col, sample_alignment, block_col).
 #' @return List with 'dds' (NULL), 'tables' (named list of DE result data
-#'   frames) and 'info' (method, design, block_col, n_blocks,
-#'   block_correlation).
+#'   frames) and 'info' (method, design, factor_col, block_col, n_blocks,
+#'   block_correlation, block_requested). Each contrast is fitted as one
+#'   coefficient, with its denominator as the reference level.
 run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
     for (pkg in c("limma", "edgeR")) {
         if (!requireNamespace(pkg, quietly = TRUE)) {
@@ -66,13 +67,6 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
     design <- stats::model.matrix(design_formula, data = meta)
     colnames(design) <- safe_levels
 
-    contrast_formulas <- stats::setNames(
-        paste(make.names(contrasts_df$Numerator), make.names(contrasts_df$Denominator), sep = " - "),
-        contrasts_df$Contrast_name
-    )
-    contrast_matrix <- limma::makeContrasts(contrasts = contrast_formulas, levels = design)
-    colnames(contrast_matrix) <- names(contrast_formulas)
-
     dge <- edgeR::calcNormFactors(edgeR::DGEList(counts = counts), method = "TMM")
 
     block <- resolve_de_block(meta, list(de = de_cfg), sample_col)
@@ -84,30 +78,49 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
         corfit <- limma::duplicateCorrelation(v, design, block = block)
         block_correlation <- corfit$consensus
         if (is.finite(block_correlation)) {
-            fit <- limma::lmFit(v, design, block = block, correlation = block_correlation)
             message(sprintf("[run_voom_rna_de] Blocking on '%s' (%d levels), consensus correlation %.3f",
                             de_cfg$block_col, nlevels(block), block_correlation))
         } else {
             warning("duplicateCorrelation returned a non-finite consensus for de$block_col '",
                     de_cfg$block_col, "'; fitting without blocking.")
             v <- limma::voom(dge, design)
-            fit <- limma::lmFit(v, design)
             block <- NULL
         }
     } else {
         v <- limma::voom(dge, design)
-        fit <- limma::lmFit(v, design)
     }
-    fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast_matrix))
 
+    # One fit per contrast, with the denominator as the reference level, so the
+    # contrast is a single coefficient. With voom weights and a block
+    # correlation the ~ 0 + factor coefficients are correlated gene by gene, and
+    # contrasts.fit() is then only approximate. A reparametrisation spans the
+    # same column space, so voom weights and the consensus correlation above
+    # still apply unchanged.
     tables <- list()
-    for (cn in colnames(contrast_matrix)) {
-        de <- limma::topTable(fit2, coef = cn, adjust.method = "BH",
+    for (i in seq_len(nrow(contrasts_df))) {
+        cn  <- contrasts_df$Contrast_name[i]
+        num <- make.names(contrasts_df$Numerator[i])
+        den <- make.names(contrasts_df$Denominator[i])
+        if (!num %in% safe_levels || !den %in% safe_levels) {
+            warning(sprintf("Contrast '%s': level '%s' or '%s' not in '%s'. Skipping.",
+                            cn, contrasts_df$Numerator[i], contrasts_df$Denominator[i], factor_col))
+            next
+        }
+        lev <- stats::relevel(meta[[factor_col]], ref = den)
+        design_cn <- stats::model.matrix(~ lev)
+        colnames(design_cn) <- c("Intercept", levels(lev)[-1])
+        fit <- if (is.null(block)) {
+            limma::lmFit(v, design_cn)
+        } else {
+            limma::lmFit(v, design_cn, block = block, correlation = block_correlation)
+        }
+        fit <- limma::eBayes(fit)
+        de <- limma::topTable(fit, coef = num, adjust.method = "BH",
                               sort.by = "none", number = Inf)
         tab <- data.frame(
             baseMean       = de$AveExpr,
             log2FoldChange = de$logFC,
-            lfcSE          = (fit2$stdev.unscaled[, cn] * sqrt(fit2$s2.post))[rownames(de)],
+            lfcSE          = (fit$stdev.unscaled[, num] * sqrt(fit$s2.post))[rownames(de)],
             stat           = de$t,
             pvalue         = de$P.Value,
             padj           = de$adj.P.Val,
@@ -123,7 +136,8 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
         tables = tables,
         info   = list(
             method            = "limma_voom",
-            design            = paste(deparse(design_formula), collapse = ""),
+            design            = paste0("~", factor_col),
+            factor_col        = factor_col,
             block_col         = if (is.null(block)) NULL else de_cfg$block_col,
             n_blocks          = if (is.null(block)) NA_integer_ else nlevels(block),
             block_correlation = block_correlation,
