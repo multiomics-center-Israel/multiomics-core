@@ -78,6 +78,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # reroutes enrichment. Only .run_local_enrichment() writes it again.
     unlink(file.path(out_dir, "Enrichment", "enrichment_manifest.csv"))
 
+    # Before any early return: a run that skips or loses a collection must not
+    # leave an earlier run's pathway files for the report to show as current.
+    clear_pathway_outputs(file.path(out_dir, "Enrichment"))
+
     # Decide whether to run enrichment. Skip when either switch is explicitly
     # false (`pathway.enabled: false` or `enrichment.enabled: false`), OR when the
     # config omits BOTH blocks entirely — a legacy/minimal RNA config never ran
