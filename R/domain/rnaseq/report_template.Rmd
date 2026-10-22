@@ -313,8 +313,10 @@ p_label <- if (use_adj) "adjusted p-value" else "p-value"
 p_corr <- if (use_adj) " P-values were corrected using Benjamini-Hochberg FDR." else ""
 
 pathway_enabled <- isTRUE(rna_cfg$pathway$enabled)
-pathway_method <- rna_cfg$pathway$method %||% "fgsea"
-pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
+pathway_desc <- describe_rna_pathway_collections(enrich_dir, rna_cfg$pathway)
+pathway_method <- pathway_desc$method
+pathway_dbs <- pathway_desc$collections
+pathway_missing_note <- pathway_desc$missing_note
 
 cat(sprintf(
     paste0(
@@ -332,8 +334,8 @@ cat(sprintf(
 if (!is.null(rna_filt$de_note) && identical(rna_de$method, "deseq2")) cat(" ", rna_filt$de_note, sep = "")
 
 if (pathway_enabled) {
-    cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
-                pathway_method, pathway_dbs))
+    cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.%s",
+                pathway_method, pathway_dbs, pathway_missing_note))
 }
 cat("\n\n")
 
@@ -2796,6 +2798,16 @@ if (file.exists(anno_file)) {
 }
 ```
 
+```{r pathway-missing-collections, eval=has_enrichment, results='asis'}
+.pw_missing <- describe_rna_pathway_collections(enrich_dir, rna_cfg$pathway)$missing
+if (length(.pw_missing) > 0) {
+    cat(sprintf(paste0("Requested but not loaded in this run: %s. The gene sets could not be ",
+                       "loaded (the pipeline log has the reason), so no %s results appear below. ",
+                       "Invalidating and rerunning the pathway target retries the load.\n\n"),
+                paste(.pw_missing, collapse = ", "), paste(.pw_missing, collapse = "/")))
+}
+```
+
 **Method:** Fast Gene Set Enrichment Analysis (fGSEA) ranks all genes by their differential expression statistic and tests whether genes in each pathway are enriched at the top or bottom of the ranked list.
 
 **Key metrics:**
@@ -3135,6 +3147,11 @@ n_de <- if (!is.null(de_summary_full)) {
     if (!is.na(pass_col)) sum(de_summary_full[[pass_col]] == TRUE, na.rm = TRUE) else "N"
 } else "N"
 
+# Requested online collections that did not load, from the outcome file
+# mod_rnaseq_pathway() writes (falls back to the configured databases).
+pathway_desc <- describe_rna_pathway_collections(enrich_dir, rna_cfg$pathway)
+pathway_missing_note <- pathway_desc$missing_note
+
 # Pathway info. Describes the route that ran: the offline path from its
 # manifest (evaluated units only), the online path from its fgsea tables. ORA
 # and GSEA use different cutoffs, so each is stated with its own.
@@ -3169,10 +3186,9 @@ pathway_methods_text <- if (offline_ran) {
     paste(parts, collapse = " ")
 } else if (length(list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$")) > 0) {
     sprintf(paste0(
-        "Pathway enrichment analysis was conducted using %s on %s gene sets. ",
+        "Pathway enrichment analysis was conducted using %s on %s gene sets.%s ",
         "fGSEA gene sets with adjusted p-value ≤ %s are reported as significant."),
-        rna_cfg$pathway$method %||% "fGSEA",
-        paste(rna_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and "),
+        pathway_desc$method, pathway_desc$collections, pathway_missing_note,
         format(gsea_cut))
 } else {
     ""
