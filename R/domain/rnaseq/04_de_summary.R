@@ -12,7 +12,7 @@
 #'   as a fixed term (\code{~ block_col + Factor}) so that samples are compared
 #'   within blocks; see \code{resolve_de_block()}.
 #' @return List with 'dds' (DESeqDataSet), 'tables' (list of DE result data
-#'   frames) and 'info' (method, deseq_mode, design, block_col, n_blocks).
+#'   frames) and 'info' (method, deseq_mode, design, factor_col, block_col, n_blocks).
 #' @export
 run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
     # Validate contrasts
@@ -169,6 +169,7 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
             method     = "deseq2",
             deseq_mode = deseq_mode,
             design     = paste(deparse(design_formula), collapse = ""),
+            factor_col = factor_col,
             block_col  = block_col,
             n_blocks   = if (is.null(block)) NA_integer_ else nlevels(block)
         )

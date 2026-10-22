@@ -1,6 +1,7 @@
 #' RNA-seq QC post-DE module
 #'
-#' Writes QC artifact plots that depend on DE results (Volcano, MA, Heatmap).
+#' Writes QC artifact plots that depend on DE results (Volcano, MA, Heatmap,
+#' and the before/after-block PCA when the DE fit paired on \code{de$block_col}).
 #' Mirrors Proteomics logic using core plotting functions.
 #'
 #' @param pre        preprocessed RNA object
@@ -232,6 +233,31 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
                 }
             }
         } # Close valid_count > 0 check
+    }
+
+    # 5. PCA before/after removing the block, keyed on the block the fit used
+    # (de_res$info), not on the config key; de$block_pca: false turns it off.
+    # A plot left by an earlier run is removed so the report, which shows the
+    # file when present, cannot show one this run did not make.
+    block_col <- de_res$info$block_col
+    f_bp <- file.path(dirs$diagnostic_plots, "PCA_block_corrected.png")
+    f_bp_coords <- file.path(dirs$diagnostic_plots, "PCA_block_corrected_coords.tsv")
+    unlink(c(f_bp, f_bp_coords))
+    if (!is.null(block_col) && nzchar(block_col) && !isFALSE(cfg$de$block_pca)) {
+        tryCatch({
+            bp <- build_rna_block_pca(
+                expr = mat, meta = meta,
+                sample_col = cfg$id_columns$sample_col %||% cfg$effects$samples,
+                block_col = block_col, group_col = de_res$info$factor_col
+            )
+            ggplot2::ggsave(f_bp, plot_rna_block_pca(bp, block_col, de_res$info$factor_col),
+                            width = 13, height = 6.5, dpi = 150)
+            utils::write.table(bp$coords, f_bp_coords,
+                               sep = "\t", quote = FALSE, row.names = FALSE)
+            files <- c(files, f_bp)
+        }, error = function(e) {
+            warning(sprintf("[QC_post] PCA_block_corrected failed: %s", conditionMessage(e)))
+        })
     }
 
     list(files = unique(files), plots = plots)

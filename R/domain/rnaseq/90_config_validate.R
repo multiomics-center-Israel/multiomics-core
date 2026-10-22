@@ -65,6 +65,7 @@ validate_rna_config <- function(cfg) {
         assert_scalar_num(d$padj_cutoff, "de$padj_cutoff", allow_null = TRUE, min_val = 0, max_val = 1)
         assert_scalar_num(d$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
         assert_scalar_chr(d$block_col, "de$block_col", allow_null = TRUE)
+        assert_scalar_bool(d$block_pca, "de$block_pca", allow_null = TRUE)
         # Blocking is wired into the DESeq2 count path only; the preprocessed
         # (limma) and pre-computed paths would silently fit or load an unpaired
         # result, hiding a design error.

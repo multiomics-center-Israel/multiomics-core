@@ -111,6 +111,10 @@ modes:
       # block level beyond the first costs one residual degree of freedom.
       # Count input only (not input$format: preprocessed or files$de_table).
       block_col: null           # e.g. "Donor"
+      # With block_col set: also draw a PCA before and after removing the block
+      # (report PCA tab + Diagnostic_plots/PCA_block_corrected.png). Visualisation
+      # only; no test uses the corrected matrix. Default true.
+      block_pca: true
 
     # How to interpret your DE summary output table (for get_de_features / clustering / QC_post)
     de_table:

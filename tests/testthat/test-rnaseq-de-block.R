@@ -161,6 +161,14 @@ test_that("validate_rna_config accepts block_col on count input", {
     expect_true(validate_rna_config(rna_block_valid_cfg()))
 })
 
+test_that("validate_rna_config checks de$block_pca is a flag", {
+    cfg <- rna_block_valid_cfg()
+    cfg$de$block_pca <- FALSE
+    expect_true(validate_rna_config(cfg))
+    cfg$de$block_pca <- "no"
+    expect_error(validate_rna_config(cfg), "block_pca")
+})
+
 test_that("validate_rna_config rejects a non-string block_col", {
     cfg <- rna_block_valid_cfg()
     cfg$de$block_col <- 3
@@ -171,4 +179,49 @@ test_that("validate_rna_config rejects block_col where no DESeq2 fit runs", {
     cfg <- rna_block_valid_cfg()
     cfg$files$de_table <- list(trt_vs_ctl = "de.csv")
     expect_error(validate_rna_config(cfg), "pre-computed DE tables")
+})
+
+# ---- build_rna_block_pca / plot_rna_block_pca ----------------------------------
+
+test_that("build_rna_block_pca centres every block after correction", {
+    skip_if_not_installed("limma")
+    meta <- make_rna_block_meta()
+    expr <- log2(make_rna_block_counts(meta) + 1)
+    bp <- build_rna_block_pca(expr, meta, "SampleID", "Block", "Group", n_top = 200)
+    after <- bp$coords[bp$coords$panel == levels(bp$coords$panel)[2], ]
+    # Block means are removed, so each block averages to the origin; with two
+    # samples per block that makes every pair mirror-image.
+    expect_equal(as.vector(tapply(after$PC1, after$block, mean)), rep(0, 3), tolerance = 1e-8)
+    expect_equal(as.vector(tapply(after$PC2, after$block, mean)), rep(0, 3), tolerance = 1e-8)
+    expect_equal(bp$n_top, 200)
+    expect_equal(nrow(bp$coords), 12)
+    expect_s3_class(plot_rna_block_pca(bp, "Block", "Group"), "ggplot")
+})
+
+test_that("build_rna_block_pca keeps the within-block group difference", {
+    skip_if_not_installed("limma")
+    meta <- make_rna_block_meta()
+    expr <- log2(make_rna_block_counts(meta) + 1)
+    corrected <- limma::removeBatchEffect(expr, batch = factor(meta$Block),
+                                          design = stats::model.matrix(~ factor(meta$Group)))
+    d <- function(m) m[, meta$Group == "trt"] - m[, meta$Group == "ctl"]
+    expect_equal(d(corrected), d(expr), tolerance = 1e-10, ignore_attr = TRUE)
+})
+
+test_that("build_rna_block_pca refuses expression columns missing from metadata", {
+    skip_if_not_installed("limma")
+    meta <- make_rna_block_meta()
+    expr <- log2(make_rna_block_counts(meta) + 1)
+    colnames(expr)[1] <- "not_a_sample"
+    expect_error(build_rna_block_pca(expr, meta, "SampleID", "Block", "Group"),
+                 "no row in the metadata")
+})
+
+test_that("run_deseq2_de records the contrast factor for the block PCA", {
+    skip_if_not_installed("DESeq2")
+    meta <- make_rna_block_meta()
+    res <- suppressMessages(run_deseq2_de(make_rna_block_counts(meta), meta,
+                                          rna_block_contrasts(),
+                                          list(sample_col = "SampleID", block_col = "Block")))
+    expect_identical(res$info$factor_col, "Group")
 })
