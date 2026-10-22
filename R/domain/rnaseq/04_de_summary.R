@@ -12,7 +12,8 @@
 #'   as a fixed term (\code{~ block_col + Factor}) so that samples are compared
 #'   within blocks; see \code{resolve_de_block()}.
 #' @return List with 'dds' (DESeqDataSet), 'tables' (list of DE result data
-#'   frames) and 'info' (method, deseq_mode, design, factor_col, block_col, n_blocks).
+#'   frames) and 'info' (method, deseq_mode, design, factor_col, sample_col,
+#'   block_col, n_blocks).
 #' @export
 run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
     # Validate contrasts
@@ -66,19 +67,23 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
     # Pairing enters DESeq2 as a fixed term (~ block + factor). DESeq2 has no
     # random effect, so each extra block level costs one residual degree of
     # freedom; the check below stops before DESeq() on a design it cannot fit.
+    # The block is resolved on the metadata aligned to the dataset's samples, not
+    # on colData, whose column names DESeqDataSet passes through make.names(); it
+    # then enters the design as an internal .block column, so a block_col such
+    # as "Donor ID" works and cannot clash with another colData column.
     block_col <- NULL
-    block <- resolve_de_block(as.data.frame(SummarizedExperiment::colData(dds0)),
-                              list(de = de_cfg), sample_col)
+    meta_dds <- meta[match(colnames(dds0), as.character(meta[[sample_col]])), , drop = FALSE]
+    block <- resolve_de_block(meta_dds, list(de = de_cfg), sample_col)
     if (!is.null(block)) {
         block_col <- de_cfg$block_col
-        dds0[[block_col]] <- block
-        design_formula <- stats::as.formula(paste0("~ ", block_col, " + ", factor_col))
+        dds0$.block <- block
+        design_formula <- stats::as.formula(paste0("~ .block + ", factor_col))
         mm <- check_fixed_block_design(design_formula,
                                        as.data.frame(SummarizedExperiment::colData(dds0)),
                                        block_col, factor_col)
         DESeq2::design(dds0) <- design_formula
-        message(sprintf("[run_deseq2_de] Paired design %s: %d blocks of '%s', %d residual df",
-                        paste(deparse(design_formula), collapse = ""), nlevels(block),
+        message(sprintf("[run_deseq2_de] Paired design ~%s + %s: %d blocks of '%s', %d residual df",
+                        block_col, factor_col, nlevels(block),
                         block_col, nrow(mm) - ncol(mm)))
     }
 
@@ -155,8 +160,10 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
         info = list(
             method     = "deseq2",
             deseq_mode = deseq_mode,
-            design     = paste(deparse(design_formula), collapse = ""),
+            design     = if (is.null(block_col)) paste0("~", factor_col)
+                         else paste0("~", block_col, " + ", factor_col),
             factor_col = factor_col,
+            sample_col = sample_col,
             block_col  = block_col,
             block_model = if (is.null(block)) NULL else "fixed",
             n_blocks   = if (is.null(block)) NA_integer_ else nlevels(block)
@@ -170,7 +177,8 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
 #' Shared by the DESeq2 and limma-voom fixed-block paths, so both refuse the
 #' same designs with the same message.
 #'
-#' @param design_formula The paired formula, \code{~ block + factor}.
+#' @param design_formula The paired formula, \code{~ block + factor} (the block
+#'   column may have an internal name such as \code{.block}).
 #' @param data Sample data holding both columns.
 #' @param block_col,factor_col Column names, used in messages.
 #' @return The model matrix, after checking it is full rank with at least
@@ -183,7 +191,7 @@ check_fixed_block_design <- function(design_formula, data, block_col, factor_col
     }
     mm <- stats::model.matrix(design_formula, data = data)
     if (qr(mm)$rank < ncol(mm) || nrow(mm) <= ncol(mm)) {
-        stop("The paired design ", paste(deparse(design_formula), collapse = ""),
+        stop("The paired design ~", block_col, " + ", factor_col,
              " cannot be fitted: ", ncol(mm), " coefficients, rank ", qr(mm)$rank,
              ", ", nrow(mm), " samples.\n",
              "  This happens when every level of '", block_col, "' holds a single level of '",

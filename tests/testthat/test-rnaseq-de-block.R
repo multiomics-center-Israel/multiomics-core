@@ -91,7 +91,8 @@ test_that("run_deseq2_de fits ~ block + Group and keeps the contrast table shape
     expect_identical(paired$info$design, "~Block + Group")
     expect_identical(paired$info$block_col, "Block")
     expect_identical(paired$info$n_blocks, 3L)
-    expect_true(any(grepl("^Block_", DESeq2::resultsNames(paired$dds))))
+    expect_true(any(grepl("^\\.block_", DESeq2::resultsNames(paired$dds))))
+    expect_identical(paired$info$sample_col, "SampleID")
 
     tab <- paired$tables$trt_vs_ctl
     expect_true(all(c("log2FoldChange", "pvalue", "padj", "FeatureID") %in% colnames(tab)))
@@ -224,4 +225,30 @@ test_that("run_deseq2_de records the contrast factor for the block PCA", {
                                           rna_block_contrasts(),
                                           list(sample_col = "SampleID", block_col = "Block")))
     expect_identical(res$info$factor_col, "Group")
+})
+
+test_that("run_deseq2_de accepts a block_col that is not a syntactic name", {
+    skip_if_not_installed("DESeq2")
+    meta <- make_rna_block_meta()
+    names(meta)[names(meta) == "Block"] <- "Donor ID"
+    res <- suppressMessages(run_deseq2_de(make_rna_block_counts(make_rna_block_meta()), meta,
+                                          rna_block_contrasts(),
+                                          list(sample_col = "SampleID", block_col = "Donor ID")))
+    expect_identical(res$info$design, "~Donor ID + Group")
+    expect_identical(res$info$block_col, "Donor ID")
+})
+
+test_that("qc_post removes a stale block PCA even when it returns early", {
+    out <- withr::local_tempdir()
+    dirs <- create_legacy_output_dirs(out, create = TRUE)
+    stale <- file.path(dirs$diagnostic_plots, c("PCA_block_corrected.png", "PCA_block_corrected_coords.tsv"))
+    file.create(stale)
+    m <- matrix(1, 2, 2, dimnames = list(c("g1", "g2"), c("s1", "s2")))
+    pre <- list(expr_raw = m, expr_filt = m, expr_work = m,
+                meta = data.frame(SampleID = c("s1", "s2")), row_data = data.frame(id = c("g1", "g2")))
+    # No tables, so the summary cannot be built and the module returns early.
+    res <- suppressWarnings(mod_rnaseq_qc_post(pre, list(tables = NULL),
+                                               list(modes = list(rna = list())), out))
+    expect_length(res$files, 0)
+    expect_false(any(file.exists(stale)))
 })

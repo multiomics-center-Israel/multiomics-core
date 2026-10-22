@@ -26,6 +26,13 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     files <- character(0)
     plots <- list()
 
+    # Remove a block PCA left by an earlier run before any early return, so the
+    # report, which shows the file when present, cannot show one this run did
+    # not make (step 5 writes it again when it applies).
+    f_bp <- file.path(dirs$diagnostic_plots, "PCA_block_corrected.png")
+    f_bp_coords <- file.path(dirs$diagnostic_plots, "PCA_block_corrected_coords.tsv")
+    unlink(c(f_bp, f_bp_coords))
+
     # 1. Ensure summary_df exists
     sumdf <- de_res$summary_df
     if (is.null(sumdf)) {
@@ -237,17 +244,13 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
 
     # 5. PCA before/after removing the block, keyed on the block the fit used
     # (de_res$info), not on the config key; de$block_pca: false turns it off.
-    # A plot left by an earlier run is removed so the report, which shows the
-    # file when present, cannot show one this run did not make.
     block_col <- de_res$info$block_col
-    f_bp <- file.path(dirs$diagnostic_plots, "PCA_block_corrected.png")
-    f_bp_coords <- file.path(dirs$diagnostic_plots, "PCA_block_corrected_coords.tsv")
-    unlink(c(f_bp, f_bp_coords))
     if (!is.null(block_col) && nzchar(block_col) && !isFALSE(cfg$de$block_pca)) {
         tryCatch({
             bp <- build_rna_block_pca(
                 expr = mat, meta = meta,
-                sample_col = cfg$id_columns$sample_col %||% cfg$effects$samples,
+                # The sample column the DE step aligned on, so both read it alike.
+                sample_col = de_res$info$sample_col %||% cfg$id_columns$sample_col,
                 block_col = block_col, group_col = de_res$info$factor_col
             )
             ggplot2::ggsave(f_bp, plot_rna_block_pca(bp, block_col, de_res$info$factor_col),

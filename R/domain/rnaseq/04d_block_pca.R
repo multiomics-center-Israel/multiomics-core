@@ -2,9 +2,10 @@
 #'
 #' Shows a reader what pairing on \code{de$block_col} does. The "after" matrix
 #' is [limma::removeBatchEffect()] with the block as batch and the contrast
-#' factor protected, which subtracts each gene's per-block mean and keeps the
-#' within-block group differences unchanged: the quantities a
-#' \code{~ block + factor} fit compares. It is a picture only; no statistic is
+#' factor protected: it removes each gene's estimated block effect from a
+#' \code{~ factor + block} fit and keeps the within-block group differences
+#' unchanged, the quantities a \code{~ block + factor} fit compares. Only for
+#' balanced blocks is that the same as subtracting each block's mean. It is a picture only; no statistic is
 #' computed on it. Both panels use the same genes, the \code{n_top} most
 #' variable before correction, so the gene choice does not favour the factor.
 #'
