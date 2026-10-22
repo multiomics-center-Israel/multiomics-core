@@ -1963,11 +1963,17 @@ if (file.exists(de_summary_file)) {
         de_summary_full <- de_summary_full[order(de_summary_full$min_padj), ]
     }
 }
+# The summary file holds every tested gene. The Top DE table and the Top DE
+# heatmaps show only the genes the pipeline called DE (pass_any_contrast),
+# which also applies the fold-change cutoff that ranking by padj ignores.
+de_summary_pass <- select_de_called_rows(de_summary_full)
 ```
 
 ```{r de-table}
-if (!is.null(de_summary_full)) {
-    de_top <- head(de_summary_full, 50)
+if (!is.null(de_summary_pass) && nrow(de_summary_pass) == 0) {
+    cat("No gene passed the DE cutoffs in any contrast.\n")
+} else if (!is.null(de_summary_pass)) {
+    de_top <- head(de_summary_pass, 50)
     de_top$min_padj <- NULL
     # Remove pass_any_contrast column from display
     pass_any_cols <- grep("pass_any", names(de_top), value = TRUE)
@@ -1975,7 +1981,8 @@ if (!is.null(de_summary_full)) {
 
     DT::datatable(
       de_top,
-      caption = "Top 50 differentially expressed genes (sorted by smallest adjusted p-value)",
+      caption = sprintf("Top %d of %d differentially expressed genes (sorted by smallest adjusted p-value)",
+                        nrow(de_top), nrow(de_summary_pass)),
       extensions = 'Buttons',
       options = list(
           scrollX = TRUE,
@@ -1989,7 +1996,7 @@ if (!is.null(de_summary_full)) {
       rownames = FALSE
     ) |> DT::formatSignif(columns = which(sapply(de_top, is.numeric)), digits = 4)
 } else {
-    cat("DE summary file not found.\n")
+    cat("DE summary file not found, or it has no pass_any_contrast column.\n")
 }
 ```
 
@@ -2437,22 +2444,19 @@ if (file.exists(norm_expr_file)) {
     norm_expr <- read.delim(norm_expr_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE)
 }
 
-# Build heatmap DE source: prefer de_summary_full, fall back to de_data
-heatmap_de_source <- de_summary_full
+# Build heatmap DE source from the DE-called genes: prefer the summary file,
+# fall back to final_results (de_data), sorted by smallest padj
+heatmap_de_source <- de_summary_pass
 if (is.null(heatmap_de_source) && !is.null(de_data)) {
-    # Build from final_results: sort by min padj, filter to DE genes only
-    heatmap_de_source <- de_data
-    padj_cols_hm <- grep("^padj\\.", names(heatmap_de_source), value = TRUE)
-    if (length(padj_cols_hm) > 0) {
+    heatmap_de_source <- select_de_called_rows(de_data)
+    padj_cols_hm <- grep("^padj\\.", names(de_data), value = TRUE)
+    if (!is.null(heatmap_de_source) && length(padj_cols_hm) > 0) {
         heatmap_de_source$min_padj <- apply(heatmap_de_source[, padj_cols_hm, drop = FALSE], 1, min, na.rm = TRUE)
-        # Filter to pass_any if available
-        pass_col_hm <- grep("pass_any", names(heatmap_de_source), value = TRUE)[1]
-        if (!is.na(pass_col_hm)) {
-            heatmap_de_source <- heatmap_de_source[heatmap_de_source[[pass_col_hm]] == TRUE, ]
-        }
         heatmap_de_source <- heatmap_de_source[order(heatmap_de_source$min_padj), ]
     }
 }
+# No DE gene: skip every Top DE heatmap and its legend
+if (!is.null(heatmap_de_source) && nrow(heatmap_de_source) == 0) heatmap_de_source <- NULL
 
 # Function to create heatmap for top N genes
 make_top_de_heatmap <- function(n_genes, expr_mat, de_df, meta_df, group_col) {
