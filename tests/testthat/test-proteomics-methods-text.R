@@ -1253,3 +1253,31 @@ test_that("the report's pooled section keeps to the agreed wording", {
     # No bold emphasis inside this section's prose.
     expect_false(grepl("\\*\\*", sec))
 })
+
+test_that("the report's method note describes only the methods that wrote tables", {
+    rmd <- readLines(file.path(root_dir, "R", "domain", "proteomics",
+                               "report_template_proteomics.Rmd"), warn = FALSE)
+    start <- grep("^```\\{r pooled-method-note", rmd)
+    expect_length(start, 1L)
+    end <- start + which(grepl("^```\\s*$", rmd[-seq_len(start)]))[1]
+    body <- parse(text = rmd[(start + 1L):(end - 1L)])
+    note <- function(fgsea, cam) {
+        env <- new.env()
+        env$pooled_fgsea_files <- if (fgsea) "pathway_A_vs_B_KEGG_fgsea.csv" else character(0)
+        env$pooled_cam_files <- if (cam) "pathway_A_vs_B_KEGG_camerapr.csv" else character(0)
+        env$pooled_dir <- withr::local_tempdir()
+        paste(utils::capture.output(eval(body, env)), collapse = "\n")
+    }
+
+    expect_identical(note(FALSE, FALSE), "")
+    fg <- note(TRUE, FALSE)
+    expect_match(fg, "fgsea asks", fixed = TRUE)
+    expect_false(grepl("cameraPR", fg, fixed = TRUE))
+    cam <- note(FALSE, TRUE)
+    expect_match(cam, "cameraPR", fixed = TRUE)
+    expect_false(grepl("fgsea", cam, fixed = TRUE))
+    expect_false(grepl("two methods", cam, fixed = TRUE))
+    both <- note(TRUE, TRUE)
+    expect_match(both, "fgsea asks", fixed = TRUE)
+    expect_match(both, "The two methods test different null hypotheses", fixed = TRUE)
+})
