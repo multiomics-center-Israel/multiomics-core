@@ -311,8 +311,10 @@ p_label <- if (use_adj) "adjusted p-value" else "p-value"
 p_corr <- if (use_adj) " P-values were corrected using Benjamini-Hochberg FDR." else ""
 
 pathway_enabled <- isTRUE(rna_cfg$pathway$enabled)
-pathway_method <- rna_cfg$pathway$method %||% "fgsea"
-pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
+pathway_desc <- describe_rna_pathway_collections(enrich_dir, rna_cfg$pathway)
+pathway_method <- pathway_desc$method
+pathway_dbs <- pathway_desc$collections
+pathway_missing_note <- pathway_desc$missing_note
 
 cat(sprintf(
     paste0(
@@ -330,8 +332,8 @@ cat(sprintf(
 if (!is.null(rna_filt$de_note)) cat(" ", rna_filt$de_note, sep = "")
 
 if (pathway_enabled) {
-    cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
-                pathway_method, pathway_dbs))
+    cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.%s",
+                pathway_method, pathway_dbs, pathway_missing_note))
 }
 cat("\n\n")
 
@@ -2758,6 +2760,16 @@ if (file.exists(anno_file)) {
 }
 ```
 
+```{r pathway-missing-collections, eval=has_enrichment, results='asis'}
+.pw_missing <- describe_rna_pathway_collections(enrich_dir, rna_cfg$pathway)$missing
+if (length(.pw_missing) > 0) {
+    cat(sprintf(paste0("Requested but not loaded in this run: %s. The gene sets could not be ",
+                       "loaded (the pipeline log has the reason), so no %s results appear below. ",
+                       "Invalidating and rerunning the pathway target retries the load.\n\n"),
+                paste(.pw_missing, collapse = ", "), paste(.pw_missing, collapse = "/")))
+}
+```
+
 **Method:** Fast Gene Set Enrichment Analysis (fGSEA) ranks all genes by their differential expression statistic and tests whether genes in each pathway are enriched at the top or bottom of the ranked list.
 
 **Key metrics:**
@@ -2979,9 +2991,11 @@ n_de <- if (!is.null(de_summary_full)) {
     if (!is.na(pass_col)) sum(de_summary_full[[pass_col]] == TRUE, na.rm = TRUE) else "N"
 } else "N"
 
-# Pathway info
-pathway_method <- rna_cfg$pathway$method %||% "fGSEA"
-pathway_dbs <- paste(rna_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and ")
+# Pathway info: the same resolver as the technical summary
+pathway_desc <- describe_rna_pathway_collections(enrich_dir, rna_cfg$pathway)
+pathway_method <- pathway_desc$method
+pathway_dbs <- pathway_desc$collections
+pathway_missing_note <- pathway_desc$missing_note
 
 cat("**RNA-seq Analysis Methods**\n\n")
 
@@ -3014,8 +3028,8 @@ format(as.numeric(n_de), big.mark = ",")
 ))
 
 cat(sprintf(
-"Pathway enrichment analysis was conducted using %s on %s gene sets. ",
-pathway_method, pathway_dbs
+"Pathway enrichment analysis was conducted using %s on %s gene sets.%s ",
+pathway_method, pathway_dbs, pathway_missing_note
 ))
 
 cat("Pathways with adjusted p-value < 0.05 were considered significantly enriched.\n\n")
@@ -3024,8 +3038,8 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.",
-rna_filt$methods, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.%s",
+rna_filt$methods, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs, pathway_missing_note
 ))
 
 cat("\n</div>\n")
