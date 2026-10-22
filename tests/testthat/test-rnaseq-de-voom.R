@@ -44,7 +44,7 @@ test_that("run_voom_rna_de without a block returns the RNA DE table contract", {
                                             list(sample_col = "SampleID")))
     expect_null(res$dds)
     expect_identical(res$info$method, "limma_voom")
-    expect_identical(res$info$design, "~0 + Group")
+    expect_identical(res$info$design, "~Group")
     expect_null(res$info$block_col)
     tab <- res$tables$trt_vs_ctl
     expect_true(all(c("baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj",
@@ -67,10 +67,43 @@ test_that("run_voom_rna_de blocks via duplicateCorrelation and gains power", {
     expect_identical(blocked$info$n_blocks, 3L)
     expect_true(is.finite(blocked$info$block_correlation))
     expect_gt(blocked$info$block_correlation, 0)
-    # The design stays ~ 0 + Group: the block is a random effect, not a term.
-    expect_identical(blocked$info$design, "~0 + Group")
+    # The design has no Line term: the block is a random effect.
+    expect_identical(blocked$info$design, "~Group")
     n_sig <- function(r) sum(r$tables$trt_vs_ctl$padj[1:40] <= 0.05, na.rm = TRUE)
     expect_gt(n_sig(blocked), n_sig(unblocked))
+})
+
+test_that("run_voom_rna_de equals a direct single-coefficient limma fit", {
+    skip_unless_voom()
+    meta <- make_voom_meta()
+    counts <- make_voom_counts(meta)
+    res <- suppressMessages(run_voom_rna_de(counts, meta, voom_contrasts(),
+                                            list(sample_col = "SampleID", block_col = "Block")))
+    # The limma user's guide recipe, written out by hand with trt as a coefficient.
+    dge <- edgeR::calcNormFactors(edgeR::DGEList(counts), method = "TMM")
+    des <- stats::model.matrix(~ factor(meta$Group, levels = c("ctl", "trt")))
+    blk <- factor(meta$Block)
+    v <- limma::voom(dge, des)
+    cor <- limma::duplicateCorrelation(v, des, block = blk)$consensus
+    v <- limma::voom(dge, des, block = blk, correlation = cor)
+    cor <- limma::duplicateCorrelation(v, des, block = blk)$consensus
+    fit <- limma::eBayes(limma::lmFit(v, des, block = blk, correlation = cor))
+    tt <- limma::topTable(fit, coef = 2, number = Inf, sort.by = "none")
+    expect_equal(res$info$block_correlation, cor, tolerance = 1e-8)
+    expect_equal(res$tables$trt_vs_ctl$stat, tt$t, tolerance = 1e-8)
+    expect_equal(res$tables$trt_vs_ctl$pvalue, tt$P.Value, tolerance = 1e-8)
+})
+
+test_that("run_voom_rna_de fits a contrast between two non-reference levels", {
+    skip_unless_voom()
+    meta <- rbind(make_voom_meta(), transform(make_voom_meta()[c(1, 3, 5), ],
+                                               SampleID = paste0("B", 1:3, "_alt"), Group = "alt"))
+    counts <- make_voom_counts(meta)
+    cdf <- data.frame(Contrast_name = c("trt_vs_alt", "alt_vs_ctl"), Factor = "Group",
+                      Numerator = c("trt", "alt"), Denominator = c("alt", "ctl"))
+    res <- suppressMessages(run_voom_rna_de(counts, meta, cdf, list(sample_col = "SampleID")))
+    expect_named(res$tables, c("trt_vs_alt", "alt_vs_ctl"))
+    expect_true(all(is.finite(res$tables$trt_vs_alt$log2FoldChange)))
 })
 
 test_that("run_voom_rna_de aligns metadata to the count columns", {
