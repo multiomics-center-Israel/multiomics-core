@@ -40,6 +40,13 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
             contrasts_df = contrasts_df,
             de_cfg = de_cfg
         )
+    } else if (identical(de_method, "edger_ql")) {
+        run_edger_rna_de(
+            counts = pre$de_input,
+            meta = pre$meta,
+            contrasts_df = contrasts_df,
+            de_cfg = de_cfg
+        )
     } else if (identical(de_method, "limma_voom")) {
         run_voom_rna_de(
             counts = pre$de_input,

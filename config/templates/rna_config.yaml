@@ -98,8 +98,10 @@ modes:
       # "limma_voom": TMM (edgeR) + voom + limma; with block_col, the block is a
       #               random effect via duplicateCorrelation by default, or a fixed
       #               term with block_model: "fixed".
+      # "edger_ql":   TMM + edgeR quasi-likelihood F-test (glmQLFit/glmQLFTest);
+      #               a block_col is always a fixed term (edgeR has no random effect).
       # Preprocessed input is always tested with limma, whatever is set here.
-      method: "deseq2"          # "deseq2" | "limma_voom"
+      method: "deseq2"          # "deseq2" | "limma_voom" | "edger_ql"
       
       # DESeq2 mode: "default" uses modern DESeq2 defaults (betaPrior=FALSE)
       #              "legacy" uses older behavior (betaPrior=TRUE, modelMatrixType="expanded")
@@ -119,10 +121,10 @@ modes:
       block_col: null           # e.g. "Donor"
       # How block_col enters the model (only used when block_col is set):
       #   "fixed"  - a term of the design, ~ block_col + Factor (one coefficient per
-      #              extra block level). The only choice for deseq2.
+      #              extra block level). The only choice for deseq2 and edger_ql.
       #   "random" - limma_voom only: one within-block correlation shared by all
       #              genes (duplicateCorrelation); no coefficient per block.
-      # Default: "fixed" for deseq2, "random" for limma_voom.
+      # Default: "fixed" for deseq2 and edger_ql, "random" for limma_voom.
       # block_model: "fixed"
       # With block_col set: also draw a PCA before and after removing the block
       # (report PCA tab + Diagnostic_plots/PCA_block_corrected.png). Visualisation
