@@ -227,7 +227,7 @@ test_that("validate_rna_config rejects a random block for DESeq2 and bad values"
     cfg$de$block_model <- "fixed"
     expect_true(validate_rna_config(cfg))
     cfg$de$method <- "deseq2"; cfg$de$block_model <- "random"
-    expect_error(validate_rna_config(cfg), "DESeq2 has no random effect")
+    expect_error(validate_rna_config(cfg), "no random effect")
     cfg$de$block_model <- "mixed"
     expect_error(validate_rna_config(cfg), "block_model")
 })

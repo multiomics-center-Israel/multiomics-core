@@ -8,7 +8,8 @@
 #' @param info The \code{info} list of \code{mod_rnaseq_de()}'s result, or NULL
 #'   when it is not available (e.g. a report re-knit by hand); the description
 #'   then says so instead of guessing.
-#' @return A list with \code{method} (\code{"deseq2"}, \code{"limma_voom"}, \code{"limma"},
+#' @return A list with \code{method} (\code{"deseq2"}, \code{"limma_voom"},
+#'   \code{"edger_ql"}, \code{"limma"},
 #'   \code{"precomputed"} or \code{"unknown"}), \code{label} (method name for
 #'   tables), \code{design} (formula as text, or NA), \code{block_col} (or
 #'   NULL), \code{block_model} ("fixed", "random" or NULL), \code{short} (one-line label) and \code{methods} (reader-facing
@@ -71,6 +72,23 @@ describe_rna_de <- function(info) {
                  } else {
                      sprintf("limma-voom, design %s", design)
                  },
+                 methods = methods)
+        },
+        edger_ql = {
+            methods <- sprintf(paste0(
+                "Differential expression was tested with edgeR (version %s): counts were ",
+                "TMM-normalised, negative-binomial dispersions were estimated with estimateDisp(), ",
+                "and each contrast was tested with the quasi-likelihood F-test (glmQLFit, ",
+                "glmQLFTest) using the design %s."), info$edger_version %||% "not recorded", design)
+            if (paired) {
+                methods <- paste(methods, sprintf(paste0(
+                    "The design includes %s as a fixed term, so groups are compared within ",
+                    "each of its %s levels; edgeR has no random effect, and each %s level beyond ",
+                    "the first uses one residual degree of freedom."),
+                    block_col, info$n_blocks %||% "its", block_col))
+            }
+            list(label = "edgeR",
+                 short = sprintf("edgeR quasi-likelihood, design %s", design),
                  methods = methods)
         },
         limma = list(

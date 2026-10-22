@@ -27,42 +27,10 @@
 #'   block_correlation, block_requested). Each contrast is fitted as one
 #'   coefficient, with its denominator as the reference level.
 run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
-    for (pkg in c("limma", "edgeR")) {
-        if (!requireNamespace(pkg, quietly = TRUE)) {
-            stop("Package '", pkg, "' is required for de$method: limma_voom.", call. = FALSE)
-        }
-    }
-    if (identical(detect_source_type(counts), "tximport")) {
-        stop("de$method limma_voom takes a count matrix, but this run has tximport input.\n",
-             "  Use de$method deseq2 for tximport, or supply a gene-level count matrix.",
-             call. = FALSE)
-    }
-    validate_count_matrix(counts)
-    counts <- as.matrix(counts)
-
-    if (nrow(contrasts_df) == 0) stop("contrasts_df is empty")
-    factor_col <- unique(contrasts_df$Factor)
-    if (length(factor_col) != 1) stop("All contrasts must use the same factor column")
-    factor_col <- factor_col[[1]]
-    if (!factor_col %in% colnames(meta)) {
-        stop(sprintf("Factor column '%s' not found in metadata", factor_col))
-    }
-
-    sample_col <- de_cfg$sample_col %||% de_cfg$id_columns$sample_col %||% "SampleID"
-    if (!sample_col %in% colnames(meta)) {
-        if (!is.null(rownames(meta)) && !any(rownames(meta) == "")) {
-            meta[[sample_col]] <- rownames(meta)
-        } else {
-            stop(sprintf("Sample column '%s' not found in metadata", sample_col))
-        }
-    }
-    meta <- align_samples_strict(colnames(counts), meta, sample_col,
-                                 lenient = identical(de_cfg$sample_alignment, "lenient"))
-    counts <- counts[, rownames(meta), drop = FALSE]
-
-    meta[[factor_col]] <- factor(meta[[factor_col]])
-    safe_levels <- make.names(levels(meta[[factor_col]]))
-    levels(meta[[factor_col]]) <- safe_levels
+    prep <- prepare_count_de_inputs(counts, meta, contrasts_df, de_cfg,
+                                    method = "limma_voom", pkgs = c("limma", "edgeR"))
+    counts <- prep$counts; meta <- prep$meta
+    factor_col <- prep$factor_col; safe_levels <- prep$safe_levels; sample_col <- prep$sample_col
 
     design_formula <- stats::as.formula(paste0("~ 0 + ", factor_col))
     design <- stats::model.matrix(design_formula, data = meta)
@@ -179,4 +147,60 @@ resolve_rna_block_model <- function(de_cfg, method = de_cfg$method %||% "deseq2"
     if (is.null(bc) || !nzchar(bc)) return(NULL)
     default <- if (identical(tolower(method), "limma_voom")) "random" else "fixed"
     tolower(de_cfg$block_model %||% default)
+}
+
+#' Validate and align inputs for a count-based limma/edgeR DE fit
+#'
+#' Shared by [run_voom_rna_de()] and [run_edger_rna_de()]: both take a raw
+#' count matrix, one contrast factor and the same sample alignment rules.
+#'
+#' @param counts Integer count matrix (genes x samples); tximport is refused.
+#' @param meta Sample metadata.
+#' @param contrasts_df Contrasts (Contrast_name, Factor, Numerator, Denominator).
+#' @param de_cfg DE config list (sample_col, sample_alignment).
+#' @param method Method name, used in messages.
+#' @param pkgs Packages that must be installed.
+#' @return A list with \code{counts} (matrix, columns in metadata order),
+#'   \code{meta} (aligned, factor column with syntactic levels),
+#'   \code{factor_col}, \code{safe_levels} and \code{sample_col}.
+prepare_count_de_inputs <- function(counts, meta, contrasts_df, de_cfg, method, pkgs) {
+    for (pkg in pkgs) {
+        if (!requireNamespace(pkg, quietly = TRUE)) {
+            stop("Package '", pkg, "' is required for de$method: ", method, ".", call. = FALSE)
+        }
+    }
+    if (identical(detect_source_type(counts), "tximport")) {
+        stop("de$method ", method, " takes a count matrix, but this run has tximport input.\n",
+             "  Use de$method deseq2 for tximport, or supply a gene-level count matrix.",
+             call. = FALSE)
+    }
+    validate_count_matrix(counts)
+    counts <- as.matrix(counts)
+
+    if (nrow(contrasts_df) == 0) stop("contrasts_df is empty")
+    factor_col <- unique(contrasts_df$Factor)
+    if (length(factor_col) != 1) stop("All contrasts must use the same factor column")
+    factor_col <- factor_col[[1]]
+    if (!factor_col %in% colnames(meta)) {
+        stop(sprintf("Factor column '%s' not found in metadata", factor_col))
+    }
+
+    sample_col <- de_cfg$sample_col %||% de_cfg$id_columns$sample_col %||% "SampleID"
+    if (!sample_col %in% colnames(meta)) {
+        if (!is.null(rownames(meta)) && !any(rownames(meta) == "")) {
+            meta[[sample_col]] <- rownames(meta)
+        } else {
+            stop(sprintf("Sample column '%s' not found in metadata", sample_col))
+        }
+    }
+    meta <- align_samples_strict(colnames(counts), meta, sample_col,
+                                 lenient = identical(de_cfg$sample_alignment, "lenient"))
+    counts <- counts[, rownames(meta), drop = FALSE]
+
+    meta[[factor_col]] <- factor(meta[[factor_col]])
+    safe_levels <- make.names(levels(meta[[factor_col]]))
+    levels(meta[[factor_col]]) <- safe_levels
+
+    list(counts = counts, meta = meta, factor_col = factor_col,
+         safe_levels = safe_levels, sample_col = sample_col)
 }

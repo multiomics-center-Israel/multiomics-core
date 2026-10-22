@@ -83,23 +83,23 @@ validate_rna_config <- function(cfg) {
             if (identical(resolve_rna_block_model(d), "random") &&
                 !identical(tolower(d$method %||% "deseq2"), "limma_voom")) {
                 stop("de$block_model is 'random', but de$method is '", d$method %||% "deseq2",
-                     "'. DESeq2 has no random effect.\n",
+                     "'. Only limma_voom fits a random block; DESeq2 and edgeR have no random effect.\n",
                      "  Use de$method 'limma_voom' for a random block, or de$block_model 'fixed'.")
             }
         }
-        # Only "limma_voom" changes the count-path fit; any other value runs
-        # DESeq2, as it always has, so older configs keep working.
+        # Only "limma_voom" and "edger_ql" change the count-path fit; any other
+        # value runs DESeq2, as it always has, so older configs keep working.
         de_method <- tolower(d$method %||% "deseq2")
-        if (identical(de_method, "limma_voom") && (is_preprocessed || uses_tximport)) {
-            stop("de$method is 'limma_voom', which needs a raw count matrix.\n",
+        if (de_method %in% c("limma_voom", "edger_ql") && (is_preprocessed || uses_tximport)) {
+            stop("de$method is '", de_method, "', which needs a raw count matrix.\n",
                  "  This config uses ",
                  if (is_preprocessed) "preprocessed input (input$format: preprocessed)" else
                      "tximport input (files$txi)",
                  ". Use de$method 'deseq2', or supply a gene-level count matrix.")
         }
-        if (!de_method %in% c("deseq2", "limma_voom") && !is_preprocessed) {
+        if (!de_method %in% c("deseq2", "limma_voom", "edger_ql") && !is_preprocessed) {
             warning("de$method '", d$method, "' is not an RNA-seq count method; ",
-                    "DESeq2 will be fitted. Use 'deseq2' or 'limma_voom'.", call. = FALSE)
+                    "DESeq2 will be fitted. Use 'deseq2', 'limma_voom' or 'edger_ql'.", call. = FALSE)
         }
         # Blocking is wired into the count paths only (DESeq2 fixed term,
         # limma-voom duplicateCorrelation); the preprocessed (limma) and
