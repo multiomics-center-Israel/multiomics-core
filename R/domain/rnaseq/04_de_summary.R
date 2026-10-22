@@ -71,24 +71,11 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
                               list(de = de_cfg), sample_col)
     if (!is.null(block)) {
         block_col <- de_cfg$block_col
-        if (identical(block_col, factor_col)) {
-            stop("de$block_col '", block_col, "' is the contrast factor itself.\n",
-                 "  Point de$block_col at the pairing unit (donor, line, subject), ",
-                 "not at the column the contrasts compare.")
-        }
         dds0[[block_col]] <- block
         design_formula <- stats::as.formula(paste0("~ ", block_col, " + ", factor_col))
-        mm <- stats::model.matrix(design_formula,
-                                  data = as.data.frame(SummarizedExperiment::colData(dds0)))
-        if (qr(mm)$rank < ncol(mm) || nrow(mm) <= ncol(mm)) {
-            stop("The paired design ", paste(deparse(design_formula), collapse = ""),
-                 " cannot be fitted: ", ncol(mm), " coefficients, rank ", qr(mm)$rank,
-                 ", ", nrow(mm), " samples.\n",
-                 "  This happens when every level of '", block_col, "' holds a single level of '",
-                 factor_col, "', or when there are too few samples for one coefficient per block.\n",
-                 "  Check that each block contains samples from more than one group, ",
-                 "or remove de$block_col to fit the unpaired design.")
-        }
+        mm <- check_fixed_block_design(design_formula,
+                                       as.data.frame(SummarizedExperiment::colData(dds0)),
+                                       block_col, factor_col)
         DESeq2::design(dds0) <- design_formula
         message(sprintf("[run_deseq2_de] Paired design %s: %d blocks of '%s', %d residual df",
                         paste(deparse(design_formula), collapse = ""), nlevels(block),
@@ -171,9 +158,40 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
             design     = paste(deparse(design_formula), collapse = ""),
             factor_col = factor_col,
             block_col  = block_col,
+            block_model = if (is.null(block)) NULL else "fixed",
             n_blocks   = if (is.null(block)) NA_integer_ else nlevels(block)
         )
     ))
+}
+
+
+#' Check that a fixed-block design can be fitted
+#'
+#' Shared by the DESeq2 and limma-voom fixed-block paths, so both refuse the
+#' same designs with the same message.
+#'
+#' @param design_formula The paired formula, \code{~ block + factor}.
+#' @param data Sample data holding both columns.
+#' @param block_col,factor_col Column names, used in messages.
+#' @return The model matrix, after checking it is full rank with at least
+#'   one residual degree of freedom).
+check_fixed_block_design <- function(design_formula, data, block_col, factor_col) {
+    if (identical(block_col, factor_col)) {
+        stop("de$block_col '", block_col, "' is the contrast factor itself.\n",
+             "  Point de$block_col at the pairing unit (donor, line, subject), ",
+             "not at the column the contrasts compare.")
+    }
+    mm <- stats::model.matrix(design_formula, data = data)
+    if (qr(mm)$rank < ncol(mm) || nrow(mm) <= ncol(mm)) {
+        stop("The paired design ", paste(deparse(design_formula), collapse = ""),
+             " cannot be fitted: ", ncol(mm), " coefficients, rank ", qr(mm)$rank,
+             ", ", nrow(mm), " samples.\n",
+             "  This happens when every level of '", block_col, "' holds a single level of '",
+             factor_col, "', or when there are too few samples for one coefficient per block.\n",
+             "  Check that each block contains samples from more than one group, ",
+             "or remove de$block_col to fit the unpaired design.")
+    }
+    mm
 }
 
 

@@ -11,7 +11,7 @@
 #' @return A list with \code{method} (\code{"deseq2"}, \code{"limma_voom"}, \code{"limma"},
 #'   \code{"precomputed"} or \code{"unknown"}), \code{label} (method name for
 #'   tables), \code{design} (formula as text, or NA), \code{block_col} (or
-#'   NULL), \code{short} (one-line label) and \code{methods} (reader-facing
+#'   NULL), \code{block_model} ("fixed", "random" or NULL), \code{short} (one-line label) and \code{methods} (reader-facing
 #'   sentences).
 describe_rna_de <- function(info) {
     method <- info$method %||% "unknown"
@@ -43,7 +43,13 @@ describe_rna_de <- function(info) {
                 "moderated t-tests (empirical Bayes variance shrinkage) using the design %s."),
                 design)
             r <- info$block_correlation
-            if (paired) {
+            fixed <- paired && identical(info$block_model, "fixed")
+            if (fixed) {
+                methods <- paste(methods, sprintf(paste0(
+                    "The design includes %s as a fixed term, so groups are compared within ",
+                    "each of its %s levels; each %s level beyond the first uses one residual ",
+                    "degree of freedom."), block_col, info$n_blocks %||% "its", block_col))
+            } else if (paired) {
                 methods <- paste(methods, sprintf(paste0(
                     "Samples sharing a level of %s (%s levels) were treated as correlated: ",
                     "the within-block correlation was estimated with duplicateCorrelation() ",
@@ -57,7 +63,9 @@ describe_rna_de <- function(info) {
                     info$block_requested))
             }
             list(label = "limma-voom",
-                 short = if (paired) {
+                 short = if (fixed) {
+                     sprintf("limma-voom, design %s (%s as a fixed term)", design, block_col)
+                 } else if (paired) {
                      sprintf("limma-voom, design %s, block %s (consensus correlation %.3f)",
                              design, block_col, r)
                  } else {
@@ -84,5 +92,6 @@ describe_rna_de <- function(info) {
             methods = "The differential-expression model was not recorded for this report.")
     )
 
-    c(list(method = method, design = design, block_col = block_col), out)
+    c(list(method = method, design = design, block_col = block_col,
+           block_model = if (paired) info$block_model %||% "fixed" else NULL), out)
 }

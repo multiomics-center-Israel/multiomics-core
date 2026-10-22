@@ -78,6 +78,15 @@ validate_rna_config <- function(cfg) {
         assert_scalar_num(d$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
         assert_scalar_chr(d$block_col, "de$block_col", allow_null = TRUE)
         assert_scalar_bool(d$block_pca, "de$block_pca", allow_null = TRUE)
+        if (!is.null(d$block_model)) {
+            assert_one_of(tolower(d$block_model), "de$block_model", c("fixed", "random"))
+            if (identical(resolve_rna_block_model(d), "random") &&
+                !identical(tolower(d$method %||% "deseq2"), "limma_voom")) {
+                stop("de$block_model is 'random', but de$method is '", d$method %||% "deseq2",
+                     "'. DESeq2 has no random effect.\n",
+                     "  Use de$method 'limma_voom' for a random block, or de$block_model 'fixed'.")
+            }
+        }
         # Only "limma_voom" changes the count-path fit; any other value runs
         # DESeq2, as it always has, so older configs keep working.
         de_method <- tolower(d$method %||% "deseq2")

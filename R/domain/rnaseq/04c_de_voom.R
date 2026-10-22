@@ -4,13 +4,14 @@
 #' it to log2-CPM with precision weights via [limma::voom()], and fits a
 #' moderated linear model with [limma::eBayes()].
 #'
-#' When `de$block_col` names a metadata column, samples sharing a level of that
-#' column are treated as correlated: the within-block correlation is estimated
-#' with [limma::duplicateCorrelation()] and passed to [limma::lmFit()], i.e. the
-#' block enters as a random effect rather than a fixed term. Following the
-#' limma user's guide, voom and duplicateCorrelation are each run twice so that
-#' the precision weights account for the blocking. A non-finite consensus
-#' correlation refits without blocking, and `info` records that outcome.
+#' When `de$block_col` names a metadata column, `de$block_model` (see
+#' [resolve_rna_block_model()]) says how the block enters. "random" (the
+#' default here): samples sharing a level are treated as correlated, the
+#' within-block correlation is estimated with [limma::duplicateCorrelation()]
+#' and passed to [limma::lmFit()]; following the limma user's guide, voom and
+#' duplicateCorrelation are each run twice. A non-finite consensus refits
+#' without blocking, and `info` records that outcome. "fixed": the block is a
+#' term of the design (`~ block + factor`), as in the DESeq2 path.
 #'
 #' Returns the same structure as [run_deseq2_de()] so downstream code works
 #' unchanged. `baseMean` carries voom's AveExpr (mean log2-CPM), not DESeq2's
@@ -22,7 +23,7 @@
 #' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator.
 #' @param de_cfg DE configuration list (sample_col, sample_alignment, block_col).
 #' @return List with 'dds' (NULL), 'tables' (named list of DE result data
-#'   frames) and 'info' (method, design, factor_col, block_col, n_blocks,
+#'   frames) and 'info' (method, design, factor_col, block_col, block_model, n_blocks,
 #'   block_correlation, block_requested). Each contrast is fitted as one
 #'   coefficient, with its denominator as the reference level.
 run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
@@ -70,8 +71,18 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
     dge <- edgeR::calcNormFactors(edgeR::DGEList(counts = counts), method = "TMM")
 
     block <- resolve_de_block(meta, list(de = de_cfg), sample_col)
+    block_model <- if (is.null(block)) NULL else resolve_rna_block_model(de_cfg, method = "limma_voom")
     block_correlation <- NA_real_
-    if (!is.null(block)) {
+    if (identical(block_model, "fixed")) {
+        # Block as a fixed term: one coefficient per extra block level, no
+        # correlation to estimate. Same refusal rules as the DESeq2 path.
+        meta$.block <- block
+        mm <- check_fixed_block_design(stats::as.formula(paste0("~ .block + ", factor_col)),
+                                       meta, de_cfg$block_col, factor_col)
+        v <- limma::voom(dge, mm)
+        message(sprintf("[run_voom_rna_de] Fixed block '%s' (%d levels) in the design",
+                        de_cfg$block_col, nlevels(block)))
+    } else if (!is.null(block)) {
         v <- limma::voom(dge, design)
         corfit <- limma::duplicateCorrelation(v, design, block = block)
         v <- limma::voom(dge, design, block = block, correlation = corfit$consensus)
@@ -85,6 +96,7 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
                     de_cfg$block_col, "'; fitting without blocking.")
             v <- limma::voom(dge, design)
             block <- NULL
+            block_model <- NULL
         }
     } else {
         v <- limma::voom(dge, design)
@@ -107,12 +119,16 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
             next
         }
         lev <- stats::relevel(meta[[factor_col]], ref = den)
-        design_cn <- stats::model.matrix(~ lev)
-        colnames(design_cn) <- c("Intercept", levels(lev)[-1])
-        fit <- if (is.null(block)) {
-            limma::lmFit(v, design_cn)
+        design_cn <- if (identical(block_model, "fixed")) {
+            stats::model.matrix(~ block + lev)
         } else {
+            stats::model.matrix(~ lev)
+        }
+        colnames(design_cn) <- sub("^lev", "", colnames(design_cn))
+        fit <- if (identical(block_model, "random")) {
             limma::lmFit(v, design_cn, block = block, correlation = block_correlation)
+        } else {
+            limma::lmFit(v, design_cn)
         }
         fit <- limma::eBayes(fit)
         de <- limma::topTable(fit, coef = num, adjust.method = "BH",
@@ -136,12 +152,31 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
         tables = tables,
         info   = list(
             method            = "limma_voom",
-            design            = paste0("~", factor_col),
+            design            = if (identical(block_model, "fixed")) {
+                                    paste0("~", de_cfg$block_col, " + ", factor_col)
+                                } else paste0("~", factor_col),
             factor_col        = factor_col,
             block_col         = if (is.null(block)) NULL else de_cfg$block_col,
+            block_model       = block_model,
             n_blocks          = if (is.null(block)) NA_integer_ else nlevels(block),
             block_correlation = block_correlation,
             block_requested   = de_cfg$block_col
         )
     )
+}
+
+#' How a configured block enters the RNA-seq DE model
+#'
+#' The one reading of \code{de$block_model}, shared by the validator and the
+#' limma-voom fit. DESeq2 has no random effect, so its default is "fixed";
+#' limma-voom defaults to "random" (duplicateCorrelation).
+#'
+#' @param de_cfg The \code{modes$rna$de} config list.
+#' @param method The DE method that will run; defaults to \code{de$method}.
+#' @return "fixed", "random", or NULL when no \code{block_col} is set.
+resolve_rna_block_model <- function(de_cfg, method = de_cfg$method %||% "deseq2") {
+    bc <- de_cfg$block_col
+    if (is.null(bc) || !nzchar(bc)) return(NULL)
+    default <- if (identical(tolower(method), "limma_voom")) "random" else "fixed"
+    tolower(de_cfg$block_model %||% default)
 }
