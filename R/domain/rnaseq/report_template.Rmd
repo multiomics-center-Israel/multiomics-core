@@ -1008,7 +1008,7 @@ if (!is.null(rna_de$block_col) && file.exists(.bp_png)) {
         sprintf("Left: PCA of normalized log2-CPM expression. Right: the same genes after the estimated %s effect was removed from each gene (limma::removeBatchEffect, with the compared groups protected). ", .bc),
         sprintf("Grey lines join samples of the same %s. The right panel keeps the within-%s differences between groups that the paired model compares; it is for visualisation only, and no test was run on it. ", .bc, .bc),
         if (.pairs_only) sprintf("With one sample per group in each %s, removing the %s effect always places the two mirror-image around the centre; the evidence for a group effect is whether each group falls on the same side for every %s. ", .bc, .bc, .bc) else "",
-        if (identical(rna_de$method, "limma_voom")) sprintf("limma-voom treated %s as a random effect, so this panel approximates rather than equals what was fitted.", .bc) else ""
+        if (identical(rna_de$block_model, "random")) sprintf("The model treated %s as a random effect, so this panel approximates rather than equals what was fitted.", .bc) else ""
     ))
 }
 ```

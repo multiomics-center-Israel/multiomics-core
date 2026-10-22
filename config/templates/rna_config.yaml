@@ -96,7 +96,8 @@ modes:
     de:
       # "deseq2": DESeq2 Wald test on counts.
       # "limma_voom": TMM (edgeR) + voom + limma; with block_col, the block is a
-      #               random effect via duplicateCorrelation (no df spent per block).
+      #               random effect via duplicateCorrelation by default, or a fixed
+      #               term with block_model: "fixed".
       # Preprocessed input is always tested with limma, whatever is set here.
       method: "deseq2"          # "deseq2" | "limma_voom"
       
@@ -116,6 +117,13 @@ modes:
       # limma_voom instead estimates the within-block correlation.
       # Count input only (not input$format: preprocessed or files$de_table).
       block_col: null           # e.g. "Donor"
+      # How block_col enters the model (only used when block_col is set):
+      #   "fixed"  - a term of the design, ~ block_col + Factor (one coefficient per
+      #              extra block level). The only choice for deseq2.
+      #   "random" - limma_voom only: one within-block correlation shared by all
+      #              genes (duplicateCorrelation); no coefficient per block.
+      # Default: "fixed" for deseq2, "random" for limma_voom.
+      # block_model: "fixed"
       # With block_col set: also draw a PCA before and after removing the block
       # (report PCA tab + Diagnostic_plots/PCA_block_corrected.png). Visualisation
       # only; no test uses the corrected matrix. Default true.

@@ -173,3 +173,61 @@ test_that("validate_rna_config warns on a de$method that is not a count method",
     cfg$de$method <- "limma"
     expect_warning(validate_rna_config(cfg), "DESeq2 will be fitted")
 })
+
+# ---- de$block_model -----------------------------------------------------------
+
+test_that("resolve_rna_block_model defaults by method and honours the key", {
+    expect_null(resolve_rna_block_model(list(method = "limma_voom")))
+    expect_identical(resolve_rna_block_model(list(block_col = "Block")), "fixed")
+    expect_identical(resolve_rna_block_model(list(method = "limma_voom", block_col = "Block")), "random")
+    expect_identical(resolve_rna_block_model(list(method = "limma_voom", block_col = "Block",
+                                                  block_model = "Fixed")), "fixed")
+})
+
+test_that("run_voom_rna_de with block_model fixed equals limma ~ block + group by hand", {
+    skip_unless_voom()
+    meta <- make_voom_meta()
+    counts <- make_voom_counts(meta)
+    res <- suppressMessages(run_voom_rna_de(counts, meta, voom_contrasts(),
+                                            list(sample_col = "SampleID", block_col = "Block",
+                                                 block_model = "fixed")))
+    dge <- edgeR::calcNormFactors(edgeR::DGEList(counts), method = "TMM")
+    des <- stats::model.matrix(~ factor(meta$Block) + factor(meta$Group, levels = c("ctl", "trt")))
+    fit <- limma::eBayes(limma::lmFit(limma::voom(dge, des), des))
+    tt <- limma::topTable(fit, coef = ncol(des), number = Inf, sort.by = "none")
+    expect_identical(res$info$block_model, "fixed")
+    expect_identical(res$info$design, "~Block + Group")
+    expect_true(is.na(res$info$block_correlation))
+    expect_equal(res$tables$trt_vs_ctl$stat, tt$t, tolerance = 1e-8)
+    expect_equal(res$tables$trt_vs_ctl$log2FoldChange, tt$logFC, tolerance = 1e-8)
+})
+
+test_that("run_voom_rna_de with block_model fixed refuses a confounded block", {
+    skip_unless_voom()
+    meta <- make_voom_meta()
+    counts <- make_voom_counts(meta)
+    meta$Block <- ifelse(meta$Group == "ctl", "Bx", "By")
+    expect_error(run_voom_rna_de(counts, meta, voom_contrasts(),
+                                 list(sample_col = "SampleID", block_col = "Block",
+                                      block_model = "fixed")),
+                 "cannot be fitted")
+})
+
+test_that("describe_rna_de names a fixed block in limma-voom", {
+    d <- describe_rna_de(list(method = "limma_voom", design = "~Block + Group",
+                              block_col = "Block", block_model = "fixed", n_blocks = 3L))
+    expect_match(d$methods, "Block as a fixed term", fixed = TRUE)
+    expect_false(grepl("duplicateCorrelation", d$methods))
+    expect_match(d$short, "fixed term", fixed = TRUE)
+    expect_identical(d$block_model, "fixed")
+})
+
+test_that("validate_rna_config rejects a random block for DESeq2 and bad values", {
+    cfg <- voom_valid_cfg()
+    cfg$de$block_model <- "fixed"
+    expect_true(validate_rna_config(cfg))
+    cfg$de$method <- "deseq2"; cfg$de$block_model <- "random"
+    expect_error(validate_rna_config(cfg), "DESeq2 has no random effect")
+    cfg$de$block_model <- "mixed"
+    expect_error(validate_rna_config(cfg), "block_model")
+})
