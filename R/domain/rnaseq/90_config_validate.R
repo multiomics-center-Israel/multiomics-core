@@ -162,10 +162,19 @@ validate_rna_config <- function(cfg) {
                               allow_null = TRUE, min_val = 1)
             assert_scalar_num(g$max_size, "enrichment$gsea$max_size",
                               allow_null = TRUE, min_val = 1)
-            if (!is.null(g$min_size) && !is.null(g$max_size) &&
-                g$min_size >= g$max_size) {
-                stop("enrichment$gsea$min_size must be less than enrichment$gsea$max_size.",
-                     call. = FALSE)
+            # Compare an explicit max_size with the minimum that will apply,
+            # which is the default (resolve_rna_gsea_settings()) when min_size
+            # is unset. A database with fewer genes than min_size is not a
+            # config error: its units are evaluated with no set in range.
+            eff_min <- resolve_rna_gsea_settings(
+                list(modes = list(rna = list(enrichment = e))))$min_size
+            if (!is.null(g$max_size) && eff_min >= g$max_size) {
+                stop(sprintf(paste0(
+                    "enrichment$gsea$max_size (%s) must be greater than the gene-set ",
+                    "minimum size (%s%s); no gene set could be tested."),
+                    format(g$max_size), format(eff_min),
+                    if (is.null(g$min_size)) ", the default" else ", enrichment$gsea$min_size"),
+                    call. = FALSE)
             }
         }
         assert_scalar_bool(e$gsea_per_pathway_artifacts,
