@@ -54,12 +54,16 @@ run_edger_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
                             cn, contrasts_df$Numerator[i], contrasts_df$Denominator[i], factor_col))
             next
         }
+        if (identical(num, den)) {
+            warning(sprintf("Contrast '%s' compares level '%s' with itself. Skipping.",
+                            cn, contrasts_df$Numerator[i]))
+            next
+        }
         lev <- stats::relevel(meta[[factor_col]], ref = den)
         design_cn <- if (is.null(block)) stats::model.matrix(~ lev) else stats::model.matrix(~ block + lev)
-        colnames(design_cn) <- sub("^lev", "", colnames(design_cn))
-
+        # Full "lev" column name: a level such as "block2" must not match a block column.
         fit <- edgeR::glmQLFit(dge, design_cn)
-        qlf <- edgeR::glmQLFTest(fit, coef = num)
+        qlf <- edgeR::glmQLFTest(fit, coef = paste0("lev", num))
         de <- edgeR::topTags(qlf, n = Inf, sort.by = "none", adjust.method = "BH")$table
         tab <- data.frame(
             baseMean       = de$logCPM,
@@ -83,6 +87,7 @@ run_edger_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
             design        = if (is.null(block)) paste0("~", factor_col)
                             else paste0("~", de_cfg$block_col, " + ", factor_col),
             factor_col    = factor_col,
+            sample_col    = prep$sample_col,
             block_col     = if (is.null(block)) NULL else de_cfg$block_col,
             block_model   = if (is.null(block)) NULL else "fixed",
             n_blocks      = if (is.null(block)) NA_integer_ else nlevels(block),

@@ -105,3 +105,27 @@ test_that("validate_rna_config handles edger_ql", {
     cfg$input <- list(format = "preprocessed")
     expect_error(validate_rna_config(cfg), "needs a raw count matrix")
 })
+
+test_that("edgeR tests the group, not a block column with a look-alike name", {
+    skip_if_not_installed("edgeR")
+    meta <- make_edger_meta()
+    meta$Group <- ifelse(meta$Group == "trt", "block2", "ctl")
+    meta$Block <- sub("^B", "", meta$Block)
+    counts <- make_edger_counts(make_edger_meta())
+    cdf <- data.frame(Contrast_name = "b2_vs_ctl", Factor = "Group",
+                      Numerator = "block2", Denominator = "ctl")
+    res <- suppressMessages(run_edger_rna_de(counts, meta, cdf,
+                                             list(sample_col = "SampleID", block_col = "Block")))
+    expect_gt(stats::median(res$tables$b2_vs_ctl$log2FoldChange[1:40]), 0.4)
+    expect_identical(res$info$sample_col, "SampleID")
+})
+
+test_that("edgeR skips a contrast that compares a level with itself", {
+    skip_if_not_installed("edgeR")
+    meta <- make_edger_meta(); counts <- make_edger_counts(meta)
+    cdf <- rbind(edger_contrasts(),
+                 data.frame(Contrast_name = "same", Factor = "Group", Numerator = "trt", Denominator = "trt"))
+    res <- suppressMessages(expect_warning(
+        run_edger_rna_de(counts, meta, cdf, list(sample_col = "SampleID")), "with itself"))
+    expect_named(res$tables, "trt_vs_ctl")
+})
