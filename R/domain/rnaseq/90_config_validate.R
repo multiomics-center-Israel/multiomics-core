@@ -89,16 +89,16 @@ validate_rna_config <- function(cfg) {
             warning("de$method '", d$method, "' is not an RNA-seq count method; ",
                     "DESeq2 will be fitted. Use 'deseq2', 'limma_voom' or 'edger_ql'.", call. = FALSE)
         }
-        # Blocking is wired into the count paths only (DESeq2 fixed term,
-        # limma-voom duplicateCorrelation); the preprocessed (limma) and
+        # Blocking is wired into the count paths only (DESeq2 and edgeR fixed
+        # term, limma-voom fixed or duplicateCorrelation); the preprocessed (limma) and
         # pre-computed paths would silently fit or load an unpaired result,
         # hiding a design error.
         if (!is.null(d$block_col) && nzchar(d$block_col)) {
             has_precomputed <- length(unlist(cfg$files$de_table)) > 0 &&
                 all(nzchar(unlist(cfg$files$de_table)))
             if (is_preprocessed || has_precomputed) {
-                stop("de$block_col is set, but blocking applies only when DESeq2 or ",
-                     "limma-voom is fitted on counts.\n",
+                stop("de$block_col is set, but blocking applies only when DESeq2, ",
+                     "limma-voom or edgeR is fitted on counts.\n",
                      "  This config uses ",
                      if (has_precomputed) "pre-computed DE tables (files$de_table)" else
                          "preprocessed input (input$format: preprocessed)",
