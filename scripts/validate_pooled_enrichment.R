@@ -116,6 +116,14 @@ topk_overlap <- function(a, b, k) {
     c(top = top, bottom = bot, k = k)
 }
 
+# Spearman correlation of two rankings, NA when fewer than two features are
+# finite in both (an empty sensitivity subset would otherwise make cor() stop
+# the script before it writes anything).
+spearman_finite <- function(a, b) {
+    if (sum(is.finite(a) & is.finite(b)) < 2) return(NA_real_)
+    stats::cor(a, b, method = "spearman", use = "complete.obs")
+}
+
 pairwise_compare <- function(df, k) {
     cols <- setdiff(names(df), "FeatureID")
     pairs <- utils::combn(cols, 2)
@@ -123,7 +131,7 @@ pairwise_compare <- function(df, k) {
         a <- df[[pairs[1, j]]]; b <- df[[pairs[2, j]]]
         ov <- topk_overlap(a, b, k)
         data.frame(ranking_a = pairs[1, j], ranking_b = pairs[2, j],
-                   spearman = stats::cor(a, b, method = "spearman", use = "complete.obs"),
+                   spearman = spearman_finite(a, b),
                    top_k_overlap = ov[["top"]], bottom_k_overlap = ov[["bottom"]],
                    k_requested = k, k = ov[["k"]])
     }))
@@ -169,8 +177,7 @@ for (cn in contrasts) {
             z_i <- pool_limma_imputations(runs[-i], cn)$z_pooled
             ov <- topk_overlap(pa$z_pooled, z_i, k)
             data.frame(contrast = key, left_out = i,
-                       spearman = stats::cor(pa$z_pooled, z_i, method = "spearman",
-                                             use = "complete.obs"),
+                       spearman = spearman_finite(pa$z_pooled, z_i),
                        top_k_overlap = ov[["top"]], bottom_k_overlap = ov[["bottom"]],
                    k_requested = k, k = ov[["k"]])
         }))
