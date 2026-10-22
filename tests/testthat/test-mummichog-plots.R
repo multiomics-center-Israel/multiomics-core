@@ -421,6 +421,33 @@ test_that("a contrast with no section still loses its stale GSEA exports", {
   expect_true(all(file.exists(keep)))
 })
 
+test_that("a contrast with no section also loses its stale Summary exports", {
+  root <- withr::local_tempdir()
+  out  <- withr::local_tempdir()
+  dest <- file.path(out, "mummichog_pinned")
+  dir.create(dest, recursive = TRUE, showWarnings = FALSE)
+
+  f <- build_gsea_fixture(root)          # one contrast: HL_vs_LL
+
+  stale <- file.path(dest, c("mummichog_summary_HL_vs_LL.tsv",
+                             "mummichog_summary_HL_vs_LL.csv"))
+  file.create(stale)
+  keep <- file.path(dest, "mummichog_summary_OTHER.tsv")
+  file.create(keep)
+
+  gone <- clear_orphan_mummichog_gsea_exports(f$files, list(), out)
+  expect_setequal(gone, stale)
+  expect_false(any(file.exists(stale)))
+  expect_true(file.exists(keep))
+
+  # A live section's Summary is the section's to manage, never an orphan.
+  file.create(stale)
+  gone <- clear_orphan_mummichog_gsea_exports(
+    f$files, list(HL_vs_LL = list(slug = "HL_vs_LL")), out)
+  expect_length(gone, 0L)
+  expect_true(all(file.exists(stale)))
+})
+
 test_that("a live section's GSEA exports are never cleared as orphans", {
   root <- withr::local_tempdir()
   out  <- withr::local_tempdir()

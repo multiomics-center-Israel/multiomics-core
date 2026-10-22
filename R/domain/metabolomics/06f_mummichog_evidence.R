@@ -197,6 +197,10 @@
 #'       a `";"`-separated synonym list, as the models themselves store it).}
 #'     \item{compound_kegg}{Named character vector: compound id -> KEGG compound
 #'       id, `NA` when the model carries none.}
+#'     \item{pathway_ids}{Named character vector: pathway name -> the model's
+#'       own pathway `id` (e.g. `mng00010`), the key the report joins on to the
+#'       identified-metabolite enrichment. `NA` when the model gives no id, or
+#'       when the name is shared by several pathways and so names no single id.}
 #'     \item{format}{`"azimuth"` or `"mummichog2"`.}
 #'   }
 #'   Aborts when the file is unreadable or matches neither shape — a malformed
@@ -250,6 +254,7 @@ read_mummichog_model_pathways <- function(path) {
   names(pw) <- vapply(jm$list_of_pathways,
                       function(p) as.character(p$name %||% p$id %||% NA_character_),
                       character(1))
+  pw_ids <- .mmc_pathway_id_index(names(pw), jm$list_of_pathways)
   pw <- pw[!is.na(names(pw)) & nzchar(names(pw))]
 
   cpds <- jm$list_of_compounds %||% list()
@@ -270,8 +275,35 @@ read_mummichog_model_pathways <- function(path) {
     pathways       = pw,
     compound_names = stats::setNames(cnm, cid),
     compound_kegg  = stats::setNames(ckegg, cid),
+    pathway_ids    = pw_ids,
     format         = "azimuth"
   )
+}
+
+#' Index a model's pathway ids by the pathway name the results are keyed on
+#'
+#' mummichog's tables and the evidence layer key pathways by name, so the id is
+#' looked up through it. A name carried by several pathways cannot say which id
+#' it means, and is mapped to `NA` rather than to whichever came first.
+#'
+#' @param pw_names Pathway names, one per entry of `entries` (may hold NA).
+#' @param entries  The model's pathway entries, each possibly carrying `id`.
+#' @return Named character vector: pathway name -> id, `NA` where there is no
+#'   single id.
+#' @noRd
+.mmc_pathway_id_index <- function(pw_names, entries) {
+  ids <- vapply(entries, function(p) {
+    id <- p$id
+    if (is.null(id) || length(id) != 1L || is.na(id) || !nzchar(id))
+      NA_character_ else as.character(id)
+  }, character(1))
+  keep <- !is.na(pw_names) & nzchar(pw_names)
+  ids <- ids[keep]
+  pw_names <- pw_names[keep]
+  shared <- pw_names %in% pw_names[duplicated(pw_names)]
+  ids[shared] <- NA_character_
+  ids <- stats::setNames(ids, pw_names)
+  ids[!duplicated(names(ids))]
 }
 
 #' Build the model index from a mummichog-2 native model
@@ -285,6 +317,7 @@ read_mummichog_model_pathways <- function(path) {
   names(pw) <- vapply(jm$metabolic_pathways,
                       function(p) as.character(p$name %||% p$id %||% NA_character_),
                       character(1))
+  pw_ids <- .mmc_pathway_id_index(names(pw), jm$metabolic_pathways)
   pw <- pw[!is.na(names(pw)) & nzchar(names(pw))]
 
   defs <- jm$dict_cpds_def %||% list()
@@ -297,6 +330,7 @@ read_mummichog_model_pathways <- function(path) {
     pathways       = pw,
     compound_names = cnm[intersect(all_ids, names(cnm))],
     compound_kegg  = stats::setNames(.mmc_extract_kegg(all_ids), all_ids),
+    pathway_ids    = pw_ids,
     format         = "mummichog2"
   )
 }

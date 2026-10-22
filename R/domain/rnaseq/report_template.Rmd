@@ -14,6 +14,8 @@ output:
     fig_height: 7
     self_contained: true
     code_folding: hide
+params:
+  rna_info: NULL
 ---
 
 ```{r setup, include=FALSE}
@@ -182,6 +184,11 @@ render_commentary <- function(figure_id) {
 cfg <- yaml::read_yaml(config_path)
 rna_cfg <- cfg$modes$rna
 
+# Every filtering sentence and table row below reads this one description of
+# the filter that ran (params$rna_info = preprocess_rna()'s info), not the
+# filtering config keys.
+rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
+
 # Section visibility flags (default-off for MA + p-value distribution after
 # Apr 2026 reviewer feedback; toggle on via report_sections in config).
 .rna_rs        <- rna_cfg$report_sections %||% list()
@@ -295,8 +302,6 @@ cat("## Downstream Analysis (multiomics-core)\n\n")
 
 norm_method <- rna_cfg$normalization$method %||% "TMM"
 prior_ct <- rna_cfg$normalization$prior.count %||% 1
-filt_min <- rna_cfg$filtering$auto_filter$min %||% 0.5
-filt_max <- rna_cfg$filtering$auto_filter$max %||% 2.0
 de_method <- rna_cfg$de$method %||% "deseq2"
 deseq_mode <- rna_cfg$de$deseq_mode %||% "default"
 p_cut <- rna_cfg$de$p_cutoff %||% 0.05
@@ -311,20 +316,18 @@ pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
 
 cat(sprintf(
     paste0(
-        "Gene filtering was performed using an adaptive density-based threshold ",
-        "(KDE on log2-CPM distribution), selecting an optimal CPM threshold within the ",
-        "[%.1f\u2013%.1f] range. Genes passing the threshold in at least one complete ",
-        "biological group were retained. Normalization was performed using the %s method ",
+        "%s Normalization was performed using the %s method ",
         "with log2-CPM transformation (prior count = %d). ",
         "Differential expression was tested using %s (%s test, %s mode). ",
         "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
     ),
-    filt_min, filt_max,
+    rna_filt$methods,
     norm_method, prior_ct,
     toupper(de_method), "Wald", deseq_mode,
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
 ))
+if (!is.null(rna_filt$de_note)) cat(" ", rna_filt$de_note, sep = "")
 
 if (pathway_enabled) {
     cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
@@ -355,10 +358,10 @@ if (!is.null(tech$upstream_de_note)) {
     cat(tech$upstream_de_note, " ")
     cat(sprintf(
         paste0(
-            "This report applies additional filtering: adaptive CPM-based gene filtering, ",
+            "This report applies additional filtering: gene filtering (%s), ",
             "%s normalization, and a fold-change cutoff of \u2265 %.1f"
         ),
-        norm_method, fc_cut
+        rna_filt$short, norm_method, fc_cut
     ))
     if (!is.na(our_de_n)) {
         cat(sprintf(", resulting in **%s DEGs**", format(as.integer(our_de_n), big.mark = ",")))
@@ -411,7 +414,7 @@ settings <- data.frame(
   Parameter = c(
     "Normalization Method",
     paste0("Prior Count (added before log2 to avoid log(0): log2(CPM + ", prior_count, "))"),
-    "Filtering Group Column", "Auto-filter CPM Threshold Range",
+    "Gene Filtering (details under Filtering Strategy)",
     "DE Method", "DESeq2 Mode",
     "Adjusted p-value Cutoff", "Linear FC Cutoff",
     "Clustering Enabled"
@@ -419,8 +422,7 @@ settings <- data.frame(
   Value = c(
     rna_cfg$normalization$method %||% "N/A",
     prior_count,
-    rna_cfg$filtering$group_col %||% "N/A",
-    paste0(rna_cfg$filtering$auto_filter$min %||% "?", " – ", rna_cfg$filtering$auto_filter$max %||% "?", " CPM (pipeline selects optimal within this range)"),
+    rna_filt$short,
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
     ifelse(isTRUE(rna_cfg$clustering$enabled), "Yes", "No")
@@ -442,43 +444,40 @@ kable(contrasts)
 
 ## Filtering Strategy
 
-The pipeline applies **CPM-based auto-filtering** to remove lowly expressed genes before differential expression analysis. Genes that do **not** reach a minimum expression level (CPM threshold) are removed. This is a standard and necessary practice in RNA-seq to:
+```{r filtering-strategy, results='asis'}
+# Describes the filter recorded by preprocess_rna(), not the filtering config.
+if (rna_filt$mode %in% c("adaptive", "fixed")) {
+    cat("Lowly expressed genes were removed before differential expression analysis.",
+        "Genes with very low counts have unreliable fold-change estimates and add",
+        "multiple-testing burden without adding information.\n\n")
+}
+cat(rna_filt$methods, "\n\n")
+if (rna_filt$mode %in% c("adaptive", "fixed")) {
+    cat("Because a gene only has to pass in one group, genes expressed in a single",
+        "condition are kept even when they are low elsewhere.\n\n")
+}
+if (!is.null(rna_filt$de_note)) cat(rna_filt$de_note, "\n\n")
 
-1. **Reduce noise**: Genes with very low counts have unreliable fold-change estimates
-2. **Improve statistical power**: Fewer tests means less severe multiple testing correction
-3. **Remove technical artifacts**: Many zero/low counts represent sequencing noise, not biology
-
-**How auto-filtering works:**
-
-```{r filtering-strategy}
 filter_params <- data.frame(
   Parameter = c(
+    "Filtering Mode",
+    "Filtering Matrix",
     "Grouping Column",
-    "CPM Threshold Search Range",
-    "Fallback Threshold",
+    "Threshold Applied",
     "Filtering Rule"
   ),
   Value = c(
-    rna_cfg$filtering$group_col,
-    paste0(rna_cfg$filtering$auto_filter$min, " – ", rna_cfg$filtering$auto_filter$max, " CPM (pipeline automatically selects the optimal threshold within this range)"),
-    paste0(rna_cfg$filtering$auto_filter$fallback %||% 1.0, " CPM"),
-    "Gene is KEPT only if it has CPM ≥ threshold in ALL samples of at least ONE biological group"
+    rna_filt$short,
+    if (is.na(rna_filt$matrix)) "N/A" else rna_filt$matrix,
+    if (is.na(rna_filt$group_col)) "N/A (no group-based filtering)" else rna_filt$group_col,
+    rna_filt$threshold_label,
+    rna_filt$rule %||% "N/A"
   ),
   stringsAsFactors = FALSE
 )
-kable(filter_params, col.names = c("Parameter", "Value"))
+print(knitr::kable(filter_params, col.names = c("Parameter", "Value")))
+cat("\n\n")
 ```
-
-**Algorithm:**
-
-1. Calculate CPM (counts per million) for each gene in each sample
-2. For each candidate threshold (from min to max range):
-   - For each biological group, check if the gene has CPM ≥ threshold in ALL samples of that group
-   - A gene is **kept** if it meets the threshold in at least one complete group; otherwise it is **removed**
-3. The pipeline automatically selects the optimal threshold that balances gene retention with noise reduction
-4. The selected threshold is shown in the QC plot below
-
-This group-aware filtering ensures that genes specific to certain conditions are retained, even if they have low expression in other conditions. Genes that are lowly expressed across **all** conditions are removed as uninformative.
 
 ---
 
@@ -607,7 +606,8 @@ cat("</div>\n")
 
 .tm_steps <- list(
     list(label = "Filtering",
-         ran   = !is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before != .tm_n_after),
+         ran   = if (rna_filt$mode != "unknown") rna_filt$applied else
+                     !is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before != .tm_n_after),
     list(label = "Normalization",
          ran   = (tolower(rna_cfg$normalization$method %||% "tmm") != "none")),
     list(label = "Differential expression",
@@ -651,9 +651,8 @@ cat('</tbody></table>\n')
 
 ## Gene Filtering
 
-Counts before and after the filtering rule defined under *Analysis Parameters → Filtering Strategy*.
-Lowly expressed genes were removed using the auto-filtering strategy described above.
-The pipeline evaluates CPM distributions across biological groups and selects an optimal threshold.
+Counts before and after the gene filter described under *Analysis Parameters → Filtering Strategy*
+(`r rna_filt$short`).
 
 ```{r filter-stats}
 # Read raw and filtered counts to get gene numbers
@@ -686,13 +685,20 @@ if (!is.na(n_genes_raw) && !is.na(n_genes_filt)) {
 }
 ```
 
-```{r filter-plot, fig.cap="CPM filtering threshold selection"}
-if (file.exists(filter_plot)) knitr::include_graphics(filter_plot)
+```{r filter-plot, fig.cap="Filtering threshold selection"}
+# Only the adaptive mode writes this plot. Shown only when this run is known to
+# have filtered adaptively, so a copy left by an earlier run never stands in.
+show_filter_plot <- file.exists(filter_plot) && identical(rna_filt$mode, "adaptive")
+if (show_filter_plot) knitr::include_graphics(filter_plot)
 ```
 
 ```{r legend-filter-plot, results='asis', echo=FALSE}
-if (file.exists(filter_plot)) {
-    figure_legend("CPM filtering threshold selection. The pipeline evaluates the number of genes retained at each candidate CPM threshold within the specified range and selects the optimal value that balances noise reduction with gene retention.")
+if (show_filter_plot) {
+    figure_legend(paste(
+        "Filtering threshold selection. Density of log2(expression + 0.1) values pooled over all genes and samples.",
+        "The red line is drawn at log2 of the threshold applied, which is the selected local minimum unless the",
+        "range limits or the fallback set the threshold (see Filtering Strategy).",
+        sprintf("Threshold applied: %s.", rna_filt$threshold_label)))
 }
 ```
 
@@ -2929,7 +2935,7 @@ files_tbl <- data.frame(
     "Full results table (TSV) — all genes with fold changes, p-values, and pass flags",
     "DESeq2 summary for significant genes",
     "DE gene counts per contrast (up/down/total)",
-    "Filtered raw counts matrix (genes that passed CPM threshold)",
+    "Raw counts matrix after gene filtering",
     "TMMlogCPM-normalized expression matrix"
   ),
   stringsAsFactors = FALSE
@@ -2964,8 +2970,6 @@ norm_method <- rna_cfg$normalization$method %||% "TMMlogCPM"
 de_method <- rna_cfg$de$method %||% "DESeq2"
 padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
 lfc_cut <- rna_cfg$de$linear_fc_cutoff %||% 1.5
-filter_min <- rna_cfg$filtering$auto_filter$min %||% 0.5
-filter_max <- rna_cfg$filtering$auto_filter$max %||% 2.0
 
 # Get sample and gene counts
 n_samples <- if (exists("meta") && is.data.frame(meta)) nrow(meta) else "N"
@@ -2986,14 +2990,7 @@ cat(sprintf(
 n_samples
 ))
 
-cat(sprintf(
-"Lowly expressed genes were filtered using an adaptive CPM threshold approach (range: %.1f–%.1f CPM), ",
-filter_min, filter_max
-))
-
-cat(sprintf(
-"retaining genes with sufficient expression in at least one biological group. "
-))
+cat(rna_filt$methods, " ")
 
 cat(sprintf(
 "Expression values were normalized using the %s method, which applies TMM (Trimmed Mean of M-values) scaling factors followed by log2 CPM transformation. ",
@@ -3027,8 +3024,8 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). Lowly expressed genes were filtered using adaptive CPM thresholds (%.1f–%.1f CPM range). Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.",
-filter_min, filter_max, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.",
+rna_filt$methods, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs
 ))
 
 cat("\n</div>\n")
