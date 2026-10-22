@@ -3735,6 +3735,186 @@ for (vf in pw_volcano_files) {
 
 ---
 
+# Enrichment on a Pooled Ranking
+
+```{r pooled-setup, include=FALSE}
+# Reads only what run_proteomics_pooled_enrichment() wrote; nothing here
+# recomputes a statistic.
+pooled_dir <- proteomics_pooled_enrichment_dir(prot_dir)
+pooled_plot_dir <- file.path(pooled_dir, "plots")
+pooled_rank_files <- if (dir.exists(pooled_dir)) {
+    list.files(pooled_dir, pattern = "^pooled_ranking_.*\\.csv$", full.names = TRUE)
+} else character(0)
+# Gated on the flag as well as the files, so tables from an earlier run never
+# appear when the option is now off.
+has_pooled <- length(pooled_rank_files) > 0 &&
+    isTRUE(((prot_cfg$pathway %||% list())$pooled_ranking %||% list())$enabled)
+pooled_info <- if (has_pooled) pooled_ranking_run_info(pooled_dir) else NULL
+pooled_fgsea_files <- if (has_pooled) list.files(pooled_dir, pattern = "^pathway_.*_fgsea\\.csv$", full.names = TRUE) else character(0)
+pooled_cam_files <- if (has_pooled) list.files(pooled_dir, pattern = "^pathway_.*_camerapr\\.csv$", full.names = TRUE) else character(0)
+pooled_pathway_pngs <- if (has_pooled && dir.exists(pooled_plot_dir)) list.files(pooled_plot_dir, pattern = "^pathway_.*\\.png$", full.names = TRUE) else character(0)
+```
+
+```{r pooled-skip, eval=!has_pooled, results='asis'}
+cat("The pooled-ranking enrichment did not run for this report. It runs when `pathway.enabled` and `pathway.pooled_ranking.enabled` are both true and the differential analysis used limma.\n\n")
+```
+
+```{r pooled-explanation, eval=has_pooled, results='asis'}
+.pooled_one_draw <- isTRUE(pooled_info$m == 1)
+cat(paste0(
+    "This section is a separate analysis from the enrichment above, which it does not change. ",
+    if (.pooled_one_draw) {
+        paste0("limma was fitted to the single imputation draw and its moderated t-statistic ",
+               "was converted to a z-score; with one draw there is no between-draw variance ",
+               "to combine. ")
+    } else {
+        paste0("limma was fitted separately to each imputation draw. For each protein the coefficients were ",
+               "averaged and the variances combined across imputation draws with Rubin's rules (within-draw ",
+               "moderated variance plus (1 + 1/m) times the between-draw variance), with Barnard-Rubin degrees ",
+               "of freedom, and the pooled t-statistic was converted to a z-score. ")
+    },
+    pooled_ranking_collapse_text(pooled_info$collapsed),
+    " The ranking is this z-score for both methods below.\n\n"))
+.pooled_imp <- prot_cfg$imputation %||% list()
+if (.pooled_one_draw) {
+    cat("Results here are hypothesis-generating.\n\n")
+} else if (methods_imputation_is_deterministic(.pooled_imp)) {
+    cat(paste0(
+        "The configured imputation is deterministic, so the draws are identical, the between-draw ",
+        "variance is zero and the ranking is the single-fit moderated statistic. Results here are ",
+        "hypothesis-generating.\n\n"))
+} else {
+    cat(sprintf(paste0(
+        "The draws are %s from one imputation model and differ only by random noise, so the ",
+        "between-draw variance reflects that noise and not uncertainty in the imputation model ",
+        "itself. It is likely to understate the uncertainty that imputation adds. Results here are ",
+        "hypothesis-generating.\n\n"),
+        if (identical(methods_imputation_method(.pooled_imp), "perseus_like")) {
+            "Perseus-style random draws (a down-shifted normal distribution)"
+        } else {
+            "random draws"
+        }))
+}
+# Name only the files this run wrote.
+.pooled_src <- c("pooled_ranking&#95;&lt;contrast&gt;.csv",
+                 if (length(pooled_fgsea_files) > 0) "pathway&#95;&lt;contrast&gt;&#95;&lt;database&gt;&#95;fgsea.csv",
+                 if (length(pooled_cam_files) > 0) "pathway&#95;&lt;contrast&gt;&#95;&lt;database&gt;&#95;camerapr.csv")
+cat(paste0(
+    "<p style='font-size: 0.9em; color: #555;'><em>Source: Enrichment/pooled_ranking/ (",
+    paste(.pooled_src, collapse = ", "), ").</em></p>\n\n"))
+```
+
+```{r pooled-diagnostics, eval=has_pooled, results='asis'}
+# Heading printed here, not as markdown, so it is absent when the section did not run.
+cat("\n## Pooled Ranking Diagnostics {.tabset}\n\n")
+for (rf in pooled_rank_files) {
+    label_raw <- gsub("^pooled_ranking_|\\.csv$", "", basename(rf))
+    cat(sprintf("\n### %s\n\n", gsub("_", " ", label_raw)))
+    fmi_png <- file.path(pooled_plot_dir, paste0("diagnostic_fmi_", label_raw, ".png"))
+    rank_png <- file.path(pooled_plot_dir, paste0("diagnostic_rank_", label_raw, ".png"))
+    if (file.exists(fmi_png)) {
+        cat(sprintf("![Fraction of missing information](%s)\n\n", fmi_png))
+        figure_legend("Fraction of missing information per gene against the fraction of its values in the contrast samples that were imputed. Source: pooled_ranking table for this contrast.")
+    }
+    if (file.exists(rank_png)) {
+        cat(sprintf("![Pooled z vs legacy ranking](%s)\n\n", rank_png))
+        figure_legend("Rank of each gene by the pooled z-score against its rank by the legacy enrichment statistic used in the section above. Source: pooled_ranking table for this contrast (columns z_pooled and legacy_stat).")
+    }
+    if (!file.exists(fmi_png) && !file.exists(rank_png)) {
+        cat("No diagnostic plots were written for this contrast.\n\n")
+    }
+}
+```
+
+```{r pooled-fgsea, eval=has_pooled, results='asis'}
+# Heading printed here, not as markdown, so it is absent when the section did not run.
+cat("\n## fgsea (pooled ranking) {.tabset}\n\n")
+if (length(pooled_fgsea_files) > 0) cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: fgsea on the pooled ranking. Gene sets with padj &lt; 0.05 are shown. Source: pathway&#95;&lt;contrast&gt;&#95;&lt;database&gt;&#95;fgsea.csv in Enrichment/pooled_ranking/.</em></p>\n")
+if (length(pooled_fgsea_files) == 0) {
+    cat("No fgsea tables were written for the pooled ranking.\n\n")
+}
+for (ff in pooled_fgsea_files) {
+    label_clean <- gsub("_", " ", gsub("^pathway_|_fgsea\\.csv$", "", basename(ff)))
+    cat(sprintf("\n### %s\n\n", label_clean))
+    df <- read.csv(ff, stringsAsFactors = FALSE)
+    sig <- df[!is.na(df$padj) & df$padj < 0.05, , drop = FALSE]
+    if (nrow(sig) == 0) {
+        cat("No gene sets with padj < 0.05.\n\n")
+        next
+    }
+    sig <- sig[order(sig$padj), , drop = FALSE]
+    name_col <- if ("pathway_name" %in% names(sig)) "pathway_name" else "pathway"
+    show <- sig[, intersect(c(name_col, "NES", "pval", "padj", "size", "leadingEdge"), names(sig)), drop = FALSE]
+    print(htmltools::tagList(make_dt(show, paste("fgsea (pooled ranking) -", label_clean))))
+    cat("\n\n")
+}
+```
+
+```{r pooled-camerapr, eval=has_pooled, results='asis'}
+# Heading printed here, not as markdown, so it is absent when the section did not run.
+cat("\n## cameraPR (pooled ranking) {.tabset}\n\n")
+if (length(pooled_cam_files) > 0) cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: cameraPR on the pooled ranking, on the same gene sets as the fgsea tables. Gene sets with FDR &lt; 0.05 are shown. Source: pathway&#95;&lt;contrast&gt;&#95;&lt;database&gt;&#95;camerapr.csv in Enrichment/pooled_ranking/.</em></p>\n")
+if (length(pooled_cam_files) == 0) {
+    cat("No cameraPR tables were written for the pooled ranking.\n\n")
+}
+for (cf in pooled_cam_files) {
+    label_clean <- gsub("_", " ", gsub("^pathway_|_camerapr\\.csv$", "", basename(cf)))
+    cat(sprintf("\n### %s\n\n", label_clean))
+    df <- read.csv(cf, stringsAsFactors = FALSE)
+    sig <- df[!is.na(df$FDR) & df$FDR < 0.05, , drop = FALSE]
+    if (nrow(sig) == 0) {
+        cat("No gene sets with FDR < 0.05.\n\n")
+        next
+    }
+    sig <- sig[order(sig$PValue), , drop = FALSE]
+    name_col <- if ("pathway_name" %in% names(sig)) "pathway_name" else "pathway"
+    show <- sig[, intersect(c(name_col, "NGenes", "Direction", "PValue", "FDR", "inter_gene_cor"), names(sig)), drop = FALSE]
+    print(htmltools::tagList(make_dt(show, paste("cameraPR (pooled ranking) -", label_clean))))
+    cat("\n\n")
+}
+```
+
+```{r pooled-dotplots, eval=has_pooled, results='asis'}
+# Heading printed here, not as markdown, so it is absent when the section did not run.
+cat("\n## Pooled-ranking Dotplots {.tabset}\n\n")
+if (length(pooled_pathway_pngs) == 0) {
+    cat("No dotplots were written for the pooled ranking.\n\n")
+}
+for (pp in pooled_pathway_pngs) {
+    label <- gsub("_", " ", gsub("^pathway_|\\.png$", "", basename(pp)))
+    cat(sprintf("\n### %s\n\n", label))
+    cat(sprintf("![%s](%s)\n\n", label, pp))
+    if (grepl("_camerapr\\.png$", pp)) {
+        figure_legend(sprintf("Top gene sets by cameraPR p-value for %s. Dot size is the number of set members in the ranking; colour is the direction of the set's mean pooled z-score.", label))
+    } else {
+        figure_legend(sprintf("Top gene sets by fgsea adjusted p-value for %s, on the pooled ranking. Dot size is the number of set members in the ranking; colour is -log10(padj).", label))
+    }
+}
+```
+
+```{r pooled-method-note, eval=has_pooled, results='asis'}
+# Describe only the methods whose tables were written: when no gene set loaded
+# or none passed the size filters, the ranking exists but neither method ran.
+has_pooled_fgsea <- length(pooled_fgsea_files) > 0
+has_pooled_cam <- length(pooled_cam_files) > 0
+if (has_pooled_fgsea || has_pooled_cam) {
+    cat("### What each method tests\n\n")
+    cat(paste0(
+        if (has_pooled_fgsea) paste0(
+            "fgsea asks whether a set's members sit towards the top or the bottom of the ranking, using a ",
+            "running-sum enrichment score normalised against random sets of the same size (NES). "),
+        if (has_pooled_cam) camerapr_test_description(pooled_camerapr_use_ranks(pooled_dir)),
+        if (has_pooled_fgsea && has_pooled_cam) paste0(
+            " The two methods test different null hypotheses. NES values and cameraPR statistics or ",
+            "p-values are not comparable, and agreement or disagreement between the two tables is ",
+            "descriptive."),
+        "\n\n"))
+}
+```
+
+---
+
+
 # PPI Network Analysis
 
 ```{r ppi-setup, include=FALSE}
@@ -4175,7 +4355,8 @@ cat("# Methods\n\n")
 methods_blocks <- build_proteomics_methods_text(
     config = cfg, de_method = .mt_method, n_included = .mt_n, run_dir = run_dir,
     pca_cc_file = if (isTRUE(show_pca_section)) file.path(diag_dir, "PCA_robust.png") else NULL,
-    hier_file = file.path(clustering_dir, "Hierarchical", "Hierarchical_DE_heatmap.png"))
+    hier_file = file.path(clustering_dir, "Hierarchical", "Hierarchical_DE_heatmap.png"),
+    pooled_dir = proteomics_pooled_enrichment_dir(prot_dir))
 
 cat("## Data processing\n\n")
 cat(methods_blocks$data_processing, "\n\n")

@@ -877,18 +877,119 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 }
 
 
+#' Restrict gene sets to the ranked genes and the size window
+#'
+#' Applies the rule fgsea applies internally (unique members found in the
+#' ranking, then \code{min_size <= size <= max_size}), so a method given these
+#' sets tests exactly the sets fgsea tests, with the same members. One
+#' exception: a set holding every ranked gene is dropped (with a message),
+#' because a competitive test has no genes outside it to compare against.
+#'
+#' @param gs Named list of character vectors (one gene set per element).
+#' @param ranks Named numeric vector of ranks.
+#' @param min_size,max_size Inclusive set-size window after intersection.
+#' @return Named list of character vectors, each a proper subset of
+#'   \code{names(ranks)}.
+#' @keywords internal
+.filter_sets_to_ranks <- function(gs, ranks, min_size, max_size) {
+    ids <- names(ranks)
+    kept <- lapply(gs, function(p) ids[unique(stats::na.omit(match(p, ids)))])
+    sizes <- lengths(kept)
+    kept <- kept[sizes >= min_size & sizes <= max_size]
+    full <- lengths(kept) == length(ids)
+    if (any(full)) {
+        message("    cameraPR: dropped ", sum(full), " set(s) holding every ranked gene ",
+                "(nothing outside the set to compare): ",
+                paste(names(kept)[full], collapse = ", "))
+    }
+    kept[!full]
+}
+
+#' Competitive gene-set test on a pre-ranked statistic (limma::cameraPR)
+#'
+#' cameraPR compares the mean statistic of a set's members with that of the
+#' other genes, allowing for a fixed inter-gene correlation. limma adds an FDR
+#' column only when more than one set is tested, so the BH adjustment is done
+#' here, always.
+#'
+#' @param ranks Named numeric vector of finite ranking statistics (one per gene).
+#' @param sets Named list of character vectors, already restricted to
+#'   \code{names(ranks)} (see \code{.filter_sets_to_ranks()}).
+#' @param inter_gene_cor Assumed inter-gene correlation, at least 0 and below 1.
+#'   Negative values are rejected: cameraPR's variance inflation factor
+#'   1 + rho * (n - 1) is negative for sets larger than 1 - 1/rho, which
+#'   gives NaN p-values.
+#' @param use_ranks Logical; use the rank-based version of the test.
+#' @return data.frame with \code{pathway}, \code{NGenes}, \code{Direction},
+#'   \code{PValue}, \code{FDR}, \code{inter_gene_cor} and \code{use_ranks},
+#'   ordered by \code{PValue}. Zero rows when there is nothing to test. The two
+#'   settings are written into every row so the report can describe the test
+#'   that produced the table.
+run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) {
+    if (!is.numeric(inter_gene_cor) || length(inter_gene_cor) != 1L ||
+        !is.finite(inter_gene_cor) || inter_gene_cor < 0 || inter_gene_cor >= 1) {
+        stop("run_camerapr(): inter_gene_cor must be one number in [0, 1).",
+             call. = FALSE)
+    }
+    if (!is.logical(use_ranks) || length(use_ranks) != 1L || is.na(use_ranks)) {
+        stop("run_camerapr(): use_ranks must be TRUE or FALSE.", call. = FALSE)
+    }
+    if (any(!is.finite(ranks))) {
+        stop("run_camerapr(): ranks must be finite; drop non-finite values before ",
+             "filtering the sets, so every method sees the same genes.", call. = FALSE)
+    }
+    empty <- data.frame(pathway = character(0), NGenes = integer(0),
+                        Direction = character(0), PValue = numeric(0), FDR = numeric(0),
+                        inter_gene_cor = numeric(0), use_ranks = logical(0),
+                        stringsAsFactors = FALSE)
+    if (length(sets) == 0 || length(ranks) < 3L) return(empty)
+
+    index <- lapply(sets, function(s) unique(match(s, names(ranks))))
+    # cameraPR does not reject an NA index; it returns an NA p-value for the
+    # set, which would pass through to the table unnoticed.
+    if (any(vapply(index, anyNA, logical(1)))) {
+        stop("run_camerapr(): every set member must be in names(ranks); filter the ",
+             "sets with .filter_sets_to_ranks() first.", call. = FALSE)
+    }
+    # cameraPR divides by the number of genes outside the set, so a set of
+    # every ranked gene gives a non-finite statistic written as a normal row.
+    if (any(lengths(index) >= length(ranks))) {
+        stop("run_camerapr(): a set holds every ranked gene, so there is nothing ",
+             "outside it to compare; filter the sets with .filter_sets_to_ranks() first.",
+             call. = FALSE)
+    }
+    tab <- limma::cameraPR(ranks, index, use.ranks = use_ranks,
+                           inter.gene.cor = inter_gene_cor, sort = FALSE)
+    out <- data.frame(
+        pathway        = names(sets),
+        NGenes         = as.integer(tab$NGenes),
+        Direction      = tab$Direction,
+        PValue         = tab$PValue,
+        FDR            = stats::p.adjust(tab$PValue, method = "BH"),
+        inter_gene_cor = inter_gene_cor,
+        use_ranks      = use_ranks,
+        stringsAsFactors = FALSE
+    )
+    out <- out[order(out$PValue), , drop = FALSE]
+    rownames(out) <- NULL
+    out
+}
+
 #' Run pathway analysis on DE results
 #'
 #' @param de_tables Named list of DE result data frames (from run_deseq2_de()$tables).
 #'   Each table has columns: FeatureID, log2FoldChange, pvalue, padj, stat, etc.
 #' @param gene_sets Named list of gene set collections from load_gene_sets()
 #' @param annotation Gene annotation data frame (gene_id, symbol, entrez_id)
-#' @param method "fgsea", "ora", or "both"
-#' @param min_size Minimum gene set size for fGSEA
-#' @param max_size Maximum gene set size for fGSEA
+#' @param method One or more of "fgsea", "ora", "camerapr"; "both" means
+#'   fgsea and ORA.
+#' @param min_size Minimum gene set size (fGSEA, ORA and cameraPR)
+#' @param max_size Maximum gene set size (fGSEA, ORA and cameraPR)
 #' @param seed Integer seed for fgsea's stochastic multilevel step.
 #' @param p_cutoff Adjusted-p cutoff defining a significant feature for ORA.
 #' @param lfc_cutoff Absolute log2 fold-change cutoff for ORA.
+#' @param camerapr_inter_gene_cor Inter-gene correlation for cameraPR.
+#' @param camerapr_use_ranks Logical; rank-based cameraPR.
 #' @return Named list (by contrast) of named lists (by db+method) of result data frames
 #' @export
 run_pathway_analysis <- function(de_tables,
@@ -899,7 +1000,9 @@ run_pathway_analysis <- function(de_tables,
                                   max_size = 500,
                                   seed = 1L,
                                   p_cutoff = 0.05,
-                                  lfc_cutoff = log2(1.5)) {
+                                  lfc_cutoff = log2(1.5),
+                                  camerapr_inter_gene_cor = 0.01,
+                                  camerapr_use_ranks = FALSE) {
 
     if (length(gene_sets) == 0) {
         message("No gene sets available. Skipping pathway analysis.")
@@ -923,7 +1026,7 @@ run_pathway_analysis <- function(de_tables,
 
             tryCatch({
                 # ---- fGSEA ----
-                if (method %in% c("fgsea", "both")) {
+                if (any(method %in% c("fgsea", "both"))) {
 
                     # Prefer the Wald statistic, fall back to sign(lfc)*-log10(p);
                     # see .build_fgsea_ranks() for why the choice is made on
@@ -962,8 +1065,31 @@ run_pathway_analysis <- function(de_tables,
                     }
                 }
 
+                # ---- cameraPR ----
+                # Same ranking and the same filtered sets as fgsea, so the two
+                # tables cover identical sets with identical members (except a
+                # set of every ranked gene, which cameraPR cannot test).
+                if ("camerapr" %in% method) {
+                    ranks <- .build_fgsea_ranks(res)
+                    sets <- .filter_sets_to_ranks(gs, ranks, min_size, max_size)
+                    cam_df <- run_camerapr(ranks, sets,
+                                           inter_gene_cor = camerapr_inter_gene_cor,
+                                           use_ranks = camerapr_use_ranks)
+                    if (nrow(cam_df) == 0) {
+                        message("    cameraPR: no gene set overlap — skipping ", db_name)
+                    } else {
+                        cam_df$contrast <- contrast_name
+                        cam_df$database <- db_name
+                        cam_df$method <- "camerapr"
+                        cam_df <- add_pathway_names(cam_df, db_name, gs)
+                        contrast_results[[paste0(db_name, "_camerapr")]] <- cam_df
+                        message("    cameraPR: ", sum(cam_df$FDR < 0.05, na.rm = TRUE),
+                                " pathways at FDR < 0.05")
+                    }
+                }
+
                 # ---- ORA ----
-                if (method %in% c("ora", "both")) {
+                if (any(method %in% c("ora", "both"))) {
 
                     # Identify significant up/down genes. Cutoffs come from the
                     # caller's de: block rather than being hard-coded, so ORA
@@ -1293,7 +1419,9 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
 
             clean_analysis <- gsub("[^a-zA-Z0-9_-]", "_", analysis_name)
 
-            if ("padj" %in% colnames(res_df)) {
+            if (all(c("PValue", "Direction") %in% colnames(res_df))) {
+                top_pathways <- head(res_df[order(res_df$PValue), ], 20)
+            } else if ("padj" %in% colnames(res_df)) {
                 top_pathways <- head(res_df[order(res_df$padj), ], 20)
             } else if ("pvalue" %in% colnames(res_df)) {
                 top_pathways <- head(res_df[order(res_df$pvalue), ], 20)
@@ -1308,7 +1436,25 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
             # Truncate long names for display (max 60 characters)
             top_pathways$pathway_label <- substr(top_pathways[[label_col]], 1, 60)
 
-            if ("NES" %in% colnames(top_pathways)) {
+            if (all(c("PValue", "Direction") %in% colnames(top_pathways))) {
+                # cameraPR has no enrichment score: plot significance, with the
+                # direction of the set's mean statistic as colour.
+                p <- ggplot2::ggplot(top_pathways,
+                                     ggplot2::aes(x = -log10(PValue),
+                                                  y = reorder(pathway_label, -log10(PValue)))) +
+                    ggplot2::geom_point(ggplot2::aes(size = NGenes, color = Direction)) +
+                    ggplot2::scale_color_manual(values = c(Up = "#b2182b", Down = "#2166ac"),
+                                                name = "Direction") +
+                    ggplot2::labs(
+                        title = paste("Top Pathways:", contrast_name),
+                        subtitle = analysis_name,
+                        x = "-log10(p-value)",
+                        y = "",
+                        size = "Gene Set Size"
+                    ) +
+                    ggplot2::theme_minimal() +
+                    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+            } else if ("NES" %in% colnames(top_pathways)) {
                 p <- ggplot2::ggplot(top_pathways,
                                      ggplot2::aes(x = NES, y = reorder(pathway_label, NES))) +
                     ggplot2::geom_point(ggplot2::aes(size = size, color = -log10(padj))) +
