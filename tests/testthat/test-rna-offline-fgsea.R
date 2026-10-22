@@ -174,6 +174,36 @@ test_that("validate_rna_config checks gsea_engine and the gsea size limits", {
     expect_error(validate_rna_config(bad), "min_size")
 })
 
+test_that("an explicit gsea.max_size is checked against the effective minimum size", {
+    base <- list(id_columns = list(gene_id = "gene_id"),
+                 files = list(counts = "counts.csv", metadata = "metadata.csv"))
+    with_gsea <- function(gsea) { cfg <- base; cfg$enrichment <- list(gsea = gsea); cfg }
+
+    # max_size alone is compared with the default minimum (4).
+    expect_error(validate_rna_config(with_gsea(list(max_size = 4))), "the default")
+    expect_true(validate_rna_config(with_gsea(list(max_size = 5))))
+    # ... and with an explicit min_size when there is one.
+    expect_error(validate_rna_config(with_gsea(list(min_size = 10, max_size = 10))),
+                 "enrichment\\$gsea\\$min_size")
+    expect_true(validate_rna_config(with_gsea(list(min_size = 2, max_size = 3))))
+    # A large min_size alone is valid config: a database with fewer genes is
+    # handled at run time (no eligible sets), not rejected here.
+    expect_true(validate_rna_config(with_gsea(list(min_size = 600))))
+})
+
+test_that("a database smaller than min_size gives no eligible sets, not a failure", {
+    skip_if_not_installed("fgsea")
+    skip_if_not_installed("BiocParallel")
+    # Every set in the fixture has at most 12 genes.
+    out <- suppressWarnings(suppressMessages(run_gsea_all(
+        make_fgsea_ranked(), make_fgsea_tables(), output_dir = NULL, workers = 1,
+        min_size = 600, dotplot = FALSE)))
+    expect_gt(nrow(out$manifest), 0)
+    expect_true(all(out$manifest$status == "empty"))
+    expect_true(all(out$manifest$evaluated))
+    expect_length(out$results, 0L)
+})
+
 test_that("gsea_engine without a gsea block is not read as the gsea block", {
     # gsea_engine is the only gsea* key, so enrichment$gsea would partially
     # match it and hand back the string "fgsea".
