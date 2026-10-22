@@ -62,6 +62,14 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
 
     meta[[factor_col]] <- factor(meta[[factor_col]])
     safe_levels <- make.names(levels(meta[[factor_col]]))
+    if (anyDuplicated(safe_levels)) {
+        stop("Levels of '", factor_col, "' become identical once made syntactic (",
+             paste(levels(meta[[factor_col]])[duplicated(safe_levels) |
+                                                duplicated(safe_levels, fromLast = TRUE)],
+                   collapse = ", "), ").\n",
+             "  Rename them in the metadata and contrasts so they differ in letters, ",
+             "digits, '.' or '_'.", call. = FALSE)
+    }
     levels(meta[[factor_col]]) <- safe_levels
 
     design_formula <- stats::as.formula(paste0("~ 0 + ", factor_col))
@@ -72,6 +80,19 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
 
     block <- resolve_de_block(meta, list(de = de_cfg), sample_col)
     block_model <- if (is.null(block)) NULL else resolve_rna_block_model(de_cfg, method = "limma_voom")
+    if (!is.null(block)) {
+        # A block that is the factor, or a one-to-one relabelling of it, leaves no
+        # within-block comparison. duplicateCorrelation would only warn and set
+        # the correlation to zero, and the report would describe blocking that
+        # did not happen.
+        tab <- table(block, meta[[factor_col]]) > 0
+        if (identical(de_cfg$block_col, factor_col) ||
+            (all(rowSums(tab) == 1) && all(colSums(tab) == 1))) {
+            stop("de$block_col '", de_cfg$block_col, "' is the contrast factor '", factor_col,
+                 "' or a relabelling of it, so no block holds more than one group.\n",
+                 "  Point de$block_col at the pairing unit (donor, line, subject).", call. = FALSE)
+        }
+    }
     block_correlation <- NA_real_
     if (identical(block_model, "fixed")) {
         # Block as a fixed term: one coefficient per extra block level, no
@@ -118,25 +139,32 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
                             cn, contrasts_df$Numerator[i], contrasts_df$Denominator[i], factor_col))
             next
         }
+        if (identical(num, den)) {
+            warning(sprintf("Contrast '%s' compares level '%s' with itself. Skipping.",
+                            cn, contrasts_df$Numerator[i]))
+            next
+        }
         lev <- stats::relevel(meta[[factor_col]], ref = den)
         design_cn <- if (identical(block_model, "fixed")) {
             stats::model.matrix(~ block + lev)
         } else {
             stats::model.matrix(~ lev)
         }
-        colnames(design_cn) <- sub("^lev", "", colnames(design_cn))
+        # Select the contrast by its full "lev" column name: a factor level that
+        # reads like a block column (e.g. "block2") must not match the block.
+        coef_name <- paste0("lev", num)
         fit <- if (identical(block_model, "random")) {
             limma::lmFit(v, design_cn, block = block, correlation = block_correlation)
         } else {
             limma::lmFit(v, design_cn)
         }
         fit <- limma::eBayes(fit)
-        de <- limma::topTable(fit, coef = num, adjust.method = "BH",
+        de <- limma::topTable(fit, coef = coef_name, adjust.method = "BH",
                               sort.by = "none", number = Inf)
         tab <- data.frame(
             baseMean       = de$AveExpr,
             log2FoldChange = de$logFC,
-            lfcSE          = (fit$stdev.unscaled[, num] * sqrt(fit$s2.post))[rownames(de)],
+            lfcSE          = (fit$stdev.unscaled[, coef_name] * sqrt(fit$s2.post))[rownames(de)],
             stat           = de$t,
             pvalue         = de$P.Value,
             padj           = de$adj.P.Val,
@@ -156,6 +184,7 @@ run_voom_rna_de <- function(counts, meta, contrasts_df, de_cfg) {
                                     paste0("~", de_cfg$block_col, " + ", factor_col)
                                 } else paste0("~", factor_col),
             factor_col        = factor_col,
+            sample_col        = sample_col,
             block_col         = if (is.null(block)) NULL else de_cfg$block_col,
             block_model       = block_model,
             n_blocks          = if (is.null(block)) NA_integer_ else nlevels(block),

@@ -210,7 +210,7 @@ test_that("run_voom_rna_de with block_model fixed refuses a confounded block", {
     expect_error(run_voom_rna_de(counts, meta, voom_contrasts(),
                                  list(sample_col = "SampleID", block_col = "Block",
                                       block_model = "fixed")),
-                 "cannot be fitted")
+                 "relabelling")   # caught before the rank check, which would also stop it
 })
 
 test_that("describe_rna_de names a fixed block in limma-voom", {
@@ -230,4 +230,49 @@ test_that("validate_rna_config rejects a random block for DESeq2 and bad values"
     expect_error(validate_rna_config(cfg), "DESeq2 has no random effect")
     cfg$de$block_model <- "mixed"
     expect_error(validate_rna_config(cfg), "block_model")
+})
+
+# ---- review fixes ---------------------------------------------------------------
+
+test_that("voom fixed tests the group, not a block column with a look-alike name", {
+    skip_unless_voom()
+    meta <- make_voom_meta()
+    # Group level "block2" reads like the model.matrix name of block level "2".
+    meta$Group <- ifelse(meta$Group == "trt", "block2", "ctl")
+    meta$Block <- sub("^B", "", meta$Block)
+    counts <- make_voom_counts(make_voom_meta())
+    cdf <- data.frame(Contrast_name = "b2_vs_ctl", Factor = "Group",
+                      Numerator = "block2", Denominator = "ctl")
+    res <- suppressMessages(run_voom_rna_de(counts, meta, cdf,
+                                            list(sample_col = "SampleID", block_col = "Block",
+                                                 block_model = "fixed")))
+    # The first 40 genes carry the treatment effect; the block coefficient would not.
+    expect_gt(stats::median(res$tables$b2_vs_ctl$log2FoldChange[1:40]), 0.4)
+})
+
+test_that("voom random refuses a block that relabels the contrast factor", {
+    skip_unless_voom()
+    meta <- make_voom_meta(); counts <- make_voom_counts(meta)
+    expect_error(run_voom_rna_de(counts, meta, voom_contrasts(),
+                                 list(sample_col = "SampleID", block_col = "Group")),
+                 "relabelling")
+    meta$Pair <- ifelse(meta$Group == "ctl", "P1", "P2")
+    expect_error(run_voom_rna_de(counts, meta, voom_contrasts(),
+                                 list(sample_col = "SampleID", block_col = "Pair")),
+                 "relabelling")
+})
+
+test_that("voom skips a self-contrast and refuses levels that collide after make.names", {
+    skip_unless_voom()
+    meta <- make_voom_meta(); counts <- make_voom_counts(meta)
+    cdf <- rbind(voom_contrasts(),
+                 data.frame(Contrast_name = "same", Factor = "Group", Numerator = "ctl", Denominator = "ctl"))
+    res <- suppressMessages(expect_warning(
+        run_voom_rna_de(counts, meta, cdf, list(sample_col = "SampleID")), "with itself"))
+    expect_named(res$tables, "trt_vs_ctl")
+    bad <- meta; bad$Group <- ifelse(bad$Group == "ctl", "A B", "A.B")
+    expect_error(run_voom_rna_de(counts, bad, data.frame(Contrast_name = "x", Factor = "Group",
+                                                         Numerator = "A B", Denominator = "A.B"),
+                                 list(sample_col = "SampleID")),
+                 "become identical")
 })
