@@ -29,9 +29,27 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
                    attr(pre$de_input, "source_type") %||%
                    "matrix"
 
+    # de$method chooses among the count-based fits only; preprocessed input is
+    # always tested with limma (validate_rna_config() rejects limma_voom there).
+    de_method <- tolower(de_cfg$method %||% "deseq2")
+
     if (source_type == "preprocessed") {
         run_limma_rna_de(
             expr = pre$expr_work,
+            meta = pre$meta,
+            contrasts_df = contrasts_df,
+            de_cfg = de_cfg
+        )
+    } else if (identical(de_method, "edger_ql")) {
+        run_edger_rna_de(
+            counts = pre$de_input,
+            meta = pre$meta,
+            contrasts_df = contrasts_df,
+            de_cfg = de_cfg
+        )
+    } else if (identical(de_method, "limma_voom")) {
+        run_voom_rna_de(
+            counts = pre$de_input,
             meta = pre$meta,
             contrasts_df = contrasts_df,
             de_cfg = de_cfg

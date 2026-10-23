@@ -64,6 +64,47 @@ validate_rna_config <- function(cfg) {
         d <- cfg$de
         assert_scalar_num(d$padj_cutoff, "de$padj_cutoff", allow_null = TRUE, min_val = 0, max_val = 1)
         assert_scalar_num(d$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
+        assert_scalar_chr(d$block_col, "de$block_col", allow_null = TRUE)
+        assert_scalar_bool(d$block_pca, "de$block_pca", allow_null = TRUE)
+        if (!is.null(d$block_model)) {
+            assert_one_of(tolower(d$block_model), "de$block_model", c("fixed", "random"))
+            if (identical(resolve_rna_block_model(d), "random") &&
+                !identical(tolower(d$method %||% "deseq2"), "limma_voom")) {
+                stop("de$block_model is 'random', but de$method is '", d$method %||% "deseq2",
+                     "'. Only limma_voom fits a random block; DESeq2 and edgeR have no random effect.\n",
+                     "  Use de$method 'limma_voom' for a random block, or de$block_model 'fixed'.")
+            }
+        }
+        # Only "limma_voom" and "edger_ql" change the count-path fit; any other
+        # value runs DESeq2, as it always has, so older configs keep working.
+        de_method <- tolower(d$method %||% "deseq2")
+        if (de_method %in% c("limma_voom", "edger_ql") && (is_preprocessed || uses_tximport)) {
+            stop("de$method is '", de_method, "', which needs a raw count matrix.\n",
+                 "  This config uses ",
+                 if (is_preprocessed) "preprocessed input (input$format: preprocessed)" else
+                     "tximport input (files$txi)",
+                 ". Use de$method 'deseq2', or supply a gene-level count matrix.")
+        }
+        if (!de_method %in% c("deseq2", "limma_voom", "edger_ql") && !is_preprocessed) {
+            warning("de$method '", d$method, "' is not an RNA-seq count method; ",
+                    "DESeq2 will be fitted. Use 'deseq2', 'limma_voom' or 'edger_ql'.", call. = FALSE)
+        }
+        # Blocking is wired into the count paths only (DESeq2 and edgeR fixed
+        # term, limma-voom fixed or duplicateCorrelation); the preprocessed (limma) and
+        # pre-computed paths would silently fit or load an unpaired result,
+        # hiding a design error.
+        if (!is.null(d$block_col) && nzchar(d$block_col)) {
+            has_precomputed <- length(unlist(cfg$files$de_table)) > 0 &&
+                all(nzchar(unlist(cfg$files$de_table)))
+            if (is_preprocessed || has_precomputed) {
+                stop("de$block_col is set, but blocking applies only when DESeq2, ",
+                     "limma-voom or edgeR is fitted on counts.\n",
+                     "  This config uses ",
+                     if (has_precomputed) "pre-computed DE tables (files$de_table)" else
+                         "preprocessed input (input$format: preprocessed)",
+                     ", so the pairing would be ignored. Remove de$block_col, or supply raw counts.")
+            }
+        }
     }
 
     # 6. Annotation (optional)

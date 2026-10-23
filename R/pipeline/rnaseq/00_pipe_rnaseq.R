@@ -160,7 +160,8 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           run_dir        = run_dir,
           outputs_legacy = rna_outputs_legacy,
           pathway_res    = rna_pathway_res,
-          execution_info = execution_info_files
+          execution_info = execution_info_files,
+          de_res         = rna_de_res
         )
         # deliberately not format = "file": the module returns character(0) if
         # it cannot assemble a sheet, and a convenience artifact must not be
@@ -237,7 +238,8 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
             run_dir     = rna_out_dir,
             config      = config,
             config_file = config_file,
-            pre_info    = rna_pre$info
+            pre_info    = rna_pre$info,
+            de_info     = rna_de_res$info
           )
         },
         format = "file"
