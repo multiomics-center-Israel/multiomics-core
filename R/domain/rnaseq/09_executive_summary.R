@@ -152,6 +152,35 @@ get_de_summary_stats <- function(de_res, rna_cfg = NULL) {
     stats
 }
 
+#' Keep the rows the pipeline called DE in at least one contrast
+#'
+#' The DE summary tables hold every tested gene; their \code{pass_any_contrast}
+#' column is the pipeline's own call (adjusted p-value and fold-change cutoffs
+#' together). Report views that promise "DE genes" read that column instead of
+#' re-ranking on padj alone, which would let genes below the fold-change cutoff
+#' in.
+#'
+#' @param df A DE summary data frame (e.g. \code{deseq2_summary_p0.05.tsv} or
+#'   \code{final_results.tsv} as read back), or \code{NULL}.
+#' @return The rows of \code{df} whose \code{pass_any_contrast} is TRUE (or 1),
+#'   in their original order; zero rows when none pass; \code{NULL} when
+#'   \code{df} is \code{NULL} or has no \code{pass_any_contrast} column, so a
+#'   caller never mistakes the unfiltered table for the DE set.
+#' @examples
+#' df <- data.frame(Gene = c("g1", "g2", "g3"),
+#'                  pass_any_contrast = c(TRUE, FALSE, NA))
+#' select_de_called_rows(df)  # g1 only
+#' @export
+select_de_called_rows <- function(df) {
+    if (is.null(df) || !"pass_any_contrast" %in% names(df)) return(NULL)
+    # as.logical() accepts TRUE/FALSE, 0/1 and their text forms; NA counts as not called
+    called <- as.logical(df$pass_any_contrast)
+    if (is.character(df$pass_any_contrast)) {
+        called[df$pass_any_contrast %in% "1"] <- TRUE
+    }
+    df[called %in% TRUE, , drop = FALSE]
+}
+
 #' Get top DE genes by significance and fold change
 #' @noRd
 get_top_de_genes <- function(de_res, n = 10) {
@@ -167,7 +196,7 @@ get_top_de_genes <- function(de_res, n = 10) {
     id_col <- id_col[1]
 
     if (length(pass_col) > 0) {
-        sig_df <- df[df[[pass_col[1]]] == TRUE, , drop = FALSE]
+        sig_df <- select_de_called_rows(df)
     } else {
         padj_cols <- grep("^padj\\.", colnames(df), value = TRUE)
         if (length(padj_cols) == 0) return(character())
