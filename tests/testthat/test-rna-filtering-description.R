@@ -293,6 +293,7 @@ render_filtering_section <- function(dir, params = list()) {
         sprintf("filter_plot <- %s", deparse(plot_path)),
         "figure_legend <- function(text) cat(sprintf(\"<p class='figure-legend'>%s</p>\\n\", text))",
         grep("^rna_filt <- ", tmpl, value = TRUE),
+        grep("^rna_de <- ", tmpl, value = TRUE),
         "```", "",
         extract_rna_chunk(tmpl, "filtering-strategy"), "",
         extract_rna_chunk(tmpl, "filter-plot"), "",
@@ -370,4 +371,17 @@ test_that("render_rnaseq_report() forwards pre$info to every render as params$rn
 test_that("the rna_report target passes rna_pre$info to the renderer", {
     src <- paste(deparse(body(pipe_rnaseq)), collapse = " ")
     expect_match(src, "pre_info = rna_pre$info", fixed = TRUE)
+})
+
+test_that("the DESeq2 independent-filtering note shows only when DESeq2 ran", {
+    skip_unless_rna_renderable()
+    note <- "independent filtering does not change which genes were kept"
+    deseq <- render_filtering_section(withr::local_tempdir(),
+        list(rna_info = info_for("adaptive", threshold = 0.734),
+             de_info = list(method = "deseq2", design = "~Group")))
+    voom <- render_filtering_section(withr::local_tempdir(),
+        list(rna_info = info_for("adaptive", threshold = 0.734),
+             de_info = list(method = "limma_voom", design = "~Group")))
+    expect_match(deseq, note, fixed = TRUE)
+    expect_no_match(voom, note, fixed = TRUE)
 })

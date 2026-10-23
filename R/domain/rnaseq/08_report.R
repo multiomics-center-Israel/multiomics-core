@@ -15,9 +15,13 @@
 #'   passed to the template as \code{params$rna_info} so the report describes
 #'   the gene filter that ran rather than the one the config asked for. NULL
 #'   renders the filtering text as not recorded.
+#' @param de_info The \code{info} list of \code{mod_rnaseq_de()}'s result,
+#'   passed as \code{params$de_info} so the report names the DE model that was
+#'   fitted (see \code{describe_rna_de()}). NULL renders it as not recorded.
 #' @return Path to the rendered HTML file (character, format = "file")
 #' @export
-render_rnaseq_report <- function(run_dir, config, config_file = NULL, pre_info = NULL) {
+render_rnaseq_report <- function(run_dir, config, config_file = NULL, pre_info = NULL,
+                                 de_info = NULL) {
 
     # Locate the canonical Rmd template shipped with multiomics-core.
     template_path <- system.file("report_template.Rmd",
@@ -80,7 +84,7 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL, pre_info =
             output_file = out_html,
             output_dir  = parent_dir,
             quiet       = TRUE,
-            params      = list(rna_info = pre_info),
+            params      = list(rna_info = pre_info, de_info = de_info),
             envir       = new.env(parent = globalenv())
         )
     }, error = function(e) {
@@ -94,7 +98,7 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL, pre_info =
         output_file = out_html,
         output_dir  = run_dir,
         quiet       = TRUE,
-        params      = list(rna_info = pre_info),
+        params      = list(rna_info = pre_info, de_info = de_info),
         envir       = new.env(parent = globalenv())
     )
 
