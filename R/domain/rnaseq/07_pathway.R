@@ -108,3 +108,97 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
   volcano_df$pathways <- pathway_memberships
   volcano_df
 }
+# ==============================================================================
+# PATHWAY COLLECTIONS: WHAT WAS REQUESTED VS. WHAT LOADED
+# ==============================================================================
+
+#' Tabulate which requested pathway collections loaded
+#'
+#' load_gene_sets() only warns when a collection cannot be loaded (a KEGG
+#' download error, a missing Reactome package), so the config's
+#' \code{pathway.databases} says what was asked for, not what ran. This table
+#' records the outcome so the report can say it.
+#'
+#' @param databases Character vector from \code{pathway.databases} ("GO",
+#'   "GO_BP", "KEGG", "Reactome", "all", ...).
+#' @param gene_sets Named list returned by load_gene_sets(); its names are the
+#'   loaded collections (e.g. "GO_BP", "KEGG", or a custom GMT's name).
+#' @return data.frame with columns \code{collection} and \code{status}
+#'   ("loaded" or "not loaded"): one row per requested database, then one per
+#'   loaded collection no request covers (custom GMTs).
+#' @examples
+#' summarise_pathway_collections(c("GO", "KEGG"),
+#'                               list(GO_BP = list(), GO_MF = list()))
+#' @export
+summarise_pathway_collections <- function(databases, gene_sets) {
+    requested <- unique(as.character(databases))
+    if ("all" %in% requested) {
+        requested <- unique(c(setdiff(requested, "all"), "GO", "KEGG", "Reactome"))
+    }
+    loaded <- names(gene_sets) %||% character()
+    # "GO" is loaded as GO_BP/GO_CC/GO_MF, so a request also counts as met by
+    # any collection named <request>_<something>.
+    covers <- function(req) loaded == req | startsWith(loaded, paste0(req, "_"))
+    met <- vapply(requested, function(req) any(covers(req)), logical(1))
+    covered <- Reduce(`|`, lapply(requested, covers), logical(length(loaded)))
+    data.frame(
+        collection = c(requested, loaded[!covered]),
+        status     = c(ifelse(met, "loaded", "not loaded"), rep("loaded", sum(!covered))),
+        stringsAsFactors = FALSE
+    )
+}
+
+#' Describe the pathway analysis for report text
+#'
+#' The one reader of pathway method and collections for the RNA report, so the
+#' parameter summary, the enrichment section and the methods text agree. The
+#' collections come from \code{Enrichment/pathway_collections.tsv}, written by
+#' mod_rnaseq_pathway(); without that file (an older run, or the offline route)
+#' they fall back to the configured \code{pathway.databases} and
+#' \code{recorded} is FALSE.
+#'
+#' @param enrich_dir The run's Enrichment directory.
+#' @param pathway_cfg The \code{modes$rna$pathway} config block (may be NULL).
+#' @return list(method, collections, missing, missing_note, recorded):
+#'   \code{method} a label such as "fGSEA and ORA"; \code{collections} the
+#'   collections that loaded, joined with "and"; \code{missing} a character
+#'   vector of requested collections that did not load; \code{missing_note} a
+#'   sentence (with a leading space) saying so, or "" when none is missing;
+#'   \code{recorded} whether the outcome file was found.
+#' @examples
+#' describe_rna_pathway_collections(tempdir(), list(method = "both",
+#'                                                  databases = c("GO", "KEGG")))
+#' @export
+describe_rna_pathway_collections <- function(enrich_dir, pathway_cfg) {
+    method <- tolower(pathway_cfg$method %||% "fgsea")
+    method_label <- switch(method,
+                           fgsea = "fGSEA",
+                           ora   = "ORA",
+                           both  = "fGSEA and ORA",
+                           pathway_cfg$method)
+    # Same default as mod_rnaseq_pathway()
+    configured <- pathway_cfg$databases %||% c("GO", "KEGG")
+
+    f <- file.path(enrich_dir, "pathway_collections.tsv")
+    if (file.exists(f)) {
+        tab <- utils::read.delim(f, stringsAsFactors = FALSE)
+        loaded  <- tab$collection[tab$status == "loaded"]
+        missing <- tab$collection[tab$status != "loaded"]
+        recorded <- TRUE
+    } else {
+        loaded <- configured
+        missing <- character()
+        recorded <- FALSE
+    }
+    missing_note <- if (length(missing) > 0) {
+        sprintf(" %s %s requested but could not be loaded in this run, so no %s results are reported.",
+                paste(missing, collapse = " and "),
+                if (length(missing) > 1) "were" else "was",
+                paste(missing, collapse = "/"))
+    } else ""
+    list(method = method_label,
+         collections = if (length(loaded) > 0) paste(loaded, collapse = " and ") else "no",
+         missing = missing,
+         missing_note = missing_note,
+         recorded = recorded)
+}
