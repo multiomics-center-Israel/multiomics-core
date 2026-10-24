@@ -91,6 +91,30 @@ pipe_multiomics <- function() {
             }
         ),
 
+        # GO hierarchy of the gene-based layers' GO fgsea results. Reads the
+        # collected results above (proteomics and RNA); computes no enrichment.
+        # NULL unless modes.multiomics.go_hierarchy.enabled.
+        tar_target(
+            multiomics_go_hierarchy_dags,
+            mod_multiomics_go_hierarchy(
+                enrichment_results = multiomics_enrichment_results,
+                config = config
+            )
+        ),
+
+        # Writes the figures, node/edge tables and index under
+        # multiomics/go_hierarchy/, and <mode>/Datasets/go_dag_edges.tsv. Clears
+        # the previous run's files first, also when disabled. Not format =
+        # "file": a disabled run writes nothing and returns character(0).
+        tar_target(
+            multiomics_go_hierarchy,
+            write_go_hierarchy_outputs(
+                built   = multiomics_go_hierarchy_dags,
+                out_dir = file.path(multiomics_out_dir, "go_hierarchy"),
+                run_dir = run_dir
+            )
+        ),
+
         # Integration: DIABLO, SNF, etc.
         tar_target(
             multiomics_integration,
@@ -363,6 +387,7 @@ pipe_multiomics <- function() {
                 force(multiomics_commentary)
                 force(multiomics_loadings_enrichment)
                 force(multiomics_enzyme_metabolite)
+                force(multiomics_go_hierarchy)
 
                 if (is.null(multiomics_harmonization)) {
                     message("Skipping multi-omics report: no harmonization results")
