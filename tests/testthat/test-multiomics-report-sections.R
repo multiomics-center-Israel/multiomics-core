@@ -617,6 +617,13 @@ test_that("the DIABLO variable loadings plot stays in the report", {
     src <- paste(template_lines(), collapse = "\n")
     expect_true(grepl("diablo_variable_plot.png", src, fixed = TRUE))
     expect_true(grepl("```{r diablo-variable-legend", src, fixed = TRUE))
+    # ... unless a project turns it off.
+    expect_true(grepl('show_diablo_variable_plot <- show_section("diablo_variable_plot")',
+                      src, fixed = TRUE))
+    expect_true(grepl("```{r diablo-variable-plot, eval=has_diablo && show_diablo_variable_plot,",
+                      src, fixed = TRUE))
+    expect_true(grepl("```{r diablo-variable-legend, eval=has_diablo && show_diablo_variable_plot,",
+                      src, fixed = TRUE))
 })
 
 # ---- figures dropped on request --------------------------------------------
