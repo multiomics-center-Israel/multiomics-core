@@ -252,3 +252,28 @@ test_that("qc_post removes a stale block PCA even when it returns early", {
     expect_length(res$files, 0)
     expect_false(any(file.exists(stale)))
 })
+
+test_that("qc_post draws the block PCA when DE took the sample IDs from rownames", {
+    skip_if_not_installed("DESeq2")
+    skip_if_not_installed("limma")
+    # No SampleID column: the DE runner falls back to rownames and records
+    # "SampleID" as the column it aligned on, a column pre$meta never has.
+    meta <- make_rna_block_meta()
+    counts <- make_rna_block_counts(meta)
+    rownames(meta) <- meta$SampleID
+    meta$SampleID <- NULL
+    de_cfg <- list(block_col = "Block", p_cutoff = 0.05, linear_fc_cutoff = 1.5)
+    de_res <- suppressMessages(run_deseq2_de(counts, meta, rna_block_contrasts(), de_cfg))
+    expect_identical(de_res$info$sample_col, "SampleID")
+    expect_false("SampleID" %in% colnames(meta))
+
+    out <- withr::local_tempdir()
+    expr <- log2(counts + 1)
+    pre <- list(expr_raw = counts, expr_filt = counts, expr_work = expr, meta = meta,
+                row_data = data.frame(id = rownames(counts)))
+    res <- suppressWarnings(mod_rnaseq_qc_post(pre, de_res,
+                                               list(modes = list(rna = list(de = de_cfg))), out))
+    dirs <- create_legacy_output_dirs(out, create = FALSE)
+    expect_true(file.exists(file.path(dirs$diagnostic_plots, "PCA_block_corrected.png")))
+    expect_true(file.exists(file.path(dirs$diagnostic_plots, "PCA_block_corrected_coords.tsv")))
+})

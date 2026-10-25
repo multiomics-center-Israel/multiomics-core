@@ -994,6 +994,11 @@ if (file.exists(pca3d_file)) {
 if (!is.null(rna_de$block_col) && file.exists(.bp_png)) {
     .bc <- rna_de$block_col
     cat(sprintf("### PCA after removing %s\n\n", .bc))
+    cat(sprintf(paste0(
+        "The differential-expression model compared the groups within each %s (%s). ",
+        "The two panels show the same samples before and after each %s's offset is removed, ",
+        "so the comparison the model makes can be seen.\n\n"),
+        .bc, rna_de$short, .bc))
     cat(sprintf('<img src="%s" style="width:95%%; max-width: 1300px; height: auto;" alt="PCA before and after removing %s" />\n\n',
                 knitr::image_uri(.bp_png), .bc))
     .pairs_only <- FALSE
