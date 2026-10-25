@@ -2765,7 +2765,16 @@ n_failed_units <- sum(!evaluated)
 n_sig_units <- if (offline_ran && "n_significant" %in% names(enr_manifest)) {
     sum(enr_manifest$n_significant[evaluated] > 0, na.rm = TRUE)
 } else NA_integer_
-has_pathway_plots <- dir.exists(enrich_plot_dir) && length(list.files(enrich_plot_dir, pattern = "\\.png$")) > 0
+# Offline GSEA stores one dotplot per database/ranking/contrast.
+gsea_plot_dir <- file.path(enrich_dir, "GSEA")
+offline_dotplots <- if (dir.exists(gsea_plot_dir)) {
+    list.files(gsea_plot_dir, pattern = "^dotplot\\.png$",
+               full.names = TRUE, recursive = TRUE)
+} else character(0)
+legacy_dotplots <- if (dir.exists(enrich_plot_dir)) {
+    list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
+} else character(0)
+has_pathway_plots <- length(offline_dotplots) + length(legacy_dotplots) > 0
 # The cutoffs enrichment ran with: a GSEA set is significant at padj <= gsea_cut;
 # offline ORA was run with ora_cut as clusterProfiler's pvalueCutoff.
 enr_settings <- resolve_rna_gsea_settings(cfg)
@@ -2934,25 +2943,38 @@ if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
             cat("Pathways enriched in **down-regulated** genes (negative NES).\n\n")
             sig_down <- sig_show[sig_show$Direction == "Down-regulated", ]
             sig_down <- sig_down[order(sig_down$padj), ]
-            print(knitr::kable(sig_down, caption = paste("Down-regulated pathways —", tbl$label),
-                               row.names = FALSE, digits = 4))
-            cat("\n\n")
-        }
-    }
-} else if (offline_ran) {
-    cat("No GSEA unit was evaluated in this run. Every evaluated unit is listed in ",
-        "`Enrichment/enrichment_manifest.csv`.\n")
-} else {
-    cat("No fGSEA result files found.\n")
-}
+            print<!-- Dotplot section is emitted only when at least one plot exists. -->
+```{r pathway-dotplots-heading, eval=has_pathway_plots, results='asis'}
+cat("\\n## Pathway Dotplots {.tabset}\\n\\n")
 ```
 
-## Pathway Dotplots {.tabset}
-
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
-plot_pngs <- list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
-if (length(plot_pngs) > 0) {
-    for (pp in plot_pngs) {
+if (length(offline_dotplots) > 0) {
+    # Show one tab per contrast/database, with all available rankings inside.
+    rel <- substring(offline_dotplots, nchar(gsea_plot_dir) + 2L)
+    parts <- strsplit(rel, "/", fixed = TRUE)
+    valid <- vapply(parts, function(p) {
+        length(p) == 4L && grepl("^ranking_by_", p[2]) &&
+            identical(p[4], "dotplot.png")
+    }, logical(1))
+    if (any(valid)) {
+        files <- offline_dotplots[valid]
+        p <- parts[valid]
+        db <- vapply(p, `[[`, character(1), 1L)
+        ranking <- sub("^ranking_by_", "", vapply(p, `[[`, character(1), 2L))
+        contrast <- vapply(p, `[[`, character(1), 3L)
+        group <- paste(contrast, db, sep = " — ")
+        for (key in unique(group)) {
+            cat(sprintf("\n### %s\n\n", key))
+            for (i in which(group == key)) {
+                label <- paste(contrast[i], db[i], ranking[i], sep = " — ")
+                cat(sprintf("\n**Ranking: %s**\n\n", ranking[i]))
+                cat(sprintf("![%s](%s)\n\n", label, files[i]))
+            }
+        }
+    }
+} else if (length(legacy_dotplots) > 0) {
+    for (pp in legacy_dotplots) {
         label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
         label <- gsub("_", " ", label_raw)
         cat(sprintf("\n### %s\n\n", label))
