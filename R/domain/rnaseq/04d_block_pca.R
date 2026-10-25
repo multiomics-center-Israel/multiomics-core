@@ -62,8 +62,8 @@ build_rna_block_pca <- function(expr, meta, sample_col, block_col, group_col, n_
 
 #' Plot the before/after-block PCA built by build_rna_block_pca()
 #'
-#' Grey lines join the samples of each block level, so the reader can follow a
-#' pair from one panel to the other.
+#' Colour marks the group and, for up to six block levels, shape marks the
+#' block, so a reader can match a block's samples across the two panels.
 #'
 #' @param pca Result of [build_rna_block_pca()].
 #' @param block_col Name of the blocking factor, for the legend.
@@ -77,11 +77,9 @@ plot_rna_block_pca <- function(pca, block_col, group_col) {
     use_shape <- nlevels(df$block) <= 6
 
     p <- ggplot2::ggplot(df, ggplot2::aes(PC1, PC2)) +
-        ggplot2::geom_line(ggplot2::aes(group = block), colour = "grey60", linewidth = 0.5) +
         ggplot2::facet_wrap(~ panel, scales = "free", labeller = ggplot2::as_labeller(labels)) +
         ggplot2::labs(colour = group_col, shape = block_col,
-                      subtitle = sprintf("Same %d most variable genes in both panels; grey lines join samples of the same %s.",
-                                         pca$n_top, block_col)) +
+                      subtitle = sprintf("Same %d most variable genes in both panels.", pca$n_top)) +
         ggplot2::theme_bw(base_size = 14)
     if (use_shape) {
         p + ggplot2::geom_point(ggplot2::aes(colour = group, shape = block), size = 4)
