@@ -142,6 +142,19 @@ test_that("the pipeline summary counts pathways with the module's cutoffs, not t
     expect_equal(s$pathway$total, 2 + 2)   # GSEA <= 0.03: 2; ORA < 0.04: 2
     expect_equal(c(s$pathway$up, s$pathway$down), c(1, 1))
     expect_equal(s$methods$pathway_p_cutoff, 0.03)
+    expect_identical(s$methods$pathway_p_op, "≤")
+
+    # An online ORA-only run is described by the ORA rule its tables are counted at.
+    ora_cfg <- list(de = list(p_cutoff = 0.01), pathway = list(method = "ora"),
+                    enrichment = list(pvalue_cutoff = 0.04, gsea_pvalue_cutoff = 0.03))
+    s <- stats(ora_cfg)
+    expect_equal(s$methods$pathway_p_cutoff, 0.04)
+    expect_identical(s$methods$pathway_p_op, "<")
+    # The offline route runs GSEA too, so it keeps the GSEA rule.
+    ora_cfg$enrichment$annotation_dir <- "annotation"
+    s <- stats(ora_cfg)
+    expect_equal(s$methods$pathway_p_cutoff, 0.03)
+    expect_identical(s$methods$pathway_p_op, "≤")
 })
 
 test_that("resolve_rna_gsea_settings accepts any case and rejects unknown engines", {
