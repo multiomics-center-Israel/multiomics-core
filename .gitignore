@@ -116,3 +116,4 @@ __pycache__/
 
 # testthat failure artifacts
 tests/testthat/_problems/
+tests/testthat/testthat-problems.rds

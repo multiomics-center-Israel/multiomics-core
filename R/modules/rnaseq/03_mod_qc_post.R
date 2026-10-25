@@ -1,6 +1,7 @@
 #' RNA-seq QC post-DE module
 #'
-#' Writes QC artifact plots that depend on DE results (Volcano, MA, Heatmap).
+#' Writes QC artifact plots that depend on DE results (Volcano, MA, Heatmap,
+#' and the before/after-block PCA when the DE fit paired on \code{de$block_col}).
 #' Mirrors Proteomics logic using core plotting functions.
 #'
 #' @param pre        preprocessed RNA object
@@ -24,6 +25,13 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
 
     files <- character(0)
     plots <- list()
+
+    # Remove a block PCA left by an earlier run before any early return, so the
+    # report, which shows the file when present, cannot show one this run did
+    # not make (step 5 writes it again when it applies).
+    f_bp <- file.path(dirs$diagnostic_plots, "PCA_block_corrected.png")
+    f_bp_coords <- file.path(dirs$diagnostic_plots, "PCA_block_corrected_coords.tsv")
+    unlink(c(f_bp, f_bp_coords))
 
     # 1. Ensure summary_df exists
     sumdf <- de_res$summary_df
@@ -232,6 +240,33 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
                 }
             }
         } # Close valid_count > 0 check
+    }
+
+    # 5. PCA before/after removing the block, keyed on the block the fit used
+    # (de_res$info), not on the config key; de$block_pca: false turns it off.
+    block_col <- de_res$info$block_col
+    if (!is.null(block_col) && nzchar(block_col) && !isFALSE(cfg$de$block_pca)) {
+        tryCatch({
+            # The sample column the DE step aligned on, so both read it alike.
+            # The DE runners add that column from rownames(meta) when the
+            # metadata lacks it, and record only its name; do the same here.
+            bp_sample_col <- de_res$info$sample_col %||% cfg$id_columns$sample_col
+            bp_meta <- meta
+            if (!bp_sample_col %in% colnames(bp_meta)) {
+                bp_meta[[bp_sample_col]] <- rownames(bp_meta)
+            }
+            bp <- build_rna_block_pca(
+                expr = mat, meta = bp_meta, sample_col = bp_sample_col,
+                block_col = block_col, group_col = de_res$info$factor_col
+            )
+            ggplot2::ggsave(f_bp, plot_rna_block_pca(bp, block_col, de_res$info$factor_col),
+                            width = 13, height = 6.5, dpi = 150)
+            utils::write.table(bp$coords, f_bp_coords,
+                               sep = "\t", quote = FALSE, row.names = FALSE)
+            files <- c(files, f_bp)
+        }, error = function(e) {
+            warning(sprintf("[QC_post] PCA_block_corrected failed: %s", conditionMessage(e)))
+        })
     }
 
     list(files = unique(files), plots = plots)

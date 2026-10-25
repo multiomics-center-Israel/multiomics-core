@@ -118,7 +118,7 @@ build_extra_data <- function(de_res, qc_pre_obj = NULL, config) {
 
     # --- Normalization and DE methods ---
     extra$norm_method <- rna_cfg$normalization$method %||% "TMM"
-    extra$de_method <- paste0("DESeq2 (", rna_cfg$de$deseq_mode %||% "Wald", ")")
+    extra$de_method <- describe_rna_de(de_res$info)$short
     extra$de_cutoffs <- list(
         p_cutoff  = rna_cfg$de$p_cutoff %||% 0.05,
         fc_cutoff = rna_cfg$de$linear_fc_cutoff %||% 1.5
