@@ -2770,6 +2770,11 @@ offline_dotplots <- if (dir.exists(gsea_plot_dir)) {
     list.files(gsea_plot_dir, pattern = "^dotplot\\.png$",
                full.names = TRUE, recursive = TRUE)
 } else character(0)
+# Keep only unit dotplots (<db>/ranking_by_<ranking>/<contrast>/dotplot.png),
+# so a stray file neither opens an empty section nor hides the legacy plots.
+offline_dotplots <- offline_dotplots[grepl(
+    "^[^/]+/ranking_by_[^/]+/[^/]+/dotplot\\.png$",
+    substring(offline_dotplots, nchar(gsea_plot_dir) + 2L))]
 legacy_dotplots <- if (dir.exists(enrich_plot_dir)) {
     list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
 } else character(0)
@@ -2963,26 +2968,19 @@ cat("\n## Pathway Dotplots {.tabset}\n\n")
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
 if (length(offline_dotplots) > 0) {
     # Show one tab per contrast/database, with all available rankings inside.
+    # Paths were checked against the unit layout in the setup chunk.
     rel <- substring(offline_dotplots, nchar(gsea_plot_dir) + 2L)
-    parts <- strsplit(rel, "/", fixed = TRUE)
-    valid <- vapply(parts, function(p) {
-        length(p) == 4L && grepl("^ranking_by_", p[2]) &&
-            identical(p[4], "dotplot.png")
-    }, logical(1))
-    if (any(valid)) {
-        files <- offline_dotplots[valid]
-        p <- parts[valid]
-        db <- vapply(p, `[[`, character(1), 1L)
-        ranking <- sub("^ranking_by_", "", vapply(p, `[[`, character(1), 2L))
-        contrast <- vapply(p, `[[`, character(1), 3L)
-        group <- paste(contrast, db, sep = " — ")
-        for (key in unique(group)) {
-            cat(sprintf("\n### %s\n\n", key))
-            for (i in which(group == key)) {
-                label <- paste(contrast[i], db[i], ranking[i], sep = " — ")
-                cat(sprintf("\n**Ranking: %s**\n\n", ranking[i]))
-                cat(sprintf("![%s](%s)\n\n", label, files[i]))
-            }
+    p <- strsplit(rel, "/", fixed = TRUE)
+    db <- vapply(p, `[[`, character(1), 1L)
+    ranking <- sub("^ranking_by_", "", vapply(p, `[[`, character(1), 2L))
+    contrast <- vapply(p, `[[`, character(1), 3L)
+    group <- paste(contrast, db, sep = " — ")
+    for (key in unique(group)) {
+        cat(sprintf("\n### %s\n\n", key))
+        for (i in which(group == key)) {
+            label <- paste(contrast[i], db[i], ranking[i], sep = " — ")
+            cat(sprintf("\n**Ranking: %s**\n\n", ranking[i]))
+            cat(sprintf("![%s](%s)\n\n", label, offline_dotplots[i]))
         }
     }
 } else if (length(legacy_dotplots) > 0) {

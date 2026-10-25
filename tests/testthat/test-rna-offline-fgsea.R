@@ -625,6 +625,47 @@ test_that("the RNA report tells not run, completed without significance, and fai
     expect_false(grepl("was not run", s$text, fixed = TRUE))
 })
 
+test_that("the RNA report finds offline GSEA dotplots and opens no empty section", {
+    d <- withr::local_tempdir()
+    touch <- function(...) {
+        f <- file.path(d, ...)
+        dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
+        file.create(f)
+    }
+    dotplots <- function() {
+        env <- report_env(d)
+        env$render_commentary <- function(...) invisible(NULL)
+        list(shown = env$has_pathway_plots,
+             text = if (env$has_pathway_plots)
+                 render_chunks(env, c("pathway-dotplots-heading", "pathway-dotplots")) else "")
+    }
+
+    expect_false(dotplots()$shown)                                  # no plots at all
+
+    touch("GSEA", "KEGG", "dotplot.png")                            # not a unit dotplot
+    expect_false(dotplots()$shown)
+
+    touch("plots", "pathway_c1_KEGG.png")                           # legacy layout still shown
+    x <- dotplots()
+    expect_true(x$shown)
+    expect_match(x$text, "### c1 KEGG", fixed = TRUE)
+
+    touch("GSEA", "KEGG", "ranking_by_fc", "c1", "dotplot.png")
+    touch("GSEA", "KEGG", "ranking_by_pval_with_direction", "c1", "dotplot.png")
+    touch("GSEA", "GO_BP", "ranking_by_fc", "c1", "dotplot.png")
+    x <- dotplots()
+    expect_true(x$shown)
+    expect_match(x$text, "## Pathway Dotplots", fixed = TRUE)
+    # One tab per contrast and database, every ranking inside it.
+    expect_identical(lengths(regmatches(x$text, gregexpr("### c1 — KEGG", x$text, fixed = TRUE))), 1L)
+    expect_match(x$text, "### c1 — GO_BP", fixed = TRUE)
+    expect_match(x$text, "**Ranking: fc**", fixed = TRUE)
+    expect_match(x$text, "**Ranking: pval_with_direction**", fixed = TRUE)
+    expect_match(x$text, file.path("KEGG", "ranking_by_pval_with_direction", "c1", "dotplot.png"),
+                 fixed = TRUE)
+    expect_false(grepl("### c1 KEGG", x$text, fixed = TRUE))       # offline plots take precedence
+})
+
 test_that("the RNA report counts the online flat files as a completed run", {
     d <- withr::local_tempdir()
     writeLines("pathway,padj", file.path(d, "pathway_c1_KEGG_fgsea.csv"))
