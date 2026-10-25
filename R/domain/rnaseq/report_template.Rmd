@@ -2945,7 +2945,7 @@ if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
             sig_down <- sig_down[order(sig_down$padj), ]
             print<!-- Dotplot section is emitted only when at least one plot exists. -->
 ```{r pathway-dotplots-heading, eval=has_pathway_plots, results='asis'}
-cat("\\n## Pathway Dotplots {.tabset}\\n\\n")
+cat("\n## Pathway Dotplots {.tabset}\n\n")
 ```
 
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
