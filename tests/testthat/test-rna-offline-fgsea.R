@@ -524,6 +524,28 @@ test_that("offline enrichment records its manifest even when no unit has a table
     expect_true(all(m$status == "empty"))
 })
 
+test_that("an offline run leaves no GSEA unit from an earlier run behind", {
+    skip_if_not_installed("BiocParallel")
+    # The current run writes no table (no set in range), so anything left on
+    # disk afterwards could only come from the earlier run.
+    local_global_stub("run_fgsea_core", function(...) data.frame())
+    fx <- make_flat_fixture()
+    stale <- file.path(fx$out_dir, "Enrichment", "GSEA", "GO_BP", "ranking_by_fc", "c1")
+    dir.create(stale, recursive = TRUE)
+    write.csv(data.frame(contrast = "c1", database = "GO_BP", ranking_method = "fc",
+                         Description = "Old set", ID = "GO:0000001", NES = 2,
+                         padj = 0.001, stringsAsFactors = FALSE),
+              file.path(stale, "results.csv"), row.names = FALSE)
+    file.create(file.path(stale, "dotplot.png"))
+
+    run_flat_fixture(fx)
+
+    expect_false(file.exists(file.path(stale, "results.csv")))
+    expect_false(file.exists(file.path(stale, "dotplot.png")))
+    expect_identical(nrow(read_offline_gsea_tables(
+        file.path(fx$out_dir, "Enrichment", "GSEA"), 0.05)), 0L)
+})
+
 test_that("removing a stale manifest leaves every other output in place", {
     out <- withr::local_tempdir()
     enr <- file.path(out, "Enrichment")
@@ -622,6 +644,21 @@ test_that("the RNA report tells not run, completed without significance, and fai
     expect_identical(s$status, "failed")
     expect_false(s$has_enrichment)
     expect_match(s$text, "no analysis unit completed", fixed = TRUE)
+    expect_false(grepl("was not run", s$text, fixed = TRUE))
+})
+
+test_that("an offline run that loads no pathway table is reported as failed", {
+    fx <- make_flat_fixture()
+    ann <- fx$config$modes$rna$enrichment$annotation_dir
+    unlink(list.files(ann, full.names = TRUE))      # annotation_dir exists but is empty
+    res <- run_flat_fixture(fx)
+    expect_identical(nrow(res$enrichment_manifest), 0L)
+
+    enr <- file.path(fx$out_dir, "Enrichment")
+    expect_true(file.exists(file.path(enr, "enrichment_manifest.csv")))
+    s <- report_status(enr)
+    expect_identical(s$status, "failed")
+    expect_false(s$has_enrichment)
     expect_false(grepl("was not run", s$text, fixed = TRUE))
 })
 

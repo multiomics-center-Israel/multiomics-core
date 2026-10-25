@@ -349,6 +349,13 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
              "enrichment workflow.", call. = FALSE)
     }
 
+    # Every offline run rewrites the per-unit GSEA tree. A unit left by an
+    # earlier run (a database or contrast since removed, or a unit that now
+    # fails or has no set in range and so writes nothing) would otherwise be
+    # read by the report as a current result.
+    enrich_dir <- file.path(out_dir, "Enrichment")
+    unlink(file.path(enrich_dir, "GSEA"), recursive = TRUE)
+
     # ------------------------------------------------------------------
     # 1. Load local pathway tables (missing DBs are skipped + warned inside)
     # ------------------------------------------------------------------
@@ -363,6 +370,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
     if (length(local_tables) == 0) {
         warning("No local pathway tables loaded. Returning empty enrichment result.")
+        # An empty manifest records the attempt, so the report says it failed
+        # rather than that pathway analysis was not enabled.
+        dir.create(enrich_dir, recursive = TRUE, showWarnings = FALSE)
+        write.csv(.empty_enrichment_manifest(),
+                  file.path(enrich_dir, "enrichment_manifest.csv"), row.names = FALSE)
         return(list(annotation = NULL, pathway_results = list(), plot_files = list(),
                     enrichment_manifest = .empty_enrichment_manifest(),
                     enrichment_index    = .empty_enrichment_index(),
@@ -370,7 +382,6 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                     pathway_membership  = list()))
     }
 
-    enrich_dir  <- file.path(out_dir, "Enrichment")
     gsea_set    <- resolve_rna_gsea_settings(config)
     pval_cutoff <- gsea_set$ora_cutoff
     padj_method <- enr_cfg$padj_method   %||% "fdr"
