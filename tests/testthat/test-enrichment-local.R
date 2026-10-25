@@ -659,6 +659,36 @@ test_that("#7 core-gene CSVs written only when per_pathway_artifacts (plots) is 
                           list.files(d4, recursive = TRUE))))
 })
 
+test_that("core-gene CSVs and heatmaps do not need a gseaResult (no DOSE)", {
+    # The fgsea engine has no gseaResult when DOSE is missing; only the
+    # gseaplot2 PNGs depend on one.
+    ranked <- setNames(as.numeric(30:1), paste0("g", 1:30))
+    sets   <- list(T1 = paste0("g", 1:10))
+    res_df <- data.frame(ID = "T1", Description = "Term one", padj = 0.001,
+                         core_enrichment = "g1/g2/g3", stringsAsFactors = FALSE)
+
+    d1 <- withr::local_tempdir()
+    save_gsea_per_pathway_artifacts(NULL, res_df, d1, plots = TRUE, heatmaps = FALSE,
+                                    sig_cutoff = 0.05, ranked = ranked, gene_sets = sets)
+    csv <- file.path(d1, "core_genes", "T1.csv")
+    expect_true(file.exists(csv))
+    core <- utils::read.csv(csv, stringsAsFactors = FALSE)
+    expect_identical(core$gene, c("g1", "g2", "g3"))
+    expect_equal(core$rank_value, c(30, 29, 28))
+    expect_length(list.files(file.path(d1, "plots")), 0L)   # no gseaResult, no gseaplot2
+
+    skip_if_not_installed("pheatmap")
+    expr <- matrix(withr::with_seed(1, rnorm(30 * 6)), nrow = 30,
+                   dimnames = list(paste0("g", 1:30), paste0("S", 1:6)))
+    d2 <- withr::local_tempdir()
+    save_gsea_per_pathway_artifacts(NULL, res_df, d2, expr_mat = expr, plots = FALSE,
+                                    heatmaps = TRUE, sig_cutoff = 0.05,
+                                    ranked = ranked, gene_sets = sets)
+    hm <- list.files(d2, recursive = TRUE)
+    expect_true(any(grepl("^heatmaps_all_genes/T1", hm)))
+    expect_true(any(grepl("^heatmaps_core_genes/T1", hm)))
+})
+
 # ===========================================================================
 # §17 R1 — GSEA ridgeplot FOLD-CHANGE hack (legacy `values_for_x_axis`)
 # The ridge X-axis must show FOLD CHANGE, not the GSEA ranking metric, for
