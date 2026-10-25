@@ -247,10 +247,16 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     block_col <- de_res$info$block_col
     if (!is.null(block_col) && nzchar(block_col) && !isFALSE(cfg$de$block_pca)) {
         tryCatch({
+            # The sample column the DE step aligned on, so both read it alike.
+            # The DE runners add that column from rownames(meta) when the
+            # metadata lacks it, and record only its name; do the same here.
+            bp_sample_col <- de_res$info$sample_col %||% cfg$id_columns$sample_col
+            bp_meta <- meta
+            if (!bp_sample_col %in% colnames(bp_meta)) {
+                bp_meta[[bp_sample_col]] <- rownames(bp_meta)
+            }
             bp <- build_rna_block_pca(
-                expr = mat, meta = meta,
-                # The sample column the DE step aligned on, so both read it alike.
-                sample_col = de_res$info$sample_col %||% cfg$id_columns$sample_col,
+                expr = mat, meta = bp_meta, sample_col = bp_sample_col,
                 block_col = block_col, group_col = de_res$info$factor_col
             )
             ggplot2::ggsave(f_bp, plot_rna_block_pca(bp, block_col, de_res$info$factor_col),
