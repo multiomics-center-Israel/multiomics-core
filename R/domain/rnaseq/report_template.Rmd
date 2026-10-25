@@ -2765,7 +2765,6 @@ n_failed_units <- sum(!evaluated)
 n_sig_units <- if (offline_ran && "n_significant" %in% names(enr_manifest)) {
     sum(enr_manifest$n_significant[evaluated] > 0, na.rm = TRUE)
 } else NA_integer_
-# Offline GSEA stores one dotplot per database/ranking/contrast.
 gsea_plot_dir <- file.path(enrich_dir, "GSEA")
 offline_dotplots <- if (dir.exists(gsea_plot_dir)) {
     list.files(gsea_plot_dir, pattern = "^dotplot\\.png$",
@@ -2943,7 +2942,20 @@ if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
             cat("Pathways enriched in **down-regulated** genes (negative NES).\n\n")
             sig_down <- sig_show[sig_show$Direction == "Down-regulated", ]
             sig_down <- sig_down[order(sig_down$padj), ]
-            print<!-- Dotplot section is emitted only when at least one plot exists. -->
+            print(knitr::kable(sig_down, caption = paste("Down-regulated pathways —", tbl$label),
+                               row.names = FALSE, digits = 4))
+            cat("\n\n")
+        }
+    }
+} else if (offline_ran) {
+    cat("No GSEA unit was evaluated in this run. Every evaluated unit is listed in ",
+        "`Enrichment/enrichment_manifest.csv`.\n")
+} else {
+    cat("No fGSEA result files found.\n")
+}
+```
+
+<!-- Dotplot section is emitted only when at least one plot exists. -->
 ```{r pathway-dotplots-heading, eval=has_pathway_plots, results='asis'}
 cat("\n## Pathway Dotplots {.tabset}\n\n")
 ```
