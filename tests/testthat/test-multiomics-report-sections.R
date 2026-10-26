@@ -62,7 +62,11 @@ test_that("each whole-section switch is read and gates its heading", {
 test_that("RNA-protein tabs appear only with results, otherwise one top-level note", {
     src <- template_lines()
     headings <- static_headings(src)
-    for (h in c("Concordance Distribution", "DE Scatter (All Contrasts)",
+    # The per-gene expression-correlation histogram is not shown: it tracks
+    # between-sample differences rather than the contrast.
+    expect_false(any(grepl("Concordance Distribution", src, fixed = TRUE)))
+    expect_false(any(grepl("rna_protein_concordance.png", src, fixed = TRUE)))
+    for (h in c("DE Scatter (All Contrasts)",
                 "Per-Contrast DE Details", "Top Proteins by RNA Agreement")) {
         expect_false(any(grepl(h, headings, fixed = TRUE)), info = h)
         # Per-contrast details need a contrast with files, the rest the results.
