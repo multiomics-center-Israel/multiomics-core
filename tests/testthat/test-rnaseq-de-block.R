@@ -275,5 +275,11 @@ test_that("qc_post draws the block PCA when DE took the sample IDs from rownames
                                                list(modes = list(rna = list(de = de_cfg))), out))
     dirs <- create_legacy_output_dirs(out, create = FALSE)
     expect_true(file.exists(file.path(dirs$diagnostic_plots, "PCA_block_corrected.png")))
-    expect_true(file.exists(file.path(dirs$diagnostic_plots, "PCA_block_corrected_coords.tsv")))
+    coords_f <- file.path(dirs$diagnostic_plots, "PCA_block_corrected_coords.tsv")
+    expect_true(file.exists(coords_f))
+    coords <- read.delim(coords_f, stringsAsFactors = FALSE)
+    expect_true(all(c("panel", "sample", "PC1", "PC2", "group", "block",
+                      "PC1_var_pct", "PC2_var_pct") %in% colnames(coords)))
+    # One variance pair per panel, repeated on each of its rows.
+    expect_equal(nrow(unique(coords[, c("panel", "PC1_var_pct", "PC2_var_pct")])), 2)
 })
