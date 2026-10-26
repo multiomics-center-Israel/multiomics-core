@@ -261,8 +261,12 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
             )
             ggplot2::ggsave(f_bp, plot_rna_block_pca(bp, block_col, de_res$info$factor_col),
                             width = 13, height = 6.5, dpi = 150)
-            utils::write.table(bp$coords, f_bp_coords,
-                               sep = "\t", quote = FALSE, row.names = FALSE)
+            # Each panel's variance shares go in the file too, so a reader of the
+            # coordinates (e.g. an interactive viewer) can label the axes as the
+            # PNG does without refitting.
+            ve <- bp$var_explained[match(as.character(bp$coords$panel), bp$var_explained$panel), ]
+            utils::write.table(cbind(bp$coords, PC1_var_pct = ve$PC1, PC2_var_pct = ve$PC2),
+                               f_bp_coords, sep = "\t", quote = FALSE, row.names = FALSE)
             files <- c(files, f_bp)
         }, error = function(e) {
             warning(sprintf("[QC_post] PCA_block_corrected failed: %s", conditionMessage(e)))
