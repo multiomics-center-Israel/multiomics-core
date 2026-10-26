@@ -90,8 +90,11 @@ preprocess_proteomics <- function(inputs, config) {
   if (norm_method == "median") {
     expr_filt <- normalize_proteomics_median(expr_filt)
     message("Normalization: median centering applied.")
+  } else if (norm_method == "vsn") {
+    expr_filt <- normalize_proteomics_vsn(expr_filt)
+    message("Normalization: vsn (variance-stabilizing, glog2 scale) applied.")
   } else if (norm_method != "none") {
-    stop(sprintf("Unknown normalization method: '%s'. Supported: 'none', 'median'.", norm_method))
+    stop(sprintf("Unknown normalization method: '%s'. Supported: 'none', 'median', 'vsn'.", norm_method))
   }
   
   # Single imputation (QC/plots) — dispatches based on cfg$imputation$method
@@ -150,4 +153,24 @@ get_sample_filter_rules <- function(config, mode) {
     return(NULL)
   }
   sf$rules %||% NULL
+}
+
+#' Variance-stabilizing normalization (vsn) for proteomics
+#'
+#' Fits vsn's affine calibration plus generalized-log transform across samples
+#' and returns intensities on vsn's glog2 scale, which is close to log2 for
+#' well-measured proteins and compresses the noisy low end.
+#'
+#' @param expr_mat numeric matrix (proteins x samples) of log2 intensities,
+#'   NA for missing values.
+#' @return Matrix of the same dimensions and dimnames on the glog2 scale; cells
+#'   that were NA stay NA.
+normalize_proteomics_vsn <- function(expr_mat) {
+  # The loader has already taken log2, but vsn models raw intensities and does
+  # its own transform, so it is fed the linear scale. justvsn() ignores NAs in
+  # the fit and returns them as NA, so missing values need no special handling.
+  # With the default subsample = 0 the fit draws no random numbers, so no seed.
+  out <- vsn::justvsn(2^expr_mat, verbose = FALSE)
+  dimnames(out) <- dimnames(expr_mat)
+  out
 }

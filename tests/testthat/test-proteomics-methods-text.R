@@ -64,6 +64,10 @@ test_that("no-normalization is stated explicitly, not omitted", {
     txt2 <- blocks_for(normalization = list(method = "median"))$data_processing
     expect_match(txt2, "median-centred on the log2 scale", fixed = TRUE)
     expect_false(grepl("No between-sample normalization", txt2, fixed = TRUE))
+
+    txt3 <- blocks_for(normalization = list(method = "vsn"))$data_processing
+    expect_match(txt3, "variance-stabilizing normalization (vsn)", fixed = TRUE)
+    expect_false(grepl("No between-sample normalization", txt3, fixed = TRUE))
 })
 
 test_that("contaminant removal is claimed only when the flag is on", {
