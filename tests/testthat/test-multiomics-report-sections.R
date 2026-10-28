@@ -606,7 +606,9 @@ test_that("every legend with text from outside its call is checked", {
         # go_hierarchy_legend(); worst case checked in test-go-hierarchy.R
         "go_legend",
         # every variant counted in test-pathway-coverage.R
-        "pathway_coverage_legend")
+        "pathway_coverage_legend",
+        # the pathway-scatter legend: one GMT path and one integer
+        "pw_stats", "gmt_file", "min_pairs")
     used <- unique(unlist(strsplit(dyn$dynamic, ",", fixed = TRUE)))
     expect_identical(setdiff(used, known), character(0))
     # A name-filled legend leaves room for a name of three words.
