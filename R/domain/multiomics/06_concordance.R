@@ -59,10 +59,10 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
         }
 
         lfc_vals <- df[[lfc_cols[1]]]
-        # Convert linearFC (signed fold change) to log2FC
+        # linearFC is rounded to 3 significant digits; take the stored log2FC
+        # for the same contrast instead of rebuilding it.
         if (grepl("^linearFC", lfc_cols[1])) {
-            lfc_vals <- ifelse(lfc_vals >= 0, log2(pmax(lfc_vals, 1e-10)),
-                               -log2(pmax(abs(lfc_vals), 1e-10)))
+            lfc_vals <- resolve_log2fc(df, sub("^linearFC\\.imputs\\.", "", lfc_cols[1]))
         }
 
         padj_vals <- if (length(padj_cols) > 0) df[[padj_cols[1]]] else NA_real_
