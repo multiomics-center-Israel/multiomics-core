@@ -180,6 +180,59 @@ validate_proteomics_config <- function(cfg) {
         }
     }
 
+    # 4a. Batch in the DE model. The resolver aborts on an unknown de_mode and
+    # defaults it to "covariate" whenever a correction runs. Only the pooled
+    # limma fit can carry the batch term; any other method would fit as if
+    # batch did not exist, so it needs an explicit legacy_corrected instead.
+    bc <- get_proteomics_batch_config(cfg)
+    de_tables <- unlist(cfg$files$de_table)
+    precomputed <- length(de_tables) > 0 && all(nzchar(de_tables))
+    if (precomputed) {
+        # No model is fitted, so a resolved default means nothing; only an
+        # explicit request to model batch is a contradiction.
+        if (bc$de_mode_explicit && identical(bc$de_mode, "covariate")) {
+            stop("batch_correction$de_mode is 'covariate' but files$de_table supplies ",
+                 "precomputed DE results, so no model is fitted here.\n",
+                 "  Remove de_mode, or remove files$de_table to fit the model in the pipeline.",
+                 call. = FALSE)
+        }
+    } else if (identical(bc$de_mode, "covariate")) {
+        de_method <- cfg$de$method %||% "limma"
+        if (!identical(de_method, "limma")) {
+            stop(if (bc$de_mode_explicit) {
+                     "batch_correction$de_mode is 'covariate'"
+                 } else {
+                     paste0("Batch correction is enabled, so batch is modelled in DE ",
+                            "(batch_correction$de_mode defaults to 'covariate')")
+                 },
+                 ", but de$method is '", de_method, "'.\n",
+                 "  Batch can enter the model only with de$method 'limma'. Switch to it, ",
+                 "or set batch_correction$de_mode: 'legacy_corrected' to fit '", de_method,
+                 "' on batch-corrected values (p-values may be anti-conservative).",
+                 call. = FALSE)
+        }
+        if (is.null(bc$batch_col) || !nzchar(bc$batch_col)) {
+            stop("batch_correction$de_mode is 'covariate' but no batch column is set.\n",
+                 "  Set batch_correction$batch_col (or qc$batch_col).", call. = FALSE)
+        }
+        if (identical(cfg$de$block_col, bc$batch_col)) {
+            stop("'", bc$batch_col, "' is both de$block_col and the batch covariate. ",
+                 "Keep it as one or the other.", call. = FALSE)
+        }
+    } else if (identical(bc$de_mode, "legacy_corrected")) {
+        if (!bc$corrects) {
+            stop("batch_correction$de_mode is 'legacy_corrected' but no batch correction ",
+                 "is configured, so there are no corrected values to fit on.\n",
+                 "  Set batch_correction$method, or use de_mode 'covariate' or 'none'.",
+                 call. = FALSE)
+        }
+        warning("batch_correction$de_mode 'legacy_corrected' fits DE on batch-corrected ",
+                "values, which treats the removed batch variation as free: p-values can ",
+                "be anti-conservative, especially when conditions are unevenly spread ",
+                "over batches. Prefer de_mode 'covariate' with de$method 'limma'.",
+                call. = FALSE)
+    }
+
     # 4b. Pathway Settings
     if (!is.null(cfg$pathway)) {
         if (!is.null(cfg$pathway$gsea_ranking)) {

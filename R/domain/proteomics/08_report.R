@@ -409,12 +409,23 @@ methods_p_value_label <- function(method, p_adjust_none, across_proteins = TRUE)
 #'
 #' @param de_cfg The \code{de} config block.
 #' @param method The method \code{mod_proteomics_de()} reported.
+#' @param batch_col The batch column modelled as a covariate, or NULL when batch
+#'   is not in the design. Only the pooled limma fit can carry it; validation
+#'   refuses the other methods.
 #' @return A character scalar.
-methods_de_phrase <- function(de_cfg, method) {
+methods_de_phrase <- function(de_cfg, method, batch_col = NULL) {
     m <- tolower(as.character(method))
     if (identical(m, "limma")) {
         s <- paste0("Moderated t-tests were fitted with the *limma* package, using empirical ",
                     "Bayes shrinkage of the per-protein variance estimates.")
+        # run_limma_proteomics() stops rather than dropping the term, so a
+        # configured covariate is one that was fitted.
+        if (!is.null(batch_col) && nzchar(batch_col)) {
+            s <- paste0(s, sprintf(paste0(
+                " The design included %s as an additive batch covariate and was fitted on ",
+                "uncorrected values, so contrasts between conditions were estimated ",
+                "adjusting for batch."), batch_col))
+        }
         bc <- de_cfg$block_col
         if (!is.null(bc) && nzchar(bc)) {
             # run_limma_proteomics() refits without blocking when the consensus is
@@ -683,30 +694,59 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
         "No between-sample normalization was applied."
     })
 
-    bc_m <- tolower(as.character(cfg$batch_correction$method %||% "none"))
-    # get_proteomics_batch_config() resolves enabled as bc$enabled, defaulting to
-    # method != "none". An explicit enabled: false with a method set therefore
-    # runs no correction at all, so the method alone cannot gate this sentence.
-    bc_default_on <- !identical(bc_m, "none")
-    bc_on <- isTRUE(cfg$batch_correction$enabled %||% bc_default_on)
-    if (bc_on && !identical(bc_m, "none")) {
+    # Read through the same resolver as correct_batch_proteomics() and
+    # mod_proteomics_de(). It resolves enabled as bc$enabled, defaulting to
+    # method != "none", so an explicit enabled: false with a method set runs no
+    # correction and the method alone cannot gate this sentence.
+    bc <- get_proteomics_batch_config(cfg)
+    bc_m <- tolower(as.character(bc$method))
+    # mod_proteomics_de() returns precomputed tables before any model or
+    # imputation, so no DE-side batch handling may be described there.
+    batch_in_model <- identical(bc$de_mode, "covariate") && !is_precomputed
+    # make_imputations_proteomics() returns the matrix with its NAs when the
+    # method is "none", so "re-imputed" is true only for the other methods.
+    reimputed <- if (identical(imp_method, "none")) "" else ", re-imputed"
+    if (bc$corrects) {
         bc_name <- if (identical(bc_m, "combat")) "ComBat" else
                    if (identical(bc_m, "probatch")) "proBatch" else bc_m
+        # resolve_batch_variable() stops without a batch column, so a correction
+        # that ran always had one; the guard only keeps partial configs readable.
+        bc_col <- if (!is.null(bc$batch_col) && nzchar(bc$batch_col)) {
+            sprintf(" for the batch column %s", bc$batch_col)
+        } else ""
         dp <- paste(dp, sprintf(paste0(
-            "Batch effects were corrected with %s. The correction was estimated and applied on ",
-            "the single-imputed complete matrix."), bc_name))
-        # mod_proteomics_de() returns the loaded tables before
-        # make_imputations_proteomics() is reached, so in precomputed mode
-        # nothing is re-imputed for the model -- and saying otherwise would
-        # contradict the missing-values paragraph below.
-        dp <- paste(dp, if (is_precomputed) {
-            paste("The original missingness pattern was then restored to the filtered matrix.",
-                  "Quality control and clustering use the corrected complete matrix.")
-        } else {
-            paste("The original missingness pattern was then restored to the filtered matrix,",
-                  "which is re-imputed for differential analysis, while quality-control and",
-                  "clustering use the corrected complete matrix.")
-        })
+            "Batch effects were corrected with %s%s. The correction was estimated and applied on ",
+            "the single-imputed complete matrix, and quality control and clustering use the ",
+            "corrected values; measured values are not altered."), bc_name, bc_col))
+        if (identical(bc_m, "probatch")) {
+            dp <- paste(dp, paste0(
+                "proBatch median-centering does not model the biological condition, so ",
+                "where conditions are unevenly spread over batches it also removes part of ",
+                "the condition effect from the corrected values."))
+        }
+        # The exports take their model-input columns from de_res$imputations
+        # (05_mod_exports.R), so they follow the DE input, not the QC matrix.
+        if (!is_precomputed) {
+            dp <- paste(dp, switch(bc$de_mode,
+                covariate = paste0(
+                    "The differential-abundance model was not fitted on the corrected ",
+                    "values: it used the uncorrected filtered matrix", reimputed,
+                    ", with batch as a covariate."),
+                none = paste0(
+                    "The differential-abundance model used the uncorrected filtered matrix",
+                    reimputed, ", without a batch term."),
+                legacy_corrected = paste0(
+                    "In legacy mode the differential-abundance model was fitted on the ",
+                    "corrected values with the measured missingness restored", reimputed,
+                    ". This treats the variation removed by the correction as if it cost no ",
+                    "degrees of freedom, so p-values may be anti-conservative.")))
+        }
+    } else if (batch_in_model) {
+        # Batch modelled without a QC correction: say so, rather than leave the
+        # reader to infer it from silence.
+        dp <- paste(dp, paste0(
+            "No batch correction was applied to the expression values; batch was ",
+            "accounted for in the differential-abundance model only."))
     }
 
     # ---- Missing values -----------------------------------------------------
@@ -739,7 +779,8 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                            "least %s."), p_cut, fc_cut))
     } else {
         m <- tolower(as.character(de_method))
-        de_txt <- methods_de_phrase(de_cfg, de_method)
+        de_txt <- methods_de_phrase(de_cfg, de_method,
+                                    batch_col = if (batch_in_model) bc$batch_col)
         # fdrtool is implemented in run_limma_proteomics() and
         # run_limma_percontrast_proteomics() only; the flag being TRUE does not
         # mean a t-test or ANOVA run applied it.
