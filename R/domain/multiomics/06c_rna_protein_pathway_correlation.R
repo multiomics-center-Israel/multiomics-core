@@ -46,8 +46,8 @@ resolve_rna_protein_pathway_gmt <- function(config) {
 #' @param gene_sets Named list of character vectors (pathway id -> symbols), as
 #'   returned by \code{read_gmt()}; its \code{descriptions} attribute, when
 #'   present, supplies the pathway names.
-#' @param min_pairs Smallest number of pairs a pathway needs; the default 51
-#'   keeps pathways with more than 50.
+#' @param min_pairs Smallest number of pairs a pathway needs; the default 11
+#'   keeps pathways with more than 10.
 #' @return List with \code{stats} (one row per contrast x pathway: contrast,
 #'   pathway_id, pathway_name, n_pairs, pearson_r, pearson_p, spearman_rho,
 #'   spearman_p, same_sign_frac, min_pairs; ordered by contrast, then
@@ -59,7 +59,7 @@ resolve_rna_protein_pathway_gmt <- function(config) {
 #'                     rna_log2FC = seq(-3, 3, length.out = 60),
 #'                     protein_log2FC = seq(-1, 1, length.out = 60))
 #' compute_pathway_rna_protein_correlation(pairs, list(P1 = paste0("G", 1:60)))
-compute_pathway_rna_protein_correlation <- function(pairs, gene_sets, min_pairs = 51) {
+compute_pathway_rna_protein_correlation <- function(pairs, gene_sets, min_pairs = 11) {
     empty <- list(
         stats = data.frame(contrast = character(), pathway_id = character(),
                            pathway_name = character(), n_pairs = integer(),
