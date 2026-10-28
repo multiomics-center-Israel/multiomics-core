@@ -191,6 +191,52 @@ test_that("batch correction needs the resolved enabled state, not just a method"
         method = "none", enabled = TRUE))$data_processing, fixed = TRUE))
 })
 
+test_that("covariate mode says the model saw uncorrected data with batch in it", {
+    # mod_proteomics_de() hands limma expr_filt_uncorrected in this mode, and
+    # run_limma_proteomics() adds batch to the design or stops -- so the
+    # corrected-mode sentence ("re-imputed for differential analysis" on the
+    # corrected matrix) would describe a fit that did not happen.
+    bc <- list(method = "combat", batch_col = "Plate", de_mode = "covariate")
+    b <- blocks_for(batch_correction = bc)
+    expect_match(b$data_processing, "Batch effects were corrected with ComBat", fixed = TRUE)
+    expect_match(b$data_processing, "used the uncorrected filtered matrix", fixed = TRUE)
+    # The exports' model-input columns are the uncorrected imputations here.
+    expect_false(grepl("exported", b$data_processing, fixed = TRUE))
+    expect_false(grepl("which is re-imputed for differential analysis", b$data_processing,
+                       fixed = TRUE))
+    expect_match(b$differential, "included Plate as an additive batch covariate", fixed = TRUE)
+
+    # Batch can be modelled without producing a corrected matrix at all.
+    none <- blocks_for(batch_correction = list(method = "none", batch_col = "Plate",
+                                               de_mode = "covariate"))
+    expect_false(grepl("Batch effects", none$data_processing, fixed = TRUE))
+    expect_match(none$differential, "included Plate as an additive batch covariate",
+                 fixed = TRUE)
+
+    # make_imputations_proteomics() leaves NAs in place under method "none", so
+    # neither mode may claim the model input was re-imputed.
+    no_imp <- list(method = "none")
+    expect_false(grepl("re-imputed", blocks_for(batch_correction = bc,
+                                                imputation = no_imp)$data_processing,
+                       fixed = TRUE))
+    expect_false(grepl("re-imputed", blocks_for(batch_correction = list(method = "combat"),
+                                                imputation = no_imp)$data_processing,
+                       fixed = TRUE))
+    expect_match(blocks_for(batch_correction = list(method = "combat"),
+                            imputation = no_imp)$data_processing,
+                 "which is used for differential analysis", fixed = TRUE)
+    expect_match(b$data_processing, "uncorrected filtered matrix, re-imputed, with batch",
+                 fixed = TRUE)
+
+    # The default mode never mentions a covariate.
+    expect_false(grepl("covariate", blocks_for(
+        batch_correction = list(method = "combat"))$differential, fixed = TRUE))
+    # Nor does precomputed mode, where no model is fitted.
+    expect_false(grepl("covariate", blocks_for(batch_correction = bc,
+                                               de_method = "precomputed")$differential,
+                       fixed = TRUE))
+})
+
 
 # =============================================================================
 # Missing values

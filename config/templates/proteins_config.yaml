@@ -79,11 +79,24 @@ modes:
 
     # --------------------------------------------------------
     # Batch correction (optional)
-    # Runs after imputation, on the log2 intensity matrix, and feeds the
-    # corrected data to DE, QC and clustering. Leave method "none" to disable.
+    # Runs after imputation, on the log2 intensity matrix. The corrected data
+    # feed QC and clustering; whether they also feed DE (and the model-input
+    # values exported beside the DE results) is set by de_mode below.
+    # Leave method "none" to disable.
     # --------------------------------------------------------
     batch_correction:
       method: "none"           # "none" | "combat" | "probatch"
+      # de_mode: how the DE model handles batch.
+      #   "corrected" - limma is fitted on the batch-corrected values (default).
+      #   "covariate" - limma is fitted on the UNcorrected values with batch_col
+      #                 as an additive term in the design (~ 0 + condition + batch).
+      #                 The corrected matrix is then used for QC/plots only.
+      #                 Recommended: limma sees the batch term and charges its
+      #                 degrees of freedom, so p-values are not overstated.
+      #                 Requires de.method "limma", a batch_col, and every batch
+      #                 containing more than one condition. Works with method
+      #                 "none" too (batch modelled in DE, no corrected matrix).
+      de_mode: "corrected"
       # batch_col is the metadata column holding the batch label.
       # Defaults to modes.proteomics.qc.batch_col when omitted.
       batch_col: null

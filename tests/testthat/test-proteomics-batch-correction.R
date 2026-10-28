@@ -57,6 +57,12 @@ test_that("get_proteomics_batch_config applies defaults", {
     expect_false(bc$enabled)
     expect_equal(bc$batch_col, "Plate")        # falls back to qc$batch_col
     expect_true(bc$preserve_condition)
+    expect_equal(bc$de_mode, "corrected")      # existing projects keep their behaviour
+})
+
+test_that("get_proteomics_batch_config refuses an unknown de_mode", {
+    cfg <- list(batch_correction = list(method = "combat", de_mode = "model"))
+    expect_error(get_proteomics_batch_config(cfg), "de_mode")
 })
 
 test_that("get_proteomics_batch_config enables implicitly when method set", {
@@ -224,5 +230,32 @@ test_that("batch correction restores the NA pattern in expr_filt", {
     obs <- !is.na(out$expr_filt)
     expect_equal(out$expr_filt[obs], out$expr_work[obs])
     expect_identical(out$expr_filt_pre_imp, out$expr_filt)
+})
+
+# --- de_mode: the DE step's matrix -------------------------------------------
+
+test_that("covariate mode keeps the uncorrected filtered matrix for DE", {
+    skip_if_not_installed("sva")
+    pre <- make_synth_prot(batch_shift = 6)
+    pre$expr_filt[cbind(c(1L, 5L), c(2L, 7L))] <- NA
+    config <- make_config(method = "combat", batch_col = "Batch",
+                          group_col = "Condition", de_mode = "covariate")
+
+    out <- correct_batch_proteomics(pre, config, seed = 1)
+
+    # The model gets the values as measured, NAs and all ...
+    expect_identical(out$expr_filt_uncorrected, pre$expr_filt)
+    # ... while QC and clustering still get the corrected matrix.
+    expect_true(out$batch_corrected)
+    obs <- !is.na(out$expr_filt)
+    expect_false(isTRUE(all.equal(out$expr_filt[obs], pre$expr_filt[obs])))
+})
+
+test_that("corrected mode does not carry an uncorrected copy", {
+    skip_if_not_installed("sva")
+    pre <- make_synth_prot(batch_shift = 6)
+    config <- make_config(method = "combat", batch_col = "Batch", group_col = "Condition")
+    out <- correct_batch_proteomics(pre, config, seed = 1)
+    expect_null(out$expr_filt_uncorrected)
 })
 

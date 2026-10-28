@@ -39,7 +39,9 @@
 #' @return The `pre` list, with the corrected matrix in `expr_work`/
 #'   `expr_imp_single` (complete) and `expr_filt`/`expr_filt_pre_imp` (corrected
 #'   observed values, NA where originally missing), plus `batch_corrected`/
-#'   `batch_method` metadata fields when a correction was applied.
+#'   `batch_method` metadata fields when a correction was applied. When
+#'   `de_mode` is `"covariate"`, the uncorrected `expr_filt` is also kept as
+#'   `expr_filt_uncorrected` for the DE step.
 
 correct_batch_proteomics <- function(pre, config, seed = 42) {
   cfg <- config$modes$proteomics
@@ -106,6 +108,13 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
   corrected_unimputed <- corrected
   corrected_unimputed[na_mask] <- NA_real_
 
+  # In covariate mode the DE model carries batch itself, so it must see the
+  # uncorrected values: fitting a batch term on data ComBat already adjusted
+  # would remove the batch effect twice and overstate the residual df.
+  if (identical(bc$de_mode, "covariate")) {
+    pre$expr_filt_uncorrected <- pre$expr_filt
+  }
+
   pre$expr_filt         <- corrected_unimputed
   pre$expr_filt_pre_imp <- corrected_unimputed
   pre$expr_work         <- corrected
@@ -118,20 +127,36 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
 
 #' Resolve proteomics batch-correction config with defaults
 #'
+#' `de_mode` decides how the DE model treats batch, independently of whether a
+#' corrected matrix is produced for QC: `"corrected"` fits the model on the
+#' batch-corrected values (the original behaviour), `"covariate"` fits it on the
+#' uncorrected values with batch as an additive term in the design. With
+#' `method: "none"` and `de_mode: "covariate"`, batch is modelled in DE and no
+#' corrected matrix is produced at all.
+#'
 #' @param cfg The `config$modes$proteomics` sub-config.
 #' @return A list with `enabled`, `method`, `batch_col`, `group_col`,
-#'   `covariates`, `preserve_condition`.
+#'   `covariates`, `preserve_condition`, `de_mode`.
 #' @noRd
 get_proteomics_batch_config <- function(cfg) {
   bc <- cfg$batch_correction %||% list()
   method <- bc$method %||% "none"
+  de_mode <- bc$de_mode %||% "corrected"
+  if (!(is.character(de_mode) && length(de_mode) == 1L &&
+        de_mode %in% c("corrected", "covariate"))) {
+    cli::cli_abort(c(
+      "Unknown {.code batch_correction.de_mode}: {.val {de_mode}}.",
+      "i" = "Use {.val corrected} (DE on batch-corrected values) or {.val covariate} (DE on uncorrected values with batch in the limma design)."
+    ))
+  }
   list(
     enabled            = bc$enabled %||% (!identical(method, "none")),
     method             = method,
     batch_col          = bc$batch_col %||% cfg$qc$batch_col,
     group_col          = bc$group_col,
     covariates         = bc$covariates,
-    preserve_condition = bc$preserve_condition %||% TRUE
+    preserve_condition = bc$preserve_condition %||% TRUE,
+    de_mode            = de_mode
   )
 }
 

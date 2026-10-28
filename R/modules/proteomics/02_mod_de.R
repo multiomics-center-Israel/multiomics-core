@@ -87,9 +87,19 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
     # ---- choose DE method ----
     method <- cfg$de$method %||% "limma"
 
+    # In covariate mode batch is a term in the limma design, so the model must
+    # see the values before any correction. pre$expr_filt is the uncorrected
+    # matrix whenever no correction ran, hence the fallback.
+    de_batch_mode <- get_proteomics_batch_config(cfg)$de_mode
+    expr_for_de <- if (identical(de_batch_mode, "covariate")) {
+        pre$expr_filt_uncorrected %||% pre$expr_filt
+    } else {
+        pre$expr_filt
+    }
+
     # --- Shared step: generate multiple imputations ---
     imputations <- make_imputations_proteomics(
-        expr_mat = pre$expr_filt,
+        expr_mat = expr_for_de,
         cfg      = config,
         verbose  = verbose
     )

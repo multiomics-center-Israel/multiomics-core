@@ -180,6 +180,35 @@ validate_proteomics_config <- function(cfg) {
         }
     }
 
+    # 4a. Batch in the DE model. The resolver aborts on an unknown de_mode.
+    # Only the pooled limma fit builds its design through
+    # build_proteomics_de_design(); every other path would ignore the batch term
+    # and report an unadjusted model, so they are refused here instead.
+    bc <- get_proteomics_batch_config(cfg)
+    if (identical(bc$de_mode, "covariate")) {
+        de_method <- cfg$de$method %||% "limma"
+        if (!identical(de_method, "limma")) {
+            stop("batch_correction$de_mode is 'covariate' but de$method is '", de_method,
+                 "'.\n  Batch can enter the model only with de$method 'limma'. Use that, ",
+                 "or set de_mode to 'corrected'.", call. = FALSE)
+        }
+        de_tables <- unlist(cfg$files$de_table)
+        if (length(de_tables) > 0 && all(nzchar(de_tables))) {
+            stop("batch_correction$de_mode is 'covariate' but files$de_table supplies ",
+                 "precomputed DE results, so no model is fitted here.\n",
+                 "  Remove de_mode, or remove files$de_table to fit the model in the pipeline.",
+                 call. = FALSE)
+        }
+        if (is.null(bc$batch_col) || !nzchar(bc$batch_col)) {
+            stop("batch_correction$de_mode is 'covariate' but no batch column is set.\n",
+                 "  Set batch_correction$batch_col (or qc$batch_col).", call. = FALSE)
+        }
+        if (identical(cfg$de$block_col, bc$batch_col)) {
+            stop("'", bc$batch_col, "' is both de$block_col and the batch covariate. ",
+                 "Model it once.", call. = FALSE)
+        }
+    }
+
     # 4b. Pathway Settings
     if (!is.null(cfg$pathway)) {
         if (!is.null(cfg$pathway$gsea_ranking)) {
