@@ -74,8 +74,9 @@ test_that("RNA-protein tabs appear only with results, otherwise one top-level no
         expect_true(any(grepl(sprintf('`r if (%s) "## %s', gate, h), src,
                               fixed = TRUE)), info = h)
     }
-    expect_true(any(grepl('`r if (has_rna_prot && show_translation_eff) "## Translation Efficiency',
-                          src, fixed = TRUE)))
+    # protein log2FC - RNA log2FC was labelled "translation efficiency"; removed.
+    expect_false(any(grepl("Translation Efficiency", src, fixed = TRUE)))
+    expect_false(any(grepl("translation_efficiency", src, fixed = TRUE)))
     # With an RNA layer but no results: the heading without a tabset and one
     # note. Without an RNA layer: no section at all, heading and rule included.
     expect_true(any(grepl(paste0('`r if (has_rna_prot) "# RNA-Protein Correlation {.tabset}" ',

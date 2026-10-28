@@ -163,7 +163,8 @@ test_that("the concordance path still emits the legacy column names", {
 
     expect_true(all(c("gene_id", "protein_id", "gene_symbol", "rna_log2FC",
                       "rna_padj", "protein_log2FC", "protein_padj",
-                      "category", "concordant", "te_log2FC") %in% names(res)))
+                      "category", "concordant") %in% names(res)))
+    expect_false("te_log2FC" %in% names(res))
     expect_identical(res$gene_symbol, res$gene_id)
 })
 
@@ -362,7 +363,6 @@ test_that("the shipped template leaves every report section on", {
     sections <- (cfg$modes$multiomics$report %||% list())$sections %||% list()
 
     show_section <- function(name) !identical(sections[[name]], FALSE)
-    expect_true(show_section("translation_efficiency"))
     expect_true(show_section("group_distance"))
     expect_true(show_section("a_section_nobody_has_named"))
 })

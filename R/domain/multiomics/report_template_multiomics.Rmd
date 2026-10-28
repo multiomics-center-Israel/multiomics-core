@@ -179,7 +179,6 @@ multi_cfg <- cfg$modes$multiomics
 section_cfg <- (multi_cfg$report %||% list())$sections %||% list()
 show_section <- function(name) !identical(section_cfg[[name]], FALSE)
 
-show_translation_eff    <- show_section("translation_efficiency")
 show_group_distance     <- show_section("group_distance")
 # Whole-section switches: FALSE drops the section, heading included, so a
 # project that turned one off does not read an empty heading in its report.
@@ -441,8 +440,6 @@ make_dt(pw_show, caption = "Per-pathway RNA-protein log2FC correlation (rna_prot
 # and whether the tabset's heading appears at all, so it never stands empty.
 rna_prot_contrast_files <- function(cdir) {
     c(file.path(cdir, "plots", "rna_protein_de_scatter.png"),
-      file.path(cdir, "plots", "translation_efficiency_hist.png"),
-      file.path(cdir, "plots", "translation_efficiency_scatter.png"),
       file.path(cdir, "tables", "rna_protein_de_concordance.csv"))
 }
 rna_prot_pc_dir <- file.path(rna_prot_dir, "per_contrast")
@@ -467,22 +464,6 @@ for (cdir in rna_prot_contrast_dirs) {
         cat(knitr::knit_child(text = sprintf(
             '```{r rna-prot-scatter-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
             gsub("[^a-zA-Z0-9]", "", cname), de_scatter
-        ), quiet = TRUE))
-    }
-
-    te_hist <- file.path(cdir, "plots", "translation_efficiency_hist.png")
-    if (show_translation_eff && file.exists(te_hist)) {
-        cat(knitr::knit_child(text = sprintf(
-            '```{r rna-prot-te-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-            gsub("[^a-zA-Z0-9]", "", cname), te_hist
-        ), quiet = TRUE))
-    }
-
-    te_scatter <- file.path(cdir, "plots", "translation_efficiency_scatter.png")
-    if (show_translation_eff && file.exists(te_scatter)) {
-        cat(knitr::knit_child(text = sprintf(
-            '```{r rna-prot-tes-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-            gsub("[^a-zA-Z0-9]", "", cname), te_scatter
         ), quiet = TRUE))
     }
 
@@ -666,37 +647,7 @@ figure_legend(paste(
     "absent. Source: rna_protein_log2FC_pairs.csv. Hypothesis-generating."))
 ```
 
-`r if (has_rna_prot && show_translation_eff) "## Translation Efficiency (All Contrasts)"`
-
-```{r rna-prot-te-hist, eval=has_transcriptomics && has_rna_prot && show_translation_eff, results='asis'}
-p <- file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
-} else {
-    cat("*Not produced for this run.*\n\n")
-}
-```
-
-```{r rna-prot-te-hist-legend, eval=has_transcriptomics && has_rna_prot && show_translation_eff && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")), results='asis'}
-figure_legend("Distribution of translation efficiency changes per contrast (protein log2FC - RNA log2FC). Values near 0 indicate transcriptional control; large positive/negative values suggest post-transcriptional regulation.")
-render_commentary("translation_efficiency_hist")
-```
-
-```{r rna-prot-te-scatter, eval=has_transcriptomics && has_rna_prot && show_translation_eff, results='asis'}
-p <- file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
-} else {
-    cat("*Not produced for this run.*\n\n")
-}
-```
-
-```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot && show_translation_eff && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")), results='asis'}
-figure_legend("Translation efficiency scatter plot per contrast comparing RNA and protein fold-changes.")
-render_commentary("translation_efficiency_scatter")
-```
-
-`r if (has_transcriptomics) "---"`
+---
 
 # MultiGSEA, Multi-ORA and Compound Enrichment {.tabset}
 
