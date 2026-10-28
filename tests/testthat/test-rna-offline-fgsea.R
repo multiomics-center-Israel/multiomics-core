@@ -563,9 +563,9 @@ test_that("removing a stale manifest leaves every other output in place", {
     out <- withr::local_tempdir()
     enr <- file.path(out, "Enrichment")
     dir.create(file.path(enr, "GSEA", "KEGG"), recursive = TRUE)
-    keep <- c(file.path(enr, "pathway_c1_KEGG_fgsea.csv"),
-              file.path(enr, "gene_annotation.csv"),
-              file.path(enr, "GSEA", "KEGG", "results.csv"),
+    # pathway_*.csv and gene_annotation.csv are cleared on purpose by
+    # clear_pathway_outputs() (test-clear-pathway-outputs.R), so not listed here.
+    keep <- c(file.path(enr, "GSEA", "KEGG", "results.csv"),
               file.path(out, "enrichment_manifest.csv"))   # same name, outside Enrichment/
     for (f in keep) writeLines("x", f)
     writeLines("analysis,evaluated", file.path(enr, "enrichment_manifest.csv"))
@@ -597,6 +597,12 @@ report_env <- function(enrich_dir, rna_cfg = list()) {
     env$enrich_plot_dir <- file.path(enrich_dir, "plots")
     env$cfg             <- list(modes = list(rna = rna_cfg))
     env$rna_cfg         <- rna_cfg
+    # Set by earlier report chunks: the DE table (absent here, so the dotplot
+    # tabs fall back to contrast_names) and the Methods collection summary.
+    env$de_data         <- NULL
+    env$contrast_names  <- "c1"
+    env$pathway_desc    <- describe_rna_pathway_collections(enrich_dir, rna_cfg$pathway)
+    env$pathway_missing_note <- env$pathway_desc$missing_note
     eval(parse(text = report_chunk("pathway-setup")), envir = env)
     env
 }
