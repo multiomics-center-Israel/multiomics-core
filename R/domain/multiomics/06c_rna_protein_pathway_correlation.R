@@ -32,6 +32,28 @@ resolve_rna_protein_pathway_gmt <- function(config) {
     path
 }
 
+#' Resolve the smallest pathway size for the per-pathway RNA-protein correlation
+#'
+#' The one place that reads
+#' \code{modes$multiomics$rna_protein_correlation$min_pairs}: how many mapped
+#' gene-protein pairs a pathway needs in a contrast before it is scored.
+#'
+#' @param config Full pipeline config.
+#' @return A whole number of at least 3; 11 (pathways with more than 10 pairs)
+#'   when the key is unset.
+resolve_rna_protein_pathway_min_pairs <- function(config) {
+    n <- config$modes$multiomics$rna_protein_correlation$min_pairs
+    if (is.null(n)) return(11L)
+    # cor.test needs three points; below that a pathway has no Pearson p-value.
+    if (length(n) != 1 || !is.numeric(n) || is.na(n) || n < 3 || n != round(n)) {
+        stop("modes$multiomics$rna_protein_correlation$min_pairs must be one whole ",
+             "number of at least 3 (the pairs a pathway needs to be scored); got ",
+             paste(format(n), collapse = ", "), ". Leave it unset for the default 11.",
+             call. = FALSE)
+    }
+    as.integer(n)
+}
+
 #' Correlate RNA and protein log2FC within each pathway
 #'
 #' Pairs join pathways on gene symbol, compared upper-cased. Each gene-protein
@@ -147,7 +169,8 @@ write_pathway_rna_protein_correlation <- function(pairs, config, out_dir) {
         message("  Pathway RNA-protein correlation: no pathway_gmt set, skipped")
         return(invisible(NULL))
     }
-    res <- compute_pathway_rna_protein_correlation(pairs, read_gmt(gmt))
+    res <- compute_pathway_rna_protein_correlation(
+        pairs, read_gmt(gmt), min_pairs = resolve_rna_protein_pathway_min_pairs(config))
     if (nrow(res$stats) == 0) {
         message("  Pathway RNA-protein correlation: no pathway has enough ",
                 "mapped pairs in ", basename(gmt), ", nothing written")

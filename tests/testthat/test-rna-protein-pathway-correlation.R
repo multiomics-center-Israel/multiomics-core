@@ -77,6 +77,16 @@ test_that("pathway_gmt unset means the view is skipped", {
     expect_error(resolve_rna_protein_pathway_gmt(cfg), "takes one GMT")
 })
 
+test_that("min_pairs comes from config, defaults to 11 and rejects bad values", {
+    mo <- function(x) list(modes = list(multiomics = list(rna_protein_correlation = x)))
+    expect_identical(resolve_rna_protein_pathway_min_pairs(mo(list())), 11L)
+    expect_identical(resolve_rna_protein_pathway_min_pairs(mo(list(min_pairs = 25))), 25L)
+    for (bad in list(2, 10.5, "11", c(11, 12), NA_real_)) {
+        expect_error(resolve_rna_protein_pathway_min_pairs(mo(list(min_pairs = bad))),
+                     "whole number of at least 3")
+    }
+})
+
 test_that("the report reads the written tables instead of recomputing", {
     rmd <- file.path(root_dir, "R", "domain", "multiomics", "report_template_multiomics.Rmd")
     src <- paste(readLines(rmd), collapse = "\n")
