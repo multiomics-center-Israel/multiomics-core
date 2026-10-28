@@ -7,7 +7,6 @@
 #' This module provides:
 #'   1. Per-gene expression correlation (abundance vs abundance)
 #'   2. Differential concordance (log2FC vs log2FC)
-#'   3. Translation efficiency analysis
 #'
 #' @name rna_protein_correlation
 NULL
@@ -441,42 +440,6 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 
     ggplot2::ggsave(file.path(out_dir, "plots", "rna_protein_de_scatter.png"),
                     p, width = 14, height = 7, dpi = 300)
-
-    # Combined TE histogram
-    p_te <- ggplot2::ggplot(combined, ggplot2::aes(x = te_log2FC)) +
-        ggplot2::geom_histogram(bins = 40, fill = "darkcyan", color = "white", alpha = 0.8) +
-        ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
-        ggplot2::facet_wrap(~ contrast, scales = "free_y") +
-        ggplot2::theme_minimal() +
-        ggplot2::labs(
-            title = "Translation Efficiency Changes by Contrast",
-            subtitle = "log2(TE) = log2(Protein FC) - log2(RNA FC)",
-            x = "TE log2 Fold Change",
-            y = "Count"
-        )
-    ggplot2::ggsave(file.path(out_dir, "plots", "translation_efficiency_hist.png"),
-                    p_te, width = 14, height = 6)
-
-    # Combined TE scatter
-    p_te2 <- ggplot2::ggplot(combined, ggplot2::aes(x = rna_log2FC, y = protein_log2FC,
-                                                     color = te_log2FC)) +
-        ggplot2::geom_hline(yintercept = 0, color = "gray90") +
-        ggplot2::geom_vline(xintercept = 0, color = "gray90") +
-        ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
-        ggplot2::geom_point(alpha = 0.7, size = 1.5) +
-        ggplot2::scale_color_gradient2(
-            low = "blue", mid = "grey90", high = "red",
-            midpoint = 0, name = "log2(TE)"
-        ) +
-        ggplot2::facet_wrap(~ contrast, scales = "free") +
-        ggplot2::theme_minimal() +
-        ggplot2::labs(
-            title = "Translation Efficiency by Contrast",
-            x = "RNA log2 Fold Change",
-            y = "Protein log2 Fold Change"
-        )
-    ggplot2::ggsave(file.path(out_dir, "plots", "translation_efficiency_scatter.png"),
-                    p_te2, width = 14, height = 7, dpi = 300)
 }
 
 
@@ -484,8 +447,7 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 #'
 #' Pairs the two layers with \code{build_rna_protein_pairs()}, the single join
 #' shared with \code{analyze_rna_protein_concordance()}, then adds the
-#' significance category, sign agreement and translation-efficiency columns this
-#' path reports.
+#' significance category and sign agreement columns this path reports.
 #'
 #' @param rna_de RNA DE table (must have feature_id and log2FC columns).
 #' @param prot_de Protein DE/DA table (must have feature_id and log2FC columns).
@@ -494,7 +456,7 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 #' @param out_dir Output directory; NULL writes nothing.
 #' @param contrast_label Contrast name used in plot titles.
 #' @return Data frame with gene_id, protein_id, both log2FCs and padj values,
-#'   category, concordant and te_log2FC; NULL when nothing joins.
+#'   category and concordant; NULL when nothing joins.
 compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
                                    contrast_label = NULL) {
 
@@ -580,9 +542,6 @@ compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
                        use = "complete.obs")
     }
 
-    # Translation efficiency
-    de_merged$te_log2FC <- de_merged$protein_log2FC - de_merged$rna_log2FC
-
     message("  DE concordance: r = ", round(cor_all, 3),
             ", ", sum(de_merged$concordant), "/", nrow(de_merged), " concordant")
 
@@ -596,10 +555,6 @@ compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
 
         write.csv(de_merged,
                   file.path(out_dir, "tables", "rna_protein_de_concordance.csv"),
-                  row.names = FALSE)
-
-        write.csv(de_merged[, c("gene_symbol", "rna_log2FC", "protein_log2FC", "te_log2FC", "category")],
-                  file.path(out_dir, "tables", "translation_efficiency.csv"),
                   row.names = FALSE)
 
         # Scatter plot
@@ -635,47 +590,6 @@ compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
 
         ggplot2::ggsave(file.path(out_dir, "plots", "rna_protein_de_scatter.png"),
                         p1, width = 8, height = 7, dpi = 300)
-
-        # TE histogram
-        p2 <- ggplot2::ggplot(de_merged, ggplot2::aes(x = te_log2FC)) +
-            ggplot2::geom_histogram(bins = 40, fill = "darkcyan", color = "white", alpha = 0.8) +
-            ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
-            ggplot2::theme_minimal() +
-            ggplot2::labs(
-                title = paste0("Distribution of Translation Efficiency Changes",
-                               if (!is.null(contrast_label)) paste0(" (", contrast_label, ")") else ""),
-                subtitle = "log2(TE) = log2(Protein FC) - log2(RNA FC)",
-                x = "TE log2 Fold Change",
-                y = "Count"
-            )
-        ggplot2::ggsave(file.path(out_dir, "plots", "translation_efficiency_hist.png"),
-                        p2, width = 8, height = 6)
-
-        # TE scatter
-        te_cor <- cor(de_merged$rna_log2FC, de_merged$protein_log2FC, use = "complete.obs")
-        te_subtitle <- paste0(
-            "r = ", round(te_cor, 3),
-            " | Red = protein > RNA (high TE), Blue = protein < RNA (low TE)"
-        )
-
-        p3 <- ggplot2::ggplot(de_merged, ggplot2::aes(x = rna_log2FC, y = protein_log2FC, color = te_log2FC)) +
-            ggplot2::geom_hline(yintercept = 0, color = "gray90") +
-            ggplot2::geom_vline(xintercept = 0, color = "gray90") +
-            ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
-            ggplot2::geom_point(alpha = 0.7, size = 1.5) +
-            ggplot2::scale_color_gradient2(
-                low = "blue", mid = "grey90", high = "red",
-                midpoint = 0, name = "log2(TE)\n(Prot FC - RNA FC)"
-            ) +
-            ggplot2::theme_minimal() +
-            ggplot2::labs(
-                title = "Translation Efficiency: RNA vs Protein log2FC",
-                subtitle = te_subtitle,
-                x = "RNA log2 Fold Change",
-                y = "Protein log2 Fold Change"
-            )
-        ggplot2::ggsave(file.path(out_dir, "plots", "translation_efficiency_scatter.png"),
-                        p3, width = 8, height = 7, dpi = 300)
     }
 
     de_merged
