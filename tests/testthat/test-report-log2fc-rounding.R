@@ -220,3 +220,18 @@ test_that("the pipeline summary and AI commentary no longer rebuild log2FC inlin
                     label = paste("resolve_log2fc() used in", chk$rel))
     }
 })
+
+test_that("the multiomics RNA-protein extractors carry the stored log2FC", {
+    de <- list(summary_df = borderline_summary())
+    expect_equal(.extract_de_table(de)$log2FC, borderline$`log2FC.imputs.C_vs_V`)
+    expect_equal(normalize_de_for_concordance(de, "proteomics")$logFC,
+                 borderline$`log2FC.imputs.C_vs_V`)
+})
+
+test_that("the multiomics extractors still convert linearFC when log2FC is absent", {
+    de <- list(summary_df = borderline_summary()[, c("FeatureID", "linearFC.imputs.C_vs_V",
+                                                     "padj.imputs.C_vs_V")])
+    expected <- signed_fc_to_log2(borderline$`linearFC.imputs.C_vs_V`)
+    expect_equal(.extract_de_table(de)$log2FC, expected)
+    expect_equal(normalize_de_for_concordance(de, "proteomics")$logFC, expected)
+})

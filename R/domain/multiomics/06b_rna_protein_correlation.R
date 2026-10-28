@@ -715,12 +715,13 @@ compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
         id_col <- if ("FeatureID" %in% colnames(df)) "FeatureID" else if ("ID" %in% colnames(df)) "ID" else NULL
 
         if (length(fc_cols) > 0 && !is.null(id_col)) {
+            contrast <- sub("^linearFC\\.(imputs\\.)?", "", fc_cols[1])
             out <- data.frame(
                 feature_id = df[[id_col]],
-                # linearFC is a SIGNED linear ratio: -1/2^x where the change is
-                # negative. A plain log2() returns NaN for every down-regulated
-                # feature, which silently halved the proteome reaching the join.
-                log2FC = signed_fc_to_log2(df[[fc_cols[1]]]),
+                # linearFC is written with signif(x, 3), so rebuilding log2 from
+                # it shifts every value by up to ~0.007; the stored log2FC is
+                # what the proteomics tables report.
+                log2FC = resolve_log2fc(df, contrast),
                 stringsAsFactors = FALSE
             )
             if (length(padj_cols) > 0) out$padj <- df[[padj_cols[1]]]
