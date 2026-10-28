@@ -268,12 +268,12 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         if (!is.null(annot_cols)) {
             # Use configured annotation columns
             annot <- meta[, annot_cols, drop = FALSE]
-            rownames(annot) <- meta[[cfg$effects$samples]]
+            rownames(annot) <- rna_heatmap_sample_ids(meta, cfg)
         } else {
             # Fallback to primary color
             annot <- data.frame(
                 Condition = meta[[primary_color]],
-                row.names = meta[[cfg$effects$samples]]
+                row.names = rna_heatmap_sample_ids(meta, cfg)
             )
         }
 

@@ -210,3 +210,25 @@ compute_tpm <- function(counts, gene_lengths_bp) {
     rownames(tpm) <- common
     tpm
 }
+
+#' Sample IDs for the rows of a QC heatmap annotation
+#'
+#' The QC heatmaps name annotation rows by sample so they line up with the
+#' matrix columns. \code{effects$samples} is often unset, so this falls back to
+#' the column the DE step aligned on, then \code{id_columns$sample_col}
+#' (default "SampleID"), and to \code{rownames(meta)} when the metadata has no
+#' such column -- as the DE runners do.
+#'
+#' @param meta Sample metadata data frame.
+#' @param cfg The \code{modes$rna} config block.
+#' @param de_sample_col Sample column recorded by the DE step
+#'   (\code{de_res$info$sample_col}), or NULL before DE.
+#' @return Character vector of sample IDs, one per row of \code{meta}.
+#' @examples
+#' meta <- data.frame(SampleID = c("S1", "S2"), Group = c("A", "B"))
+#' rna_heatmap_sample_ids(meta, list())
+rna_heatmap_sample_ids <- function(meta, cfg, de_sample_col = NULL) {
+    col <- cfg$effects$samples %||% de_sample_col %||%
+        cfg$id_columns$sample_col %||% "SampleID"
+    if (col %in% colnames(meta)) as.character(meta[[col]]) else rownames(meta)
+}

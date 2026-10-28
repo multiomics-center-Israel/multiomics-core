@@ -117,3 +117,14 @@ test_that("read_rna_pca_transform_labels falls back when the file is missing", {
     expect_identical(labels[["work"]], "Normalized expression")
     expect_identical(labels[["vst"]], "DESeq2 VST (blind)")
 })
+
+test_that("heatmap sample IDs fall back when effects$samples is unset", {
+    meta <- data.frame(SampleID = c("S1", "S2"), Lib = c("L1", "L2"),
+                       Group = c("A", "B"), row.names = c("r1", "r2"))
+    expect_identical(rna_heatmap_sample_ids(meta, list()), c("S1", "S2"))
+    expect_identical(rna_heatmap_sample_ids(meta, list(effects = list(samples = "Lib"))),
+                     c("L1", "L2"))
+    expect_identical(rna_heatmap_sample_ids(meta, list(), de_sample_col = "Lib"), c("L1", "L2"))
+    # No such column: rownames, as the DE runners use.
+    expect_identical(rna_heatmap_sample_ids(meta[, c("Lib", "Group")], list()), c("r1", "r2"))
+})

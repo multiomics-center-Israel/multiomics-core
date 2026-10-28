@@ -182,17 +182,7 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
                 # Replace NaN/Inf with 0 (NaN from SD=0, Inf from near-zero SD)
                 m_z[!is.finite(m_z)] <- 0
 
-                # Sample IDs for the annotation rows. effects$samples is often
-                # unset; fall back to the column the DE step aligned on, and to
-                # rownames(meta) when the metadata has no such column, as the
-                # DE runners do.
-                hm_sample_col <- cfg$effects$samples %||% de_res$info$sample_col %||%
-                    cfg$id_columns$sample_col
-                hm_sample_ids <- if (!is.null(hm_sample_col) && hm_sample_col %in% colnames(meta)) {
-                    meta[[hm_sample_col]]
-                } else {
-                    rownames(meta)
-                }
+                hm_sample_ids <- rna_heatmap_sample_ids(meta, cfg, de_res$info$sample_col)
 
                 # Build column annotation, validating columns exist in meta
                 annot_cols <- cfg$effects$heatmap_annotations %||% NULL
