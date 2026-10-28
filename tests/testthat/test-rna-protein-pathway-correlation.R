@@ -17,9 +17,9 @@ make_pairs <- function(n, slope, prefix, contrast = "A_vs_B", seed = 1) {
 }
 
 pairs <- rbind(make_pairs(60, 1, "POS"), make_pairs(60, -1, "NEG", seed = 2),
-               make_pairs(50, 1, "SMALL", seed = 3))
+               make_pairs(10, 1, "SMALL", seed = 3))
 gene_sets <- list(hsaPOS = paste0("POS", 1:60), hsaNEG = paste0("NEG", 1:60),
-                  hsaSMALL = paste0("SMALL", 1:50), hsaNONE = c("ABSENT1", "ABSENT2"))
+                  hsaSMALL = paste0("SMALL", 1:10), hsaNONE = c("ABSENT1", "ABSENT2"))
 attr(gene_sets, "descriptions") <- c(hsaPOS = "Positive set", hsaNEG = "Negative set",
                                      hsaSMALL = "Small set", hsaNONE = "Absent set")
 
@@ -31,12 +31,12 @@ test_that("pathways are ordered from most positive to most negative r", {
     expect_identical(res$stats$pathway_name, c("Positive set", "Negative set"))
 })
 
-test_that("the default keeps only pathways with more than 50 pairs", {
+test_that("the default keeps only pathways with more than 10 pairs", {
     res <- compute_pathway_rna_protein_correlation(pairs, gene_sets)
     expect_false("hsaSMALL" %in% res$stats$pathway_id)
-    expect_true(all(res$stats$n_pairs > 50))
-    res50 <- compute_pathway_rna_protein_correlation(pairs, gene_sets, min_pairs = 50)
-    expect_true("hsaSMALL" %in% res50$stats$pathway_id)
+    expect_true(all(res$stats$n_pairs > 10))
+    res10 <- compute_pathway_rna_protein_correlation(pairs, gene_sets, min_pairs = 10)
+    expect_true("hsaSMALL" %in% res10$stats$pathway_id)
 })
 
 test_that("the statistics match cor.test on the member pairs", {
