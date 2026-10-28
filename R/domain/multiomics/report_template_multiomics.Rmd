@@ -647,7 +647,7 @@ figure_legend(paste(
     "absent. Source: rna_protein_log2FC_pairs.csv. Hypothesis-generating."))
 ```
 
----
+`r if (has_transcriptomics) "---"`
 
 # MultiGSEA, Multi-ORA and Compound Enrichment {.tabset}
 
