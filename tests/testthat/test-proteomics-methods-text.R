@@ -117,6 +117,8 @@ test_that("batch correction describes the real matrix contract", {
     txt <- blocks_for(batch_correction = list(method = "combat",
                                               batch_col = "Plate"))$data_processing
     expect_match(txt, "ComBat", fixed = TRUE)
+    expect_match(txt, "Batch effects were corrected with ComBat for the batch column Plate.",
+                 fixed = TRUE)
     expect_match(txt, "single-imputed complete matrix", fixed = TRUE)
     expect_match(txt, "quality control and clustering use the corrected values", fixed = TRUE)
     expect_match(txt, "measured values are not altered", fixed = TRUE)
@@ -215,8 +217,13 @@ test_that("covariate mode says the model saw uncorrected data with batch in it",
     none <- blocks_for(batch_correction = list(method = "none", batch_col = "Plate",
                                                de_mode = "covariate"))
     expect_false(grepl("Batch effects", none$data_processing, fixed = TRUE))
-    expect_match(none$differential, "included Plate as an additive batch covariate",
+    expect_match(none$data_processing,
+                 "No batch correction was applied to the expression values", fixed = TRUE)
+    expect_match(none$differential,
+                 "included Plate as an additive batch covariate and was fitted on uncorrected values",
                  fixed = TRUE)
+    # Nothing about batch at all when neither decision involves it.
+    expect_false(grepl("batch", blocks_for()$data_processing, ignore.case = TRUE))
 
     # make_imputations_proteomics() leaves NAs in place under method "none", so
     # no mode may claim the model input was re-imputed.

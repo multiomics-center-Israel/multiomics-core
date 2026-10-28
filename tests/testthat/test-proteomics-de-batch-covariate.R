@@ -354,6 +354,22 @@ test_that("legacy_corrected fits on the corrected values with measured missingne
                  "no batch correction ran")
 })
 
+test_that("the resolved de_mode is logged, including when the YAML says null", {
+    skip_if_not_installed("limma")
+    fx  <- make_batch_fixture()
+    pre <- make_de_pre(fx)
+    log_for <- function(cfg) {
+        testthat::capture_messages(mod_proteomics_de(
+            pre = pre, inputs = list(contrasts = fx$contrasts_df), config = cfg))
+    }
+    m <- log_for(batch_cfg(de_mode = NULL, method = "combat"))
+    expect_true(any(grepl(paste0("de_mode 'covariate' (resolved from de_mode: null) -- ",
+                                 "batch column 'Batch' in the limma design, fitted on ",
+                                 "uncorrected values"), m, fixed = TRUE)))
+    m2 <- log_for(batch_cfg(de_mode = "none", method = "combat"))
+    expect_true(any(grepl("de_mode 'none' -- batch is not in the DE model", m2, fixed = TRUE)))
+})
+
 test_that("de_mode none fits the measured values without a batch term", {
     skip_if_not_installed("limma")
     fx  <- make_batch_fixture()

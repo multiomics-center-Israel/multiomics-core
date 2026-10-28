@@ -422,8 +422,9 @@ methods_de_phrase <- function(de_cfg, method, batch_col = NULL) {
         # configured covariate is one that was fitted.
         if (!is.null(batch_col) && nzchar(batch_col)) {
             s <- paste0(s, sprintf(paste0(
-                " The design included %s as an additive batch covariate, so contrasts ",
-                "between conditions were estimated adjusting for batch."), batch_col))
+                " The design included %s as an additive batch covariate and was fitted on ",
+                "uncorrected values, so contrasts between conditions were estimated ",
+                "adjusting for batch."), batch_col))
         }
         bc <- de_cfg$block_col
         if (!is.null(bc) && nzchar(bc)) {
@@ -708,10 +709,15 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     if (bc$corrects) {
         bc_name <- if (identical(bc_m, "combat")) "ComBat" else
                    if (identical(bc_m, "probatch")) "proBatch" else bc_m
+        # resolve_batch_variable() stops without a batch column, so a correction
+        # that ran always had one; the guard only keeps partial configs readable.
+        bc_col <- if (!is.null(bc$batch_col) && nzchar(bc$batch_col)) {
+            sprintf(" for the batch column %s", bc$batch_col)
+        } else ""
         dp <- paste(dp, sprintf(paste0(
-            "Batch effects were corrected with %s. The correction was estimated and applied on ",
+            "Batch effects were corrected with %s%s. The correction was estimated and applied on ",
             "the single-imputed complete matrix, and quality control and clustering use the ",
-            "corrected values; measured values are not altered."), bc_name))
+            "corrected values; measured values are not altered."), bc_name, bc_col))
         if (identical(bc_m, "probatch")) {
             dp <- paste(dp, paste0(
                 "proBatch median-centering does not model the biological condition, so ",
@@ -735,6 +741,12 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                     ". This treats the variation removed by the correction as if it cost no ",
                     "degrees of freedom, so p-values may be anti-conservative.")))
         }
+    } else if (batch_in_model) {
+        # Batch modelled without a QC correction: say so, rather than leave the
+        # reader to infer it from silence.
+        dp <- paste(dp, paste0(
+            "No batch correction was applied to the expression values; batch was ",
+            "accounted for in the differential-abundance model only."))
     }
 
     # ---- Missing values -----------------------------------------------------
