@@ -1319,6 +1319,34 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 }
 ```
 
+```{r batch-design-setup, include=FALSE}
+# Written by mod_proteomics_exports() from de_res$batch_design when limma
+# modelled batch, and removed there otherwise, so their presence is this
+# run's evidence. The resolver check keeps a precomputed run from showing them.
+.bd_cells_file <- file.path(datasets_dir, "batch_design_cells.tsv")
+.bd_contr_file <- file.path(datasets_dir, "batch_design_contrasts.tsv")
+.show_batch_design <- file.exists(.bd_cells_file) && file.exists(.bd_contr_file) &&
+    identical(get_proteomics_batch_config(prot_cfg)$de_mode, "covariate")
+```
+
+`r if (!.show_batch_design) "<!--"`
+
+### Batch in the DE model
+
+```{r batch-design-cells, eval=.show_batch_design, results='asis'}
+cat("Batch entered the limma model as an additive covariate, fitted on the uncorrected values. The table counts samples per condition and batch; a zero means that condition is absent from that batch.\n\n")
+make_dt(read.delim(.bd_cells_file, check.names = FALSE, stringsAsFactors = FALSE),
+        "Samples per condition and batch")
+```
+
+```{r batch-design-contrasts, eval=.show_batch_design, results='asis'}
+cat("Per contrast: the batches holding both sides of the comparison, and how much adjusting for batch widens the standard error relative to a condition-only design. The 1.5 note on that ratio is a heuristic for where to look, not a validity criterion.\n\n")
+make_dt(read.delim(.bd_contr_file, check.names = FALSE, stringsAsFactors = FALSE),
+        "Batch design diagnostics")
+```
+
+`r if (!.show_batch_design) "-->"`
+
 ```{r de-overlap-cond, include=FALSE}
 .show_overlap <- !is.null(de_data) && length(contrast_names) >= 2
 ```
@@ -4210,6 +4238,12 @@ adv_stats_enabled <- isTRUE(prot_cfg$advanced_stats$enabled)
 
 ```{r adv-stats-intro, eval=has_adv_stats, results='asis'}
 cat("Advanced statistical analyses provide supplementary metrics including effect size confidence intervals, robust regression estimates, and statistical power calculations. These complement the primary differential expression results by quantifying uncertainty and detection sensitivity.\n\n")
+# correct_batch_proteomics() either applies a configured correction or stops,
+# so the resolved config is the runtime state here. The analyses below read the
+# corrected QC matrix (07_mod_advanced_stats.R) and model no batch term.
+if (isTRUE(get_proteomics_batch_config(prot_cfg)$corrects)) {
+    cat("<div class='alert alert-warning'><strong>Caveat:</strong> these analyses were computed on a single imputation of the batch-corrected matrix, without a batch term in their models. Their intervals and p-values are not batch-adjusted inference and can be overconfident; the differential-abundance results above are the inferential results.</div>\n\n")
+}
 ```
 
 ## Effect Sizes

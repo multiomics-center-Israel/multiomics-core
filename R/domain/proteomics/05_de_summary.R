@@ -278,11 +278,11 @@ resolve_de_block <- function(meta_aligned, p_cfg, sample_col) {
 
 #' Resolve the batch covariate for a limma proteomics fit
 #'
-#' Returns the batch label per sample when `batch_correction.de_mode` is
-#' `"covariate"`, or NULL otherwise. The mode and column are read through
-#' `get_proteomics_batch_config()`, the same resolver the batch-correction step
-#' and the report use, so the three cannot disagree about whether batch is in
-#' the model.
+#' Returns the batch label per sample when `batch_correction.de_mode` resolves
+#' to `"covariate"`, or NULL otherwise. The mode and column are read through
+#' `get_proteomics_batch_config()`, the same resolver the batch-correction step,
+#' validation and the report use, so none of them can disagree about whether
+#' batch is in the model.
 #'
 #' @param meta_aligned Sample metadata, already ordered to match the expression
 #'   matrix columns.
@@ -303,11 +303,6 @@ resolve_de_batch_covariate <- function(meta_aligned, p_cfg) {
              "the sample metadata.\n",
              "  Available columns: ", paste(colnames(meta_aligned), collapse = ", "))
     }
-    if (identical(p_cfg$de$block_col, batch_col)) {
-        stop("'", batch_col, "' is both de$block_col and the batch covariate.\n",
-             "  Model it once: keep de_mode 'covariate' for a fixed batch term, or drop ",
-             "de_mode and keep de$block_col for duplicateCorrelation blocking.")
-    }
 
     batch <- factor(meta_aligned[[batch_col]])
     if (anyNA(batch)) {
@@ -318,7 +313,7 @@ resolve_de_batch_covariate <- function(meta_aligned, p_cfg) {
     if (nlevels(batch) < 2) {
         stop("Batch column '", batch_col, "' has a single level, so there is no batch ",
              "to model.\n",
-             "  Set batch_correction$de_mode back to 'corrected', or point batch_col at ",
+             "  Set batch_correction$de_mode to 'none', or point batch_col at ",
              "a column that varies across samples.")
     }
     batch
@@ -328,9 +323,8 @@ resolve_de_batch_covariate <- function(meta_aligned, p_cfg) {
 #'
 #' One column per condition (no intercept), so the contrasts can name condition
 #' levels directly, plus treatment-coded batch columns when a batch covariate is
-#' given. Refuses a design in which batch is confounded with condition, or that
-#' leaves no residual degrees of freedom: limma would otherwise fit it and return
-#' NA or meaningless coefficients without stopping.
+#' given. Builds only; [assess_batch_design()] decides whether the result can
+#' be fitted.
 #'
 #' @param group Factor of condition labels, levels already made syntactic.
 #' @param batch Factor of batch labels, or NULL for a condition-only design.
@@ -342,25 +336,150 @@ build_proteomics_de_design <- function(group, batch = NULL) {
     if (is.null(batch)) return(design)
 
     batch_mat <- stats::model.matrix(~ batch)[, -1, drop = FALSE]
-    # unique = TRUE renames only the later (batch) columns on a clash, so the
-    # condition names the contrasts refer to are never touched.
     colnames(batch_mat) <- paste0("batch_", levels(batch)[-1])
     design <- cbind(design, batch_mat)
+    # unique = TRUE renames only the later (batch) columns on a clash, so the
+    # condition names the contrasts refer to are never touched.
     colnames(design) <- make.names(colnames(design), unique = TRUE)
+    design
+}
+
+#' Heuristic threshold for the batch-adjustment SE inflation diagnostic
+#'
+#' Not a validity criterion: a contrast above it is still estimated correctly,
+#' only less precisely than it would be without batch in the model. It marks
+#' where a reader should look at the group x batch table.
+#' @noRd
+batch_se_inflation_note_at <- function() 1.5
+
+#' Check a design with a batch term and describe its group x batch structure
+#'
+#' Stops when the design cannot be fitted, naming the actual reason:
+#'
+#'   * rank deficiency. limma would silently drop an aliased column and still
+#'     report a contrast, so a full-rank design is required. The message says
+#'     which design columns are aliased and which requested contrasts are not
+#'     estimable at all (not in the row space of the design); a contrast can be
+#'     estimable while the design is rank-deficient, and is still refused.
+#'   * no residual degrees of freedom.
+#'   * `block` partitioning the samples exactly as `batch` does: the same
+#'     variable would enter once as a fixed and once as a random effect.
+#'
+#' Otherwise returns the diagnostics, which never stop the run: the group x
+#' batch counts, and per contrast whether any batch holds both sides and how
+#' much adjusting for batch inflates its standard error (the 1.5 note is a
+#' heuristic, see [batch_se_inflation_note_at()]).
+#'
+#' @param design Design from [build_proteomics_de_design()] with a batch term.
+#' @param contrast_matrix limma contrast matrix with `rownames == colnames(design)`.
+#' @param group Factor of condition labels per sample.
+#' @param batch Factor of batch labels per sample.
+#' @param block Factor from [resolve_de_block()], or NULL.
+#' @return A list: `cells` (data.frame, one row per condition, one count column
+#'   per batch), `contrasts` (data.frame: `Contrast`, `Shared_batches`,
+#'   `SE_inflation`, `Note`), `df_residual` and `notes` (design-level notes;
+#'   character, possibly empty).
+assess_batch_design <- function(design, contrast_matrix, group, batch, block = NULL) {
+    if (!is.null(block)) {
+        tab_bb <- table(block, batch) > 0
+        if (all(rowSums(tab_bb) == 1) && all(colSums(tab_bb) == 1)) {
+            stop("de$block_col groups the samples exactly as the batch column does, so ",
+                 "the same variable would enter once as a fixed and once as a random effect.\n",
+                 "  Keep it as the batch covariate (fixed) or as de$block_col ",
+                 "(duplicateCorrelation), not both.")
+        }
+    }
 
     non_est <- limma::nonEstimable(design)
     if (!is.null(non_est)) {
-        stop("Batch is confounded with condition, so their effects cannot be separated.\n",
-             "  Non-estimable design column(s): ", paste(non_est, collapse = ", "), "\n",
-             "  Each batch must contain more than one condition. If it does not, batch ",
-             "cannot be modelled; set batch_correction$de_mode to 'corrected' or remove it.")
+        # A contrast c is estimable iff it lies in the row space of the design,
+        # i.e. regressing c on the columns of t(design) leaves no residual.
+        qr_rows <- qr(t(design))
+        lost <- colnames(contrast_matrix)[apply(contrast_matrix, 2, function(cvec) {
+            max(abs(qr.resid(qr_rows, cvec))) > 1e-8
+        })]
+        cells <- table(group, batch)
+        stop("The design with batch is rank-deficient: column(s) ",
+             paste(non_est, collapse = ", "), " are aliased with others, so batch and ",
+             "condition cannot both be estimated.\n",
+             "  Conditions per batch: ",
+             paste(sprintf("%s = {%s}", colnames(cells),
+                           apply(cells, 2, function(x) paste(rownames(cells)[x > 0], collapse = ", "))),
+                   collapse = "; "), "\n",
+             if (length(lost) > 0) {
+                 paste0("  Contrast(s) that are not estimable in this design: ",
+                        paste(lost, collapse = ", "), ".\n")
+             } else {
+                 paste0("  Every requested contrast is estimable in principle, but a ",
+                        "full-rank design is required here.\n")
+             },
+             "  Batch can be modelled only when the batches share conditions. Otherwise ",
+             "set batch_correction$de_mode to 'none', or to 'legacy_corrected' to fit on ",
+             "batch-corrected values.")
     }
-    if (nrow(design) <= ncol(design)) {
+
+    df_residual <- nrow(design) - ncol(design)
+    if (df_residual < 1) {
         stop("The design with batch has ", ncol(design), " columns for ", nrow(design),
              " samples, leaving no residual degrees of freedom.\n",
-             "  limma cannot estimate variances; model fewer batches or drop de_mode 'covariate'.")
+             "  limma cannot estimate variances; model fewer batches, or set ",
+             "batch_correction$de_mode to 'none'.")
     }
-    design
+
+    cells <- as.data.frame.matrix(table(group, batch))
+    cells <- data.frame(Condition = rownames(cells), cells, check.names = FALSE,
+                        row.names = NULL, stringsAsFactors = FALSE)
+
+    # Unscaled SE of each contrast with and without the batch term. Both designs
+    # are full rank (checked above; dropping columns keeps it), so solve() is safe.
+    grp_cols <- levels(group)
+    xtx_inv  <- solve(crossprod(design))
+    xtx0_inv <- solve(crossprod(design[, grp_cols, drop = FALSE]))
+    contrasts <- do.call(rbind, lapply(colnames(contrast_matrix), function(cn) {
+        cvec <- contrast_matrix[, cn]
+        c0 <- cvec[grp_cols]
+        inflation <- sqrt(drop(t(cvec) %*% xtx_inv %*% cvec) /
+                          drop(t(c0) %*% xtx0_inv %*% c0))
+        num <- group %in% grp_cols[c0 > 0]
+        den <- group %in% grp_cols[c0 < 0]
+        shared <- levels(batch)[vapply(levels(batch), function(b) {
+            any(num & batch == b) && any(den & batch == b)
+        }, logical(1))]
+        note <- c(
+            if (length(shared) == 0) {
+                paste0("No batch holds both sides of this contrast; it is estimated only ",
+                       "through the additive batch model via other conditions.")
+            },
+            if (inflation > batch_se_inflation_note_at()) {
+                sprintf(paste0("Adjusting for batch inflates the standard error %.2f-fold ",
+                               "(heuristic note above %.1f; not an error)."),
+                        inflation, batch_se_inflation_note_at())
+            }
+        )
+        data.frame(Contrast = cn,
+                   Shared_batches = paste(shared, collapse = ", "),
+                   SE_inflation = round(inflation, 3),
+                   Note = paste(note, collapse = " "),
+                   stringsAsFactors = FALSE)
+    }))
+
+    notes <- c(
+        if (any(cells[, -1] == 0)) {
+            "Some condition x batch cells are empty; see the group x batch table."
+        },
+        if (df_residual < 3) {
+            sprintf(paste0("The design with batch leaves %d residual degree(s) of freedom; ",
+                           "variance estimates rest heavily on the empirical Bayes prior."),
+                    df_residual)
+        },
+        if (!is.null(block) && any(colSums(table(block, batch) > 0) < 2)) {
+            paste0("At least one batch holds a single de$block_col level, so its batch ",
+                   "effect is estimated from that block alone.")
+        }
+    )
+
+    list(cells = cells, contrasts = contrasts, df_residual = df_residual,
+         notes = as.character(notes))
 }
 
 #' Run limma differential analysis for proteomics with contrast support
@@ -377,9 +496,11 @@ build_proteomics_de_design <- function(group, batch = NULL) {
 #' spends one residual degree of freedom per block and leaves little power in
 #' the small-n designs typical of proteomics.
 #'
-#' When `batch_correction.de_mode` is `"covariate"`, batch is added to the design
-#' as a fixed additive term (see [build_proteomics_de_design()]). The caller is
-#' then expected to pass uncorrected values, which `mod_proteomics_de()` does.
+#' When `batch_correction.de_mode` resolves to `"covariate"`, batch is added to
+#' the design as a fixed additive term (see [build_proteomics_de_design()]),
+#' checked by [assess_batch_design()]. `de$block_col` stays a separate,
+#' random-effect concept and can be combined with it. The caller passes the
+#' measured (uncorrected) values, which `mod_proteomics_de()` does.
 #'
 #' @param expr_imp Numeric matrix of imputed abundances, features x samples.
 #' @param meta Sample metadata; one row per column of `expr_imp`.
@@ -387,7 +508,9 @@ build_proteomics_de_design <- function(group, batch = NULL) {
 #'   Numerator and Denominator columns.
 #' @param prot_tbl Feature annotation table keyed by the protein ID column.
 #' @param cfg Full pipeline config (the `modes$proteomics` branch is used).
-#' @return A list with aligned metadata, design matrix, contrasts, fitted model and per-contrast DE tables.
+#' @return A list with aligned metadata, design matrix, contrasts, fitted model,
+#'   per-contrast DE tables, and `batch_design` ([assess_batch_design()] output,
+#'   NULL when batch is not modelled).
 #' @export
 run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     p_cfg <- cfg$modes$proteomics
@@ -425,6 +548,13 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     colnames(contrast_matrix) <- names(contrast_formulas)
 
     block <- resolve_de_block(meta_aligned, p_cfg, sample_col)
+    # Depends on meta only, so it is identical for every imputation run;
+    # mod_proteomics_de() surfaces it once.
+    batch_design <- if (!is.null(batch)) {
+        assess_batch_design(design, contrast_matrix, meta_aligned[[group_col]], batch, block)
+    }
+    # duplicateCorrelation() and lmFit() below receive the full design, batch
+    # included, so a within-block correlation is estimated after batch adjustment.
     if (is.null(block)) {
         fit <- limma::lmFit(expr_imp, design)
         block_correlation <- NA_real_
@@ -493,7 +623,8 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
         contrast_formulas = contrast_formulas,
         contrast_matrix = contrast_matrix,
         fit2 = fit2,
-        de_tables = de_tables
+        de_tables = de_tables,
+        batch_design = batch_design
     )
 }
 

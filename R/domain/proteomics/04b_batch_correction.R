@@ -10,12 +10,19 @@
 #'                    discrete-batch correction).
 #'
 #' Both backends estimate and apply the correction on the imputed complete
-#' matrix (`pre$expr_imp_single`). The corrected values feed `expr_work` and
-#' `expr_imp_single` in full; `expr_filt` receives the corrected values with its
-#' original missing-value pattern restored, so it keeps its "filtered,
-#' unimputed" contract (the DE step re-imputes it, and CV / Shiny exports still
-#' exclude imputed measurements). All downstream DE, QC and clustering consume
-#' the corrected data.
+#' matrix (`pre$expr_imp_single`), and the corrected values replace only the QC
+#' matrices `expr_imp_single` / `expr_work` (PCA, heatmaps, clustering and other
+#' visualisation). `expr_filt` -- the measured filtered matrix -- is never
+#' corrected: it is the DE input (`batch_correction.de_mode`, resolved by
+#' `get_proteomics_batch_config()`), and the measured values in exports, CV and
+#' the Shiny `expr_raw` payload. Only the explicit `legacy_corrected` DE mode
+#' fits on corrected values, and it derives them in `mod_proteomics_de()`.
+#'
+#' proBatch median-centering has no model for the biological condition: with
+#' an unbalanced group x batch design it removes part of the condition effect
+#' from the QC matrix as well. ComBat protects the condition through its model
+#' matrix (`preserve_condition`). Neither correction is used for DE inference
+#' unless `legacy_corrected` is chosen.
 
 #'
 #' These functions are side-effect free: they take a matrix (or `pre` list) and
@@ -27,8 +34,8 @@
 #' Dispatches on `config$modes$proteomics$batch_correction$method`. When the
 #' method is `"none"` (or the block is absent / disabled) the input is returned
 #' unchanged. Otherwise `expr_work` and `expr_imp_single` become the complete
-#' corrected matrix, while `expr_filt` (and `expr_filt_pre_imp`) get the
-#' corrected values with the original NA pattern restored.
+#' corrected matrix; `expr_filt` and `expr_filt_pre_imp` keep the measured,
+#' uncorrected values.
 
 #'
 #' @param pre Output of `preprocess_proteomics()` (a list with at least
@@ -37,11 +44,9 @@
 #' @param seed Integer seed for the (small) stochastic component of ComBat's
 #'   empirical-Bayes estimation; passed through `withr::with_seed()`.
 #' @return The `pre` list, with the corrected matrix in `expr_work`/
-#'   `expr_imp_single` (complete) and `expr_filt`/`expr_filt_pre_imp` (corrected
-#'   observed values, NA where originally missing), plus `batch_corrected`/
-#'   `batch_method` metadata fields when a correction was applied. When
-#'   `de_mode` is `"covariate"`, the uncorrected `expr_filt` is also kept as
-#'   `expr_filt_uncorrected` for the DE step.
+#'   `expr_imp_single` (complete), plus `batch_corrected`/`batch_method`
+#'   metadata fields when a correction was applied. `expr_filt` and
+#'   `expr_filt_pre_imp` are returned unchanged.
 
 correct_batch_proteomics <- function(pre, config, seed = 42) {
   cfg <- config$modes$proteomics
@@ -54,8 +59,7 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
 
   # ComBat/probatch need a complete matrix. preprocess_proteomics() already
   # produces a single-imputation complete matrix (expr_imp_single); estimate and
-  # apply the correction on that. The original missing-value pattern is restored
-  # to expr_filt afterwards (see below) so the DE step still re-imputes it.
+  # apply the correction on that.
   expr <- pre$expr_imp_single %||% pre$expr_filt
   assert_numeric_matrix(expr, "expr_imp_single")
 
@@ -95,28 +99,9 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
   message(sprintf("Proteomics batch correction: applied '%s' on batch column '%s'.",
                   bc$method, bc$batch_col))
 
-  # Keep expr_filt's "filtered, unimputed" contract: corrected values at
-  # observed positions, NA where the measurement was originally missing. This
-  # fixes two things at once —
-  #   * the DE step re-imputes expr_filt, so its multiple imputations stay
-  #     genuinely different (a complete matrix collapses them to a single draw
-  #     and the imputation-consensus stops measuring robustness), and
-  #   * build_group_cv_proteomics() and the Shiny expr_raw export still exclude
-  #     imputed measurements, which they detect via NAs in expr_filt.
-  # expr_work / expr_imp_single stay complete + corrected for QC and plots.
-  na_mask <- is.na(pre$expr_filt)[rownames(corrected), colnames(corrected), drop = FALSE]
-  corrected_unimputed <- corrected
-  corrected_unimputed[na_mask] <- NA_real_
-
-  # In covariate mode the DE model carries batch itself, so it must see the
-  # uncorrected values: fitting a batch term on data ComBat already adjusted
-  # would remove the batch effect twice and overstate the residual df.
-  if (identical(bc$de_mode, "covariate")) {
-    pre$expr_filt_uncorrected <- pre$expr_filt
-  }
-
-  pre$expr_filt         <- corrected_unimputed
-  pre$expr_filt_pre_imp <- corrected_unimputed
+  # Only the QC matrices change. expr_filt stays measured: limma models batch
+  # itself (de_mode "covariate"), and fitting on corrected values would treat
+  # the variation ComBat removed as if it had cost no degrees of freedom.
   pre$expr_work         <- corrected
   pre$expr_imp_single   <- corrected
   pre$batch_corrected   <- TRUE
@@ -127,30 +112,42 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
 
 #' Resolve proteomics batch-correction config with defaults
 #'
-#' `de_mode` decides how the DE model treats batch, independently of whether a
-#' corrected matrix is produced for QC: `"corrected"` fits the model on the
-#' batch-corrected values (the original behaviour), `"covariate"` fits it on the
-#' uncorrected values with batch as an additive term in the design. With
-#' `method: "none"` and `de_mode: "covariate"`, batch is modelled in DE and no
-#' corrected matrix is produced at all.
+#' `de_mode` decides how the DE model treats batch, separately from whether a
+#' corrected matrix is produced for QC:
+#'
+#'   * `"covariate"` -- limma on the measured values with batch as an additive
+#'     term (`~ 0 + condition + batch`). The default whenever a correction runs.
+#'   * `"none"` -- batch is not in the DE model. The default when no correction
+#'     runs, because `batch_col` may come from `qc$batch_col`, which only
+#'     colours QC plots and must not change the model by itself.
+#'   * `"legacy_corrected"` -- limma on the batch-corrected values, the
+#'     behaviour before `de_mode` existed. Kept for reproducing old runs;
+#'     validation warns that its p-values may be anti-conservative.
+#'
+#' Pure: no warnings here, so repeated calls stay quiet. Validation owns them.
 #'
 #' @param cfg The `config$modes$proteomics` sub-config.
-#' @return A list with `enabled`, `method`, `batch_col`, `group_col`,
-#'   `covariates`, `preserve_condition`, `de_mode`.
+#' @return A list with `enabled`, `method`, `corrects` (a correction will run),
+#'   `batch_col`, `group_col`, `covariates`, `preserve_condition`, `de_mode`,
+#'   `de_mode_explicit`.
 #' @noRd
 get_proteomics_batch_config <- function(cfg) {
   bc <- cfg$batch_correction %||% list()
   method <- bc$method %||% "none"
-  de_mode <- bc$de_mode %||% "corrected"
+  enabled <- bc$enabled %||% (!identical(method, "none"))
+  corrects <- isTRUE(enabled) && !identical(method, "none")
+  de_mode <- bc$de_mode %||% (if (corrects) "covariate" else "none")
   if (!(is.character(de_mode) && length(de_mode) == 1L &&
-        de_mode %in% c("corrected", "covariate"))) {
+        de_mode %in% c("none", "covariate", "legacy_corrected"))) {
     cli::cli_abort(c(
       "Unknown {.code batch_correction.de_mode}: {.val {de_mode}}.",
-      "i" = "Use {.val corrected} (DE on batch-corrected values) or {.val covariate} (DE on uncorrected values with batch in the limma design)."
+      "i" = "Use {.val covariate} (batch in the limma design, on measured values), {.val none} (batch not modelled) or {.val legacy_corrected} (limma on batch-corrected values; not recommended)."
     ))
   }
   list(
-    enabled            = bc$enabled %||% (!identical(method, "none")),
+    enabled            = enabled,
+    corrects           = corrects,
+    de_mode_explicit   = !is.null(bc$de_mode),
     method             = method,
     batch_col          = bc$batch_col %||% cfg$qc$batch_col,
     group_col          = bc$group_col,
@@ -336,6 +333,10 @@ correct_proteomics_combat <- function(expr, batch_var, group_var = NULL,
 #' correction: for each feature, each batch is shifted so its per-batch median
 #' matches the global per-feature median. Operates directly on the data matrix
 #' (`_dm` interface), keeping this step matrix-in / matrix-out.
+#'
+#' The centering does not know the biological condition. When conditions are
+#' unevenly spread over batches, a batch's median carries part of the condition
+#' effect, and centering removes it. The result is suitable for QC views only.
 #'
 #' @param expr Numeric log2 matrix (proteins x samples).
 #' @param batch_var Factor of batch labels (length `ncol(expr)`).

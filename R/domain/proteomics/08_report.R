@@ -699,42 +699,42 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     # correction and the method alone cannot gate this sentence.
     bc <- get_proteomics_batch_config(cfg)
     bc_m <- tolower(as.character(bc$method))
-    # Validation refuses covariate mode with precomputed tables; the guard keeps
-    # the text honest if it is ever reached anyway, since no model is fitted.
+    # mod_proteomics_de() returns precomputed tables before any model or
+    # imputation, so no DE-side batch handling may be described there.
     batch_in_model <- identical(bc$de_mode, "covariate") && !is_precomputed
     # make_imputations_proteomics() returns the matrix with its NAs when the
     # method is "none", so "re-imputed" is true only for the other methods.
-    de_reimputes <- !identical(imp_method, "none")
-    if (isTRUE(bc$enabled) && !identical(bc_m, "none")) {
+    reimputed <- if (identical(imp_method, "none")) "" else ", re-imputed"
+    if (bc$corrects) {
         bc_name <- if (identical(bc_m, "combat")) "ComBat" else
                    if (identical(bc_m, "probatch")) "proBatch" else bc_m
         dp <- paste(dp, sprintf(paste0(
             "Batch effects were corrected with %s. The correction was estimated and applied on ",
-            "the single-imputed complete matrix."), bc_name))
-        # mod_proteomics_de() returns the loaded tables before
-        # make_imputations_proteomics() is reached, so in precomputed mode
-        # nothing is re-imputed for the model -- and saying otherwise would
-        # contradict the missing-values paragraph below.
-        dp <- paste(dp, if (is_precomputed) {
-            paste("The original missingness pattern was then restored to the filtered matrix.",
-                  "Quality control and clustering use the corrected complete matrix.")
-        } else if (batch_in_model) {
-            # The exports take their model-input columns from de_res$imputations
-            # (05_mod_exports.R), which are uncorrected in this mode, so only QC
-            # and clustering are claimed for the corrected values.
-            paste("Quality control and clustering use the corrected values. The",
-                  "differential-abundance model was not fitted on them: it used the",
-                  sprintf("uncorrected filtered matrix%s, with batch as a covariate.",
-                          if (de_reimputes) ", re-imputed" else ""))
-        } else if (de_reimputes) {
-            paste("The original missingness pattern was then restored to the filtered matrix,",
-                  "which is re-imputed for differential analysis, while quality-control and",
-                  "clustering use the corrected complete matrix.")
-        } else {
-            paste("The original missingness pattern was then restored to the filtered matrix,",
-                  "which is used for differential analysis, while quality-control and",
-                  "clustering use the corrected complete matrix.")
-        })
+            "the single-imputed complete matrix, and quality control and clustering use the ",
+            "corrected values; measured values are not altered."), bc_name))
+        if (identical(bc_m, "probatch")) {
+            dp <- paste(dp, paste0(
+                "proBatch median-centering does not model the biological condition, so ",
+                "where conditions are unevenly spread over batches it also removes part of ",
+                "the condition effect from the corrected values."))
+        }
+        # The exports take their model-input columns from de_res$imputations
+        # (05_mod_exports.R), so they follow the DE input, not the QC matrix.
+        if (!is_precomputed) {
+            dp <- paste(dp, switch(bc$de_mode,
+                covariate = paste0(
+                    "The differential-abundance model was not fitted on the corrected ",
+                    "values: it used the uncorrected filtered matrix", reimputed,
+                    ", with batch as a covariate."),
+                none = paste0(
+                    "The differential-abundance model used the uncorrected filtered matrix",
+                    reimputed, ", without a batch term."),
+                legacy_corrected = paste0(
+                    "In legacy mode the differential-abundance model was fitted on the ",
+                    "corrected values with the measured missingness restored", reimputed,
+                    ". This treats the variation removed by the correction as if it cost no ",
+                    "degrees of freedom, so p-values may be anti-conservative.")))
+        }
     }
 
     # ---- Missing values -----------------------------------------------------
