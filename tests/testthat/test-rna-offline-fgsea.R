@@ -704,7 +704,9 @@ test_that("the RNA report finds offline GSEA dotplots and opens no empty section
     touch("plots", "pathway_c1_KEGG.png")                           # legacy layout still shown
     x <- dotplots()
     expect_true(x$shown)
-    expect_match(x$text, "### c1 KEGG", fixed = TRUE)
+    # One tab per contrast, one sub-tab per collection.
+    expect_match(x$text, "### c1 {.tabset}", fixed = TRUE)
+    expect_match(x$text, "#### KEGG", fixed = TRUE)
 
     touch("GSEA", "KEGG", "ranking_by_fc", "c1", "dotplot.png")
     touch("GSEA", "KEGG", "ranking_by_pval_with_direction", "c1", "dotplot.png")
@@ -719,7 +721,7 @@ test_that("the RNA report finds offline GSEA dotplots and opens no empty section
     expect_match(x$text, "**Ranking: pval_with_direction**", fixed = TRUE)
     expect_match(x$text, file.path("KEGG", "ranking_by_pval_with_direction", "c1", "dotplot.png"),
                  fixed = TRUE)
-    expect_false(grepl("### c1 KEGG", x$text, fixed = TRUE))       # offline plots take precedence
+    expect_false(grepl("#### KEGG", x$text, fixed = TRUE))         # offline plots take precedence
 })
 
 test_that("the RNA report counts the online flat files as a completed run", {
