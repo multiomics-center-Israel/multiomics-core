@@ -328,20 +328,6 @@ if (!has_transcriptomics) {
 }
 ```
 
-`r if (has_rna_prot) "## Concordance Distribution"`
-
-```{r rna-prot-concordance, eval=has_transcriptomics && has_rna_prot, results='asis'}
-p <- file.path(rna_prot_dir, "plots", "rna_protein_concordance.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
-}
-```
-
-```{r rna-prot-concordance-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
-figure_legend("Distribution of per-gene RNA-protein Pearson correlations across samples. The histogram shows how well transcript levels predict protein abundance for individual genes.")
-render_commentary("rna_protein_concordance")
-```
-
 `r if (has_rna_prot) "## DE Scatter (All Contrasts)"`
 
 ```{r rna-prot-de-scatter, eval=has_transcriptomics && has_rna_prot, results='asis'}

@@ -224,13 +224,10 @@ compute_crossomics_feature_correlations <- function(harmonized, gene_mapping, fc
         ))
     }
 
-    # Create summary
+    # Create summary. No distribution plot is drawn: per-feature correlations
+    # across samples carry no pairing term, so they mostly reflect
+    # between-sample differences shared by the layers, not the contrast.
     results$summary <- summarize_correlation_results(results, out_dir)
-
-    # Generate visualizations
-    if (!is.null(out_dir)) {
-        plot_correlation_overview(results, out_dir)
-    }
 
     return(results)
 }
@@ -544,59 +541,6 @@ summarize_correlation_results <- function(results, out_dir = NULL) {
 
     summary_df
 }
-
-#' Plot correlation overview
-plot_correlation_overview <- function(results, out_dir) {
-    pair_names <- setdiff(names(results), "summary")
-    if (length(pair_names) == 0) return(NULL)
-
-    # Combine all correlations for overview
-    all_cors <- lapply(pair_names, function(pn) {
-        pr <- results[[pn]]
-        data.frame(
-            pair = pn,
-            correlation = pr$correlations[!is.na(pr$correlations)],
-            stringsAsFactors = FALSE
-        )
-    })
-    all_cors_df <- do.call(rbind, all_cors)
-
-    # Density plot by pair
-    p1 <- ggplot2::ggplot(all_cors_df, ggplot2::aes(x = correlation, fill = pair)) +
-        ggplot2::geom_density(alpha = 0.5) +
-        ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
-        ggplot2::theme_minimal() +
-        ggplot2::labs(
-            title = "Cross-Omics Correlation Distributions",
-            subtitle = "Feature-level correlations between omics layers",
-            x = "Correlation",
-            y = "Density",
-            fill = "Omics Pair"
-        ) +
-        ggplot2::theme(legend.position = "bottom")
-
-    ggplot2::ggsave(file.path(out_dir, "plots", "crossomics_correlation_density.png"),
-                    p1, width = 10, height = 6)
-
-    # Box plot by pair
-    p2 <- ggplot2::ggplot(all_cors_df, ggplot2::aes(x = pair, y = correlation, fill = pair)) +
-        ggplot2::geom_boxplot(alpha = 0.7) +
-        ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-        ggplot2::theme_minimal() +
-        ggplot2::labs(
-            title = "Cross-Omics Correlation Summary",
-            x = "Omics Pair",
-            y = "Correlation"
-        ) +
-        ggplot2::theme(legend.position = "none",
-                       axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
-
-    ggplot2::ggsave(file.path(out_dir, "plots", "crossomics_correlation_boxplot.png"),
-                    p2, width = 8, height = 6)
-
-    list(density_plot = p1, boxplot = p2)
-}
-
 
 # =============================================================================
 # 2. Sample-Level Concordance Analysis
