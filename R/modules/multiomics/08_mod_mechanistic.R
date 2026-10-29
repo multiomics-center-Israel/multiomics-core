@@ -4,7 +4,7 @@
 #' relationships and causal mechanisms.
 #'
 #' Includes:
-#'   - RNA-Protein regulatory analysis (translation efficiency, protein stability)
+#'   - RNA-Protein regulatory analysis (post-transcriptional regulation, protein stability)
 #'   - Transcription factor activity inference
 #'   - Gene regulatory network inference
 #'   - Causal mediation analysis (RNA -> Protein -> Phenotype)
@@ -68,7 +68,6 @@ mod_multiomics_mechanistic <- function(harmonization_res, de_results = NULL,
         if (!is.null(mechanistic_results$rna_protein)) {
             rp <- mechanistic_results$rna_protein
             summary_stats$rna_protein_mean_cor <- rp$correlations$summary$mean_cor
-            summary_stats$n_high_te_genes <- rp$translation_efficiency$summary$n_high_te
             summary_stats$n_ptr_genes <- rp$post_transcriptional$n_ptr
         }
 
