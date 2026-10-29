@@ -528,7 +528,8 @@ test_that("mod_mummichog_exports writes exactly what save_mummichog_exports writ
                                      contrast_label = s$slug,
                                      gsea      = s$gsea,
                                      gsea_plot = s$gsea_plot,
-                                     evidence  = s$evidence)
+                                     evidence  = s$evidence,
+                                     summary   = s$summary)
 
   # Same file set, same names -- the move must not rename or drop an export.
   expect_setequal(basename(written), basename(expected))
