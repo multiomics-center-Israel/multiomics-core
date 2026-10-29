@@ -175,7 +175,7 @@ rank_top_variable_genes <- function(mat, mean_cpm = NULL, min_mean_cpm = 0) {
             length(mean_cpm), nrow(mat)
         ), call. = FALSE)
     }
-    eligible <- which(!is.na(mean_cpm) & mean_cpm >= min_mean_cpm, useNames = FALSE)
+    eligible <- which(unname(!is.na(mean_cpm) & mean_cpm >= min_mean_cpm))
     eligible[order(gene_vars[eligible], decreasing = TRUE)]
 }
 
