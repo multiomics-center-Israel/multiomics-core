@@ -171,7 +171,7 @@ modes:
     # does) renders the report exactly as before.
     report:
       sections:
-        # group_distance: false          # per-sample within vs cross-group distance
+        # group_distance: true           # per-sample within vs cross-group distance (off unless true)
         # harmonization: false           # "Data Harmonization" section, heading included
         # sample_concordance: false      # "Sample Concordance Across Omics" section
         # mechanistic: false             # "Mechanistic & Causal Inference" section

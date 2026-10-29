@@ -179,7 +179,12 @@ multi_cfg <- cfg$modes$multiomics
 section_cfg <- (multi_cfg$report %||% list())$sections %||% list()
 show_section <- function(name) !identical(section_cfg[[name]], FALSE)
 
-show_group_distance     <- show_section("group_distance")
+# Per-sample within vs cross-group distance: OFF unless a project sets
+# `group_distance: true`. Mean Euclidean distances on whole layers mostly
+# restate how far apart the groups sit, and labelled points read as
+# misplaced samples the plot cannot establish. The foundational step still
+# writes the PNGs and CSV.
+show_group_distance     <- isTRUE(section_cfg[["group_distance"]])
 # Whole-section switches: FALSE drops the section, heading included, so a
 # project that turned one off does not read an empty heading in its report.
 show_harmonization      <- show_section("harmonization")
