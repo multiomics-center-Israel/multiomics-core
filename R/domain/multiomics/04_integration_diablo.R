@@ -235,6 +235,15 @@ write_diablo_results <- function(diablo_results, out_dir) {
         if (file.exists(stale)) unlink(stale)
     }
 
+    # The variable (correlation-circle) and interactive loadings plots are no
+    # longer drawn, so a rerun into an older directory would keep that run's
+    # copies beside the current results. Retire them the same way, by exact name.
+    for (stale in file.path(out_dir, c("diablo_variable_plot.png",
+                                       "diablo_loadings_interactive.html",
+                                       "diablo_loadings_interactive.rds"))) {
+        if (file.exists(stale)) unlink(stale)
+    }
+
     # Sample scores
     for (om in setdiff(names(diablo_results$sample_scores), "Y")) {
         scores <- diablo_results$sample_scores[[om]]
