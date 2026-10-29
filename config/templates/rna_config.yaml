@@ -218,12 +218,9 @@ modes:
       # noise alone. This affects those plots only: not the main all-gene PCA, the gene
       # filter, expr_work, DE, clustering or any other output. A PCA_topN plot is drawn
       # only when at least N genes pass. Applies to TMMlogCPM only; with VST or
-      # preprocessed input all genes are ranked, as before.
-      # The default (1) also applies when the key is absent, so existing projects get
-      # different top-variable PCA plots on their next run; set 0 to keep the previous
-      # selection.
+      # preprocessed input all genes are ranked.
       top_variable_pca:
-        min_mean_cpm: 1   # default: 1; 0 disables the gate
+        min_mean_cpm: 1   # default 1, also when the key is absent; 0 ranks all genes
 
       # Sample correlation/distance heatmap visualization (all optional)
       # These settings improve readability for large sample sets
