@@ -311,6 +311,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
           expr_filt        = met_filtered$mat,
           expr_log         = met_log$mat,
           expr_work        = met_corrected$mat,
+          # Normalized, transformed, not feature-scaled: the DE matrix (#287).
+          expr_unscaled    = met_corrected$mat_unscaled,
           meta             = met_corrected$meta,
           row_data         = met_corrected$row_data,
           info             = info,

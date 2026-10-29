@@ -379,7 +379,11 @@ mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
 #' @param meta        data.frame of sample metadata.
 #' @param out_dir     Mode output directory.
 #' @param config      Full pipeline config list.
-#' @return list with: \code{mat}, \code{meta}, \code{row_data}, \code{info}.
+#' @return list with: \code{mat} (the working matrix, feature-scaled when
+#'   \code{preprocessing.scaling} is set; becomes \code{expr_work}),
+#'   \code{mat_unscaled} (the same samples and features without feature
+#'   scaling; the matrix differential abundance tests, becomes
+#'   \code{expr_unscaled}), \code{meta}, \code{row_data}, \code{info}.
 #'
 mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                               logged, meta, out_dir, config,
@@ -408,7 +412,13 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                        stop(sprintf("mod_met_corrected: unknown chosen_norm '%s'. ",
                                     "Valid options: none, tss, median, pqn, eigenms, eigenms_forced, bio_factor.", chosen_norm))
   )
-  
+
+  # Differential abundance must not depend on feature scaling, which exists for
+  # the multivariate views. Keep the normalized, transformed matrix before
+  # scaling so DE can test it (#287). met_log is NOT a substitute: it has the
+  # transform but no sample normalization.
+  unscaled_mat <- chosen_mat
+
   # Apply scaling if configured
   scaling_method <- tolower(norm_cfg$scaling %||% "none")
   if (scaling_method != "none") {
@@ -430,7 +440,8 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
           "mod_met_corrected: post-normalization filter removed %d sample(s): %s",
           length(removed), paste(removed, collapse = ", ")
         ))
-        chosen_mat <- chosen_mat[, keep_ids, drop = FALSE]
+        chosen_mat   <- chosen_mat[, keep_ids, drop = FALSE]
+        unscaled_mat <- unscaled_mat[, keep_ids, drop = FALSE]
         meta <- meta[meta[[sample_col]] %in% keep_ids, , drop = FALSE]
       }
     }
@@ -452,6 +463,11 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
       "preprocessing.drift_correction.enabled: false, or set ",
       "preprocessing.scaling: \"none\". See issue #362."), scaling_method))
   }
+
+  # Without scaling the working matrix IS the unscaled one, drift correction
+  # included when it ran. With scaling, the safeguard above guarantees drift
+  # correction did not run, so the pre-scaling matrix is complete as it is.
+  mat_unscaled <- if (scaling_method == "none") final_mat else unscaled_mat
 
   if (drift_result$applied) {
     diag_dir <- file.path(out_dir, "diagnostic_plots")
@@ -485,10 +501,11 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   )
   
   list(
-    mat      = final_mat,
-    meta     = meta,
-    row_data = logged$row_data,
-    info     = list(
+    mat          = final_mat,
+    mat_unscaled = mat_unscaled,
+    meta         = meta,
+    row_data     = logged$row_data,
+    info         = list(
       chosen_norm   = chosen_norm,
       drift_applied = drift_result$applied,
       drift_info    = drift_result$info,

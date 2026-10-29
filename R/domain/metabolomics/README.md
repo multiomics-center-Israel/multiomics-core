@@ -39,7 +39,13 @@ metab_inputs ─► met_raw ─► met_filtered ─► met_log ─────�
 `met_missingness_stats` records missingness on the filtered matrix, and
 `met_norm_comparison` writes a side-by-side of the normalizations.
 `metab_pre` is the adapter that the downstream steps read, directly or through `metab_de_res`; its working
-matrix is `expr_work`.
+matrix is `expr_work`, which carries the optional feature `scaling`. Differential
+abundance and the QEA/ssGSEA enrichment test `expr_unscaled` instead: the same
+normalized, transformed matrix without feature scaling, chosen by
+`resolve_metab_de_matrix()`. Changing `scaling` therefore changes the
+multivariate views (PCA, sample distance and correlation heatmaps, Shiny
+`expr_norm`) but not the DE statistics.
+`expr_log` is the transform alone, with no sample normalization.
 
 ## Normalization: `preprocessing` and `chosen_norm`
 

@@ -259,9 +259,9 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #' Rebuild the metabolomics DE analysis matrix + condition factor
 #'
 #' QEA and ssGSEA use this to start from the matrix, scale and biological-sample
-#' set that \code{run_metabolomics_de()} tests on: pre-scaling \code{expr_log}
-#' when a variance scaling was applied, otherwise \code{expr_work}, with
-#' QC/blank samples removed. It mirrors that function's setup
+#' set that \code{run_metabolomics_de()} tests on: the matrix chosen by
+#' \code{resolve_metab_de_matrix()} (normalized, not feature-scaled), with
+#' QC/blank samples removed. It mirrors that function's sample setup
 #' (\code{03_differential.R}) without re-running DE; that function remains the
 #' source of truth — if its setup changes, update this to match.
 #'
@@ -277,14 +277,13 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #' level of its own, and a pre-computed-DE run whose metadata lacks DE's column
 #' is still filtered. The sample set can then be a subset of DE's.
 #'
-#' PARITY CONTRACT: this is a deliberate duplication of DE's matrix/scale/sample
-#' selection, not an independent policy — \code{run_metabolomics_de()} does not
-#' call this helper, so the two can drift. Any change to DE's matrix selection
-#' (the expr_log-vs-expr_work branch or the biological-sample filtering) MUST be
-#' mirrored here. A single canonical helper used by both is the eventual fix, but
-#' is out of scope for this change.
+#' PARITY CONTRACT: the matrix choice is shared — both this helper and
+#' \code{run_metabolomics_de()} call \code{resolve_metab_de_matrix()}. The
+#' biological-sample filtering is still a deliberate duplication of DE's setup:
+#' \code{run_metabolomics_de()} does not call this helper, so any change to its
+#' sample filtering MUST be mirrored here.
 #'
-#' @param pre    Preprocessing results (expr_work/expr_log, meta, info).
+#' @param pre    Preprocessing results (expr_unscaled/expr_work, meta, info).
 #' @param config Full pipeline config.
 #' @param group_col Optional metadata column the caller groups samples by; NULL
 #'   applies DE's sample exclusion only.
@@ -298,15 +297,7 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
     condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
     sample_col    <- cfg$effects$samples %||% "sample_id"
 
-    # Variance-scaling (auto/pareto/range) distorts within-group variance, so DE
-    # tests on the pre-scaling matrix (expr_log). Keep this branch identical to
-    # run_metabolomics_de().
-    scaling_used <- pre$info$normalization$scaling %||% "none"
-    mat <- if (scaling_used %in% c("auto", "pareto", "range")) {
-        pre$expr_log %||% pre$expr_work
-    } else {
-        pre$expr_work
-    }
+    mat <- resolve_metab_de_matrix(pre)
 
     meta <- pre$meta[match(colnames(mat), pre$meta[[sample_col]]), , drop = FALSE]
     # filter_to_biological() silently excludes nothing when its condition column
@@ -336,7 +327,7 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #' libraries are combined into a single table with FDR correction across all
 #' pathways.
 #'
-#' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
+#' @param pre     Preprocessing results (must include expr_unscaled/expr_work, meta,
 #'   row_data, info). QEA runs on the DE analysis matrix — see below.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
 #' @return list(table, per_library_tables, method) or NULL if disabled/unavailable.
@@ -622,7 +613,7 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
 #' Requires exactly two condition levels for statistical testing; if more
 #' are present, scores are returned without p-values.
 #'
-#' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
+#' @param pre     Preprocessing results (must include expr_unscaled/expr_work, meta,
 #'   row_data, info). Scores are computed on the DE analysis matrix.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
 #' @param contrast_groups Optional `c(numerator, denominator)` for the contrast

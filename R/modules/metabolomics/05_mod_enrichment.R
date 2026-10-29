@@ -504,7 +504,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 
     sub <- pre
     sub$meta <- meta[keep_rows, , drop = FALSE]
-    for (m in c("expr_raw", "expr_work", "expr_filt", "expr_log")) {
+    for (m in c("expr_raw", "expr_work", "expr_filt", "expr_log", "expr_unscaled")) {
         if (!is.null(pre[[m]])) {
             cols   <- intersect(colnames(pre[[m]]), keep_ids)
             sub[[m]] <- pre[[m]][, cols, drop = FALSE]

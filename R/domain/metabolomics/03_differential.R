@@ -320,6 +320,39 @@ describe_padj_provenance <- function(padj_provenance) {
 
 # ---- public entry point -----------------------------------------------------
 
+#' Resolve the matrix that metabolomics differential abundance tests
+#'
+#' The one decision for every consumer that must test what DE tests:
+#' \code{run_metabolomics_de()}, and QEA/ssGSEA through
+#' \code{.metab_de_matrix_condition()}. It is the normalized, transformed
+#' (and, when it ran, drift-corrected) matrix WITHOUT feature scaling. Feature
+#' scaling exists for the multivariate views; with it, limma's moderated
+#' variances and every fold change would change with a plotting option (#287).
+#'
+#' There is deliberately no fallback to \code{expr_log}: in metabolomics that
+#' matrix carries the transform only, not the sample normalization.
+#'
+#' @param pre Metabolomics preprocessing list (the \code{metab_pre} target).
+#' @return Numeric matrix (features x samples): \code{pre$expr_unscaled}; or
+#'   \code{pre$expr_work} when the object has no \code{expr_unscaled} and no
+#'   feature scaling was applied, because the two are then the same matrix.
+#' @examples
+#' pre <- list(expr_work = matrix(1:4, 2), info = list(normalization = list(scaling = "none")))
+#' resolve_metab_de_matrix(pre)
+resolve_metab_de_matrix <- function(pre) {
+    if (!is.null(pre$expr_unscaled)) return(pre$expr_unscaled)
+    scaling <- tolower(pre$info$normalization$scaling %||% "none")
+    if (identical(scaling, "none")) return(pre$expr_work)
+    stop(sprintf(paste0(
+        "metabolomics DE: the preprocessing object has no 'expr_unscaled' ",
+        "matrix and its working matrix is feature-scaled (scaling = '%s'), so ",
+        "there is no unscaled matrix to test. Rebuild metab_pre with the current ",
+        "pipeline, which adds expr_unscaled. Testing expr_work would make the ",
+        "results depend on the scaling, and expr_log has no sample normalization."),
+        scaling))
+}
+
+
 #' Run metabolomics differential analysis
 #'
 #' @param pre    List from preprocess_metabolomics() (pre contract).
@@ -365,18 +398,12 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         if (is.list(contrasts)) contrasts <- unlist(contrasts)
     }
 
-    mat  <- pre$expr_work
-    # When variance-scaling (auto/pareto/range) is applied, DE tests must use
-    # the pre-scaling matrix (expr_log) because scaling distorts within-group
-    # variance and inflates p-values.  But when scaling is "none" or "center",
-    # expr_work should be used — it contains the chosen normalization (e.g.
-    # EigenMS) which is essential for the test.
+    mat_for_test <- resolve_metab_de_matrix(pre)
     scaling_used <- pre$info$normalization$scaling %||% "none"
-    if (scaling_used %in% c("auto", "pareto", "range")) {
-        mat_for_test <- pre$expr_log %||% mat
-        message("metabolomics DE: using pre-scaling matrix (expr_log) because scaling = '", scaling_used, "'")
-    } else {
-        mat_for_test <- mat
+    if (!identical(tolower(scaling_used), "none")) {
+        message("metabolomics DE: testing the normalized matrix without feature ",
+                "scaling; scaling = '", scaling_used, "' applies to the ",
+                "multivariate views only")
     }
     meta <- pre$meta
     assert_numeric_matrix(mat_for_test, "metab_expr_for_test")
