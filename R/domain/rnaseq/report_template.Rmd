@@ -314,15 +314,23 @@ pathway_enabled <- isTRUE(rna_cfg$pathway$enabled)
 pathway_method <- rna_cfg$pathway$method %||% "fgsea"
 pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
 
+# normalize_counts() runs VST only for method "VST"; everything else is edgeR log-CPM,
+# whose prior.count is in reads (scaled by library size), not an offset in CPM units.
+norm_desc <- if (identical(norm_method, "VST")) {
+    "the DESeq2 variance-stabilizing transformation (VST, blind to the design)"
+} else {
+    sprintf(paste0("edgeR TMM scaling with log2-CPM transformation ",
+                   "(prior.count = %s, in read units scaled by library size)"), prior_ct)
+}
+
 cat(sprintf(
     paste0(
-        "%s Normalization was performed using the %s method ",
-        "with log2-CPM transformation (prior count = %d). ",
+        "%s Normalization was performed using %s. ",
         "Differential expression was tested using %s (%s test, %s mode). ",
         "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
     ),
     rna_filt$methods,
-    norm_method, prior_ct,
+    norm_desc,
     toupper(de_method), "Wald", deseq_mode,
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
@@ -413,7 +421,7 @@ prior_count <- rna_cfg$normalization$prior.count %||% 1
 settings <- data.frame(
   Parameter = c(
     "Normalization Method",
-    paste0("Prior Count (added before log2 to avoid log(0): log2(CPM + ", prior_count, "))"),
+    "Prior Count (edgeR log2-CPM; in read units, scaled by library size)",
     "Gene Filtering (details under Filtering Strategy)",
     "DE Method", "DESeq2 Mode",
     "Adjusted p-value Cutoff", "Linear FC Cutoff",
@@ -421,7 +429,7 @@ settings <- data.frame(
   ),
   Value = c(
     rna_cfg$normalization$method %||% "N/A",
-    prior_count,
+    if (identical(rna_cfg$normalization$method, "VST")) "not used (VST)" else prior_count,
     rna_filt$short,
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
@@ -3140,7 +3148,6 @@ This section provides a summary suitable for publication methods sections.
 
 ```{r methods-text, results='asis'}
 # Auto-generate methods paragraph based on config
-norm_method <- rna_cfg$normalization$method %||% "TMMlogCPM"
 de_method <- rna_cfg$de$method %||% "DESeq2"
 padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
 lfc_cut <- rna_cfg$de$linear_fc_cutoff %||% 1.5
@@ -3206,8 +3213,8 @@ n_samples
 cat(rna_filt$methods, " ")
 
 cat(sprintf(
-"Expression values were normalized using the %s method, which applies TMM (Trimmed Mean of M-values) scaling factors followed by log2 CPM transformation. ",
-norm_method
+"Expression values were normalized using %s. ",
+norm_desc
 ))
 
 cat(sprintf(
@@ -3233,7 +3240,7 @@ cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; f
 
 cat(sprintf(
 "RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). %s",
-rna_filt$methods, norm_method, de_method, padj_cut, lfc_cut, pathway_methods_text
+rna_filt$methods, norm_desc, de_method, padj_cut, lfc_cut, pathway_methods_text
 ))
 
 cat("\n</div>\n")
