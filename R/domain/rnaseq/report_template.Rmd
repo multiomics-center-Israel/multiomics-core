@@ -846,15 +846,22 @@ grouping and detect potential outliers or batch effects.
 pca_sel_file <- file.path(diag_dir, "PCA_top_variable_selection.csv")
 if (file.exists(pca_sel_file)) {
     pca_sel <- utils::read.csv(pca_sel_file)
-    n_cand <- format(pca_sel$n_candidates, big.mark = ",")
-    cat(if (is.na(pca_sel$min_mean_cpm)) {
+    # One row per requested size; the threshold and candidate count repeat.
+    min_cpm <- pca_sel$min_mean_cpm[1]
+    n_cand <- format(pca_sel$n_candidates[1], big.mark = ",")
+    cat(if (is.na(min_cpm)) {
         sprintf("Genes were ranked by variance among all %s genes; no mean-CPM restriction was applied because the normalized values are not TMM log-CPM.", n_cand)
-    } else if (pca_sel$min_mean_cpm == 0) {
+    } else if (min_cpm == 0) {
         sprintf("Genes were ranked by variance among all %s genes (mean-CPM restriction disabled).", n_cand)
     } else {
         sprintf("Genes were ranked by variance of log-CPM among the %s genes with a mean TMM-normalized CPM of at least %s; a top-N plot is shown only when at least N genes qualify. The PC1 vs PC2 tab uses all genes kept after filtering.",
-                n_cand, format(pca_sel$min_mean_cpm))
+                n_cand, format(min_cpm))
     }, "\n\n")
+    failed_n <- pca_sel$n_top[pca_sel$status %in% "failed"]
+    if (length(failed_n) > 0) {
+        cat(sprintf("Top-N plots that could not be generated (see the pipeline log): N = %s.\n\n",
+                    paste(formatC(failed_n, format = "d", big.mark = ","), collapse = ", ")))
+    }
     # Below, the selector falls back to the all-genes plot when no top-N plot exists.
     if (length(list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$")) == 0) {
         cat("Too few genes qualified for any top-N plot; the plot below uses all genes.\n\n")

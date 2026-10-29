@@ -152,30 +152,47 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     }
     ranked <- rank_top_variable_genes(mat, mean_cpm, min_mean_cpm)
 
+    pca_sel_rows <- list()
     for (n_top in n_top_values) {
         f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
+        n_genes_used <- NA_integer_
         if (n_top > length(ranked)) {
-            # A plot left by an earlier run would otherwise be shown as this run's.
-            if (file.exists(f_pca_top)) file.remove(f_pca_top)
+            status <- "skipped_insufficient_genes"
             message(sprintf("  Skipping PCA with top %d variable genes: only %d candidate genes",
                             n_top, length(ranked)))
-            next
+        } else {
+            mat_top <- mat[ranked[seq_len(n_top)], , drop = FALSE]
+            p_top <- tryCatch(
+                qc_pca_scatter(mat_top, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top),
+                error = function(e) {
+                    warning(sprintf("[rnaseq QC] PCA with top %d variable genes was not generated: %s",
+                                    n_top, conditionMessage(e)), call. = FALSE)
+                    NULL
+                }
+            )
+            if (is.null(p_top)) {
+                status <- "failed"
+            } else {
+                status <- "generated"
+                # The PCA drops genes it cannot use, so count what it kept.
+                n_genes_used <- nrow(attr(p_top, "pca_result")$rotation)
+                files <- c(files, f_pca_top)
+                plots[[sprintf("pca_top%d", n_top)]] <- p_top
+                message(sprintf("  Generated PCA with top %d variable genes", n_top))
+            }
         }
-        mat_top <- mat[ranked[seq_len(n_top)], , drop = FALSE]
-        tryCatch({
-            p_top <- qc_pca_scatter(mat_top, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top)
-            files <- c(files, f_pca_top)
-            plots[[sprintf("pca_top%d", n_top)]] <- p_top
-            message(sprintf("  Generated PCA with top %d variable genes", n_top))
-        }, error = function(e) {
-            message(sprintf("  Could not generate PCA with top %d genes: %s", n_top, e$message))
-        })
+        # A plot left by an earlier run would otherwise be shown as this run's.
+        if (status != "generated" && file.exists(f_pca_top)) file.remove(f_pca_top)
+        pca_sel_rows[[length(pca_sel_rows) + 1]] <- data.frame(
+            n_top = n_top, n_genes_used = n_genes_used, status = status
+        )
     }
 
-    # What the report states about the top-N PCAs; min_mean_cpm is NA when the
-    # gate was not applied.
+    # What the report states about the top-N PCAs, one row per requested size;
+    # min_mean_cpm is NA when the gate was not applied.
     f_pca_sel <- file.path(out_qc, "PCA_top_variable_selection.csv")
-    utils::write.csv(data.frame(min_mean_cpm = min_mean_cpm, n_candidates = length(ranked)),
+    utils::write.csv(data.frame(min_mean_cpm = min_mean_cpm, n_candidates = length(ranked),
+                                do.call(rbind, pca_sel_rows)),
                      f_pca_sel, row.names = FALSE)
     files <- c(files, f_pca_sel)
 

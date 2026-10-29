@@ -66,6 +66,10 @@ previous_top_idx <- function(mat, n_top) {
 
 top_genes_used <- function(p) rownames(attr(p, "pca_result")$rotation)
 
+read_selection <- function(res) {
+    utils::read.csv(file.path(res$out_qc, "PCA_top_variable_selection.csv"), stringsAsFactors = FALSE)
+}
+
 # ---- compute_tmm_cpm -----------------------------------------------------------
 
 test_that("compute_tmm_cpm uses the effective library sizes of normalize_counts()", {
@@ -146,9 +150,13 @@ test_that("the default gate ranks only genes with mean TMM CPM >= 1", {
     expect_setequal(used, expected)
     expect_true(all(mean_cpm[used] >= 1))
 
-    sel <- utils::read.csv(file.path(res$out_qc, "PCA_top_variable_selection.csv"))
-    expect_equal(sel$min_mean_cpm, 1)
-    expect_equal(sel$n_candidates, n_pass)
+    sel <- read_selection(res)
+    expect_identical(names(sel), c("min_mean_cpm", "n_candidates", "n_top", "n_genes_used", "status"))
+    expect_equal(sel$n_top, c(500, 1000, 2000, 5000))
+    expect_equal(sel$min_mean_cpm, rep(1, 4))
+    expect_equal(sel$n_candidates, rep(n_pass, 4))
+    expect_equal(sel$status, c("generated", rep("skipped_insufficient_genes", 3)))
+    expect_equal(sel$n_genes_used, c(500L, NA, NA, NA))
 })
 
 test_that("a top-N plot is drawn only when N genes pass, and a stale one is removed", {
@@ -177,6 +185,51 @@ test_that("min_mean_cpm = 0 reproduces the previous top-variable PCA", {
     }
     expect_true(file.exists(file.path(res$out_qc, "PCA_top1000.png")))
     expect_null(res$plots$pca_top2000)   # 2000 > number of genes, as before
+    sel <- read_selection(res)
+    expect_equal(sel$min_mean_cpm, rep(0, 4))
+    expect_equal(sel$n_genes_used, c(500L, 1000L, NA, NA))
+    expect_equal(sel$status, c("generated", "generated", "skipped_insufficient_genes",
+                               "skipped_insufficient_genes"))
+})
+
+test_that("n_genes_used counts the genes the PCA kept, not the genes requested", {
+    pre <- make_top_var_pre(method = "VST")
+    # 450 varying genes and 600 constant ones: the top 500 and top 1000 must take
+    # constant genes, which the PCA cannot use and drops.
+    n_var <- 450
+    pre$expr_work <- pre$expr_work[seq_len(n_var), ]
+    pre$expr_work <- rbind(pre$expr_work,
+                           matrix(1, 600, ncol(pre$expr_work),
+                                  dimnames = list(paste0("C", 1:600), colnames(pre$expr_work))))
+    res <- run_qc_pre(pre, make_top_var_config())
+    sel <- read_selection(res)
+    expect_equal(sel$status[1:2], c("generated", "generated"))
+    expect_equal(sel$n_genes_used[1:2], c(n_var, n_var))
+    expect_equal(nrow(attr(res$plots$pca_top500, "pca_result")$rotation), n_var)
+})
+
+test_that("a top-N PCA that errors is reported as failed with a warning", {
+    pre <- make_top_var_pre()
+    out_dir <- withr::local_tempdir()
+    dir.create(file.path(out_dir, "Diagnostic_plots"), recursive = TRUE)
+    stale <- file.path(out_dir, "Diagnostic_plots", "PCA_top1000.png")
+    file.create(stale)
+
+    # Fail only the top-1000 PCA; the stub lives where the module resolves it.
+    orig <- get("qc_pca_scatter", envir = globalenv())
+    assign("qc_pca_scatter", function(expr_mat, ...) {
+        if (nrow(expr_mat) == 1000) stop("synthetic PCA failure")
+        orig(expr_mat, ...)
+    }, envir = globalenv())
+    withr::defer(assign("qc_pca_scatter", orig, envir = globalenv()))
+
+    expect_warning(res <- run_qc_pre(pre, make_top_var_config(0), out_dir),
+                   "top 1000 variable genes was not generated: synthetic PCA failure")
+    sel <- read_selection(res)
+    expect_equal(sel$status[1:2], c("generated", "failed"))
+    expect_equal(sel$n_genes_used[1:2], c(500L, NA))
+    expect_null(res$plots$pca_top1000)
+    expect_false(file.exists(stale))
 })
 
 test_that("VST or preprocessed expression is ranked without the gate", {
@@ -185,9 +238,10 @@ test_that("VST or preprocessed expression is ranked without the gate", {
         res <- run_qc_pre(pre, make_top_var_config())
         expect_setequal(top_genes_used(res$plots$pca_top500),
                         rownames(pre$expr_work)[previous_top_idx(pre$expr_work, 500)])
-        sel <- utils::read.csv(file.path(res$out_qc, "PCA_top_variable_selection.csv"))
-        expect_true(is.na(sel$min_mean_cpm), info = method)
-        expect_equal(sel$n_candidates, nrow(pre$expr_work), info = method)
+        sel <- read_selection(res)
+        expect_true(all(is.na(sel$min_mean_cpm)), info = method)
+        expect_equal(sel$n_candidates, rep(nrow(pre$expr_work), 4), info = method)
+        expect_equal(sel$n_genes_used, c(500L, 1000L, NA, NA), info = method)
     }
 })
 
@@ -247,4 +301,18 @@ test_that("the report says when no top-N plot qualified and the all-genes plot i
     out <- run_rule_chunk(data.frame(min_mean_cpm = 1, n_candidates = 320), top_pngs = character(0))
     expect_match(out, "320 genes with a mean TMM-normalized CPM", fixed = TRUE)
     expect_match(out, "the plot below uses all genes", fixed = TRUE)
+})
+
+test_that("the report reads the one-row-per-size sidecar once and names failed sizes", {
+    sidecar <- data.frame(min_mean_cpm = 1, n_candidates = 9812,
+                          n_top = c(500, 1000, 2000, 5000),
+                          n_genes_used = c(500, NA, 2000, NA),
+                          status = c("generated", "failed", "generated", "skipped_insufficient_genes"))
+    out <- run_rule_chunk(sidecar)
+    expect_length(gregexpr("Genes were ranked", out, fixed = TRUE)[[1]], 1L)
+    expect_match(out, "9,812 genes with a mean TMM-normalized CPM of at least 1", fixed = TRUE)
+    expect_match(out, "could not be generated (see the pipeline log): N = 1,000.", fixed = TRUE)
+
+    sidecar$status <- c("generated", rep("skipped_insufficient_genes", 3))
+    expect_false(grepl("could not be generated", run_rule_chunk(sidecar)))
 })
