@@ -844,6 +844,7 @@ grouping and detect potential outliers or batch effects.
 ```{r pca-var-genes-rule, echo=FALSE, results='asis'}
 # Written by mod_rnaseq_qc_pre(); absent for runs made before it existed.
 pca_sel_file <- file.path(diag_dir, "PCA_top_variable_selection.csv")
+pca_sel <- NULL   # also read by the dropdown below
 if (file.exists(pca_sel_file)) {
     pca_sel <- utils::read.csv(pca_sel_file)
     # One row per requested size; the threshold and candidate count repeat.
@@ -862,9 +863,18 @@ if (file.exists(pca_sel_file)) {
         cat(sprintf("Top-N plots that could not be generated (see the pipeline log): N = %s.\n\n",
                     paste(formatC(failed_n, format = "d", big.mark = ","), collapse = ", ")))
     }
+    if (any(pca_sel$n_genes_used < pca_sel$n_top, na.rm = TRUE)) {
+        cat("Where a plot used fewer genes than selected, the remainder had no variance or missing values, which PCA cannot use.\n\n")
+    }
     # Below, the selector falls back to the all-genes plot when no top-N plot exists.
     if (length(list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$")) == 0) {
-        cat("Too few genes qualified for any top-N plot; the plot below uses all genes.\n\n")
+        # Files written before the status column existed only skip for too few genes.
+        too_few <- is.null(pca_sel$status) || all(pca_sel$status == "skipped_insufficient_genes")
+        cat(if (too_few) {
+            "Too few genes qualified for any top-N plot; the plot below uses all genes.\n\n"
+        } else {
+            "No top-N plot was generated; the plot below uses all genes.\n\n"
+        })
     }
 }
 ```
@@ -916,7 +926,13 @@ if (length(available_n_top) > 0) {
 if (length(available_n_top) > 0 && available_n_top[1] != 0) {
     for (n_val in available_n_top) {
         selected <- if (n_val == default_n_top) " selected" else ""
-        cat(sprintf('<option value="%d"%s>%s genes</option>\n', n_val, selected, format(n_val, big.mark = ",")))
+        # The PCA drops genes it cannot use; say so when it dropped any.
+        n_used <- pca_sel$n_genes_used[match(n_val, pca_sel$n_top)]
+        used_txt <- if (length(n_used) == 1 && !is.na(n_used) && n_used != n_val) {
+            sprintf(" (%s used)", format(n_used, big.mark = ","))
+        } else ""
+        cat(sprintf('<option value="%d"%s>%s genes%s</option>\n', n_val, selected,
+                    format(n_val, big.mark = ","), used_txt))
     }
 } else if (!is.null(default_img_uri)) {
     cat('<option value="0" selected>All genes (default)</option>\n')

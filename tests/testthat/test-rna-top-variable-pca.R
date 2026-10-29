@@ -316,3 +316,57 @@ test_that("the report reads the one-row-per-size sidecar once and names failed s
     sidecar$status <- c("generated", rep("skipped_insufficient_genes", 3))
     expect_false(grepl("could not be generated", run_rule_chunk(sidecar)))
 })
+
+test_that("a fallback caused by a failed PCA is not blamed on too few genes", {
+    sidecar <- data.frame(min_mean_cpm = 1, n_candidates = 700,
+                          n_top = c(500, 1000, 2000, 5000), n_genes_used = NA,
+                          status = c("failed", rep("skipped_insufficient_genes", 3)))
+    out <- run_rule_chunk(sidecar, top_pngs = character(0))
+    expect_match(out, "No top-N plot was generated; the plot below uses all genes", fixed = TRUE)
+    expect_false(grepl("Too few genes", out))
+
+    sidecar$status[1] <- "skipped_insufficient_genes"
+    sidecar$n_candidates <- 300
+    expect_match(run_rule_chunk(sidecar, top_pngs = character(0)),
+                 "Too few genes qualified for any top-N plot", fixed = TRUE)
+})
+
+run_dropdown_chunk <- function(available_n_top, pca_sel) {
+    rmd <- rna_report_template()
+    fence <- find_rmd_chunk_lines(rmd, "pca-dropdown")
+    code <- readLines(rmd, warn = FALSE)[(fence[1] + 1):(fence[2] - 1)]
+    env <- new.env(parent = globalenv())
+    env$available_n_top <- available_n_top
+    env$default_n_top <- available_n_top[1]
+    env$default_img_uri <- "data:"
+    env$pca_sel <- pca_sel
+    paste(utils::capture.output(eval(parse(text = code), envir = env)), collapse = "\n")
+}
+
+test_that("the dropdown names the genes a PCA used when it used fewer than selected", {
+    sel <- data.frame(min_mean_cpm = NA, n_candidates = 1050, n_top = c(500, 1000, 2000, 5000),
+                      n_genes_used = c(450, 450, NA, NA),
+                      status = c("generated", "generated", rep("skipped_insufficient_genes", 2)))
+    out <- run_dropdown_chunk(c(500, 1000), sel)
+    expect_match(out, ">500 genes (450 used)</option>", fixed = TRUE)
+    expect_match(out, ">1,000 genes (450 used)</option>", fixed = TRUE)
+
+    sel$n_genes_used <- c(500, 1000, NA, NA)
+    out <- run_dropdown_chunk(c(500, 1000), sel)
+    expect_match(out, ">500 genes</option>", fixed = TRUE)
+    expect_false(grepl("used)", out, fixed = TRUE))
+
+    # No sidecar, or one from before n_genes_used existed: labels as before.
+    expect_match(run_dropdown_chunk(c(500, 1000), NULL), ">1,000 genes</option>", fixed = TRUE)
+    expect_match(run_dropdown_chunk(500, data.frame(min_mean_cpm = 1, n_candidates = 900)),
+                 ">500 genes</option>", fixed = TRUE)
+})
+
+test_that("the report explains a plot that used fewer genes than selected", {
+    sel <- data.frame(min_mean_cpm = NA, n_candidates = 1050, n_top = c(500, 1000, 2000, 5000),
+                      n_genes_used = c(450, 450, NA, NA),
+                      status = c("generated", "generated", rep("skipped_insufficient_genes", 2)))
+    expect_match(run_rule_chunk(sel), "fewer genes than selected", fixed = TRUE)
+    sel$n_genes_used <- c(500, 1000, NA, NA)
+    expect_false(grepl("fewer genes than selected", run_rule_chunk(sel)))
+})
