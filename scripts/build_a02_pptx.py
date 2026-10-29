@@ -359,9 +359,6 @@ slide = prs.slides.add_slide(blank_layout)
 add_title(slide, "DIABLO: Feature Selection & Interpretation")
 add_subtitle(slide, "Top discriminant features per omics layer")
 
-add_image_safe(slide, os.path.join(DIABLO, "diablo_variable_plot.png"),
-               Inches(0.5), Inches(1.7), width=Inches(6.0))
-
 add_multiline_body(slide, [
     "Top DIABLO transcriptomics features (comp1):",
     "  GL50803_0012108 (loading=-0.053)",

@@ -140,6 +140,35 @@ test_that("pipe_proteomics contains expected target names", {
     expect_true("prot_de_res" %in% names)
 })
 
+test_that("pipe_proteomics adds the pooled-ranking target beside the legacy one", {
+    result <- pipe_proteomics()
+    by_name <- setNames(result, get_target_names(result))
+    expect_true("prot_pathway_pooled_res" %in% names(by_name))
+    expect_true("prot_pathway_res" %in% names(by_name))
+
+    target_expr <- function(tgt) {
+        expr <- tgt$command$expr
+        if (is.list(expr) || is.expression(expr)) expr <- expr[[1]]
+        expr
+    }
+    # The legacy target still calls the legacy module, unchanged.
+    expect_identical(target_expr(by_name$prot_pathway_res)[[1]], quote(mod_proteomics_pathway))
+    expect_identical(target_expr(by_name$prot_pathway_pooled_res)[[1]],
+                     quote(mod_proteomics_pathway_pooled))
+
+    # The report waits for it.
+    report_vars <- all.vars(target_expr(by_name$prot_report))
+    expect_true("prot_pathway_pooled_res" %in% report_vars)
+})
+
+test_that("the pooled-ranking target is a single-omics output only", {
+    # multiomics consumes prot_pathway_res; the pooled target must not be built
+    # when only the core proteomics targets are requested.
+    names_core <- get_target_names(pipe_proteomics(skip_outputs = TRUE))
+    expect_false("prot_pathway_pooled_res" %in% names_core)
+    expect_true("prot_pathway_res" %in% names_core)
+})
+
 test_that("pipe_proteomics returns expected number of targets", {
     result <- pipe_proteomics()
     expect_gte(length(result), 10)
@@ -166,6 +195,52 @@ test_that("pipe_metabolomics contains expected target names", {
 test_that("pipe_metabolomics returns expected number of targets", {
     result <- pipe_metabolomics("pqn")
     expect_gte(length(result), 8)
+})
+
+test_that("the metab shiny payload target passes only arguments the builder takes", {
+    # save_shiny_payload_metabolomics() takes `...` and forwards it straight
+    # into build_shiny_payload_metabolomics(), so an argument name the builder
+    # has no formal for is an "unused argument" error R raises only while the
+    # target builds. The unit tests call the builder directly and never see it,
+    # and so does lint -- which leaves this call site uncovered. Check it here.
+    result <- pipe_metabolomics("pqn")
+    tgt <- setNames(result, get_target_names(result))$metab_shiny_payload
+    expect_false(is.null(tgt))
+
+    expr <- tgt$command$expr
+    if (is.list(expr) || is.expression(expr)) expr <- expr[[1]]
+    expect_identical(expr[[1]], quote(save_shiny_payload_metabolomics))
+
+    # out_file is the wrapper's own formal; out_dir it derives and supplies.
+    passed  <- setdiff(names(as.list(expr)), c("", "out_file"))
+    expect_true(length(passed) > 0)
+    expect_equal(setdiff(passed, names(formals(build_shiny_payload_metabolomics))),
+                 character(0))
+})
+
+test_that("the report's mummichog file list tracks content, not just paths", {
+    # metab_mummichog_report_files only re-exposes the pinned stage's tracked
+    # paths. As an ordinary target it would hash that character vector, so a
+    # rerun rewriting an EmpiricalCompound table in place would leave its hash
+    # unchanged and metab_report up to date on last run's evidence. format =
+    # "file" makes {targets} hash the files themselves, as it does upstream.
+    # mummichog is opt-in, and the alias only exists in the enabled branch --
+    # pipe_metabolomics() defaults to FALSE, which builds the NULL stand-ins.
+    on <- pipe_metabolomics("pqn", mummichog_enabled = TRUE)
+    on <- setNames(on, get_target_names(on))
+
+    expect_identical(on$metab_mummichog_pinned_files$settings$format, "file")
+    expect_identical(on$metab_mummichog_report_files$settings$format, "file")
+
+    # Disabled branch unchanged: the same two symbols the report depends on,
+    # as ordinary targets, and no pinned stage.
+    off <- pipe_metabolomics("pqn")
+    off <- setNames(off, get_target_names(off))
+
+    expect_true(all(c("metab_mummichog_report_pathways",
+                      "metab_mummichog_report_files") %in% names(off)))
+    expect_false("metab_mummichog_pinned_files" %in% names(off))
+    expect_false(identical(off$metab_mummichog_report_files$settings$format, "file"))
 })
 
 

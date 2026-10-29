@@ -56,11 +56,28 @@ modes:
       method: "TMMlogCPM"   # "TMMlogCPM" | "VST"
       prior.count: 1
 
-    # Feature filtering
+    # Feature filtering (applied before normalization and downstream QC/PCA)
     filtering:
+      # Choose one:
+      #   adaptive    - data-driven threshold (default): 2^v, where v is the first valley
+      #                 right of the lowest peak in a density of log2(CPM + 0.1) over all
+      #                 genes and samples, clamped to [auto_filter$min, auto_filter$max].
+      #                 With fewer than two peaks or no valley, auto_filter$fallback is
+      #                 used as given (not clamped).
+      #   fixed       - threshold = fixed_threshold.
+      #   deseq2_only - removes only genes whose raw counts are zero in every sample.
+      #   none        - keeps every gene.
+      # Any other value runs as adaptive. Preprocessed input skips filtering whatever
+      # the mode.
+      mode: "adaptive"
+      # adaptive/fixed: a gene is kept if, in at least one group of group_col, at least
+      # half (rounded up) of the samples with a non-missing value reach the threshold.
+      # Choose the grouping variable to match the biological design.
       group_col: "line"
-      # Auto-filter calculates threshold based on CPM distribution.
-      # You can override limits here:
+      # Units: CPM for count matrices, TPM (abundance) for tximport input.
+      # Used only when mode: "fixed" (default if omitted: 1.0).
+      # fixed_threshold: 1.0
+      # Used only when mode: "adaptive".
       auto_filter:
         min: 0.5
         max: 2.0
@@ -277,8 +294,22 @@ modes:
 
       # gsea_pvalue_cutoff: 0.05
       # Optional GSEA-only significance cutoff (defaults to pvalue_cutoff).
+      # It selects what is plotted, counted and kept in the in-memory results;
+      # with the fgsea engine each unit's results.csv also holds every tested set.
       # gsea_padj_method: "fdr"
       # Optional GSEA-only adjustment method (defaults to padj_method).
+      # clusterProfiler engine only; fgsea reports Benjamini-Hochberg padj.
+
+      gsea_engine: "fgsea"
+      # GSEA engine for the offline workflow (annotation_dir set).
+      # "fgsea" (default): the same fgsea call as the online workflow and the
+      #   proteomics pipeline; gene-set size limits from gsea.min_size/max_size
+      #   (default: min 4, no upper limit, as in earlier offline runs),
+      #   seeded from params.seed, every tested gene set written to each unit's
+      #   results.csv. All four rankings are run and stored alike (no primary).
+      # "clusterProfiler": the earlier clusterProfiler::GSEA call (min set size 4,
+      #   no upper limit, non-significant sets dropped). Use it to reproduce
+      #   offline results produced before the fgsea switch.
 
       max_terms_in_dotplot: 20
       # Max pathways shown in dotplots/ridgeplots. Display only; all results stay in the tables.
@@ -312,6 +343,14 @@ modes:
         per_pathway_artifacts: true
         # Generate per-pathway GSEA plots and detailed core-gene tables.
         # (Back-compat: the old flat key gsea_per_pathway_artifacts is still honored.)
+
+        # min_size: 4
+        # max_size: 500
+        # Optional gene-set size limits for fgsea (genes of the set present in the
+        # ranking). Unset, they keep the limits of earlier offline runs: min 4 and
+        # no upper limit (the number of unique genes in each TERM2GENE table).
+        # Offline workflow only (the online workflow uses pathway.min_size/max_size);
+        # ignored by gsea_engine "clusterProfiler".
 
 params:
   seed: 1

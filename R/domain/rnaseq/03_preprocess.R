@@ -167,6 +167,7 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     keep_vec <- rep(TRUE, nrow(counts))
     fr <- list(keep_vec = keep_vec, used_threshold = NA)
     norm_mode <- if (source_type == "preprocessed") "preprocessed" else "none"
+    filter_mode_run <- norm_mode
   } else {
     # Determine evaluation matrix for filtering
     if (source_type == "tximport") {
@@ -181,11 +182,15 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     if (filter_mode == "deseq2_only") {
       keep_vec <- rowSums(counts) > 0
       fr <- list(keep_vec = keep_vec, used_threshold = NA)
+      filter_mode_run <- "deseq2_only"
     } else if (filter_mode == "fixed") {
       fixed_thr <- as.numeric(cfg$filtering$fixed_threshold %||% 1.0)
       fr <- filter_features_optimized(norm_for_filter, meta2, sample_col, group_col, threshold = fixed_thr)
       fr$used_threshold <- fixed_thr
+      filter_mode_run <- "fixed"
     } else {
+      # Any other mode value lands here, so record what ran rather than the key.
+      filter_mode_run <- "adaptive"
       plot_path <- file.path(config$paths$out, "rnaseq", "filtering_threshold_qc.png")
       fr <- run_auto_filter_pipeline(
         norm_for_filter, meta2, sample_col, group_col,
@@ -259,8 +264,10 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     
     info = list(
       source_type = source_type,
+      filter_mode = filter_mode_run,
       filter_norm = norm_mode,
       filter_threshold = thr,
+      filter_group_col = if (filter_mode_run %in% c("adaptive", "fixed")) group_col else NA_character_,
       expr_work_method = attr(expr_work, "method"),
       n_genes_raw = nrow(counts),
       n_genes_filt = nrow(counts_filt),

@@ -115,6 +115,16 @@ validate_rna_config <- function(cfg) {
                       stats::p.adjust.methods, allow_null = TRUE)
         assert_one_of(e$gsea_padj_method, "enrichment$gsea_padj_method",
                       stats::p.adjust.methods, allow_null = TRUE)
+        assert_one_of(e$gsea_engine, "enrichment$gsea_engine",
+                      .RNA_GSEA_ENGINES, allow_null = TRUE)
+        # fgsea always reports Benjamini-Hochberg; say so instead of ignoring
+        # a different gsea_padj_method without a word.
+        if (!identical(tolower(e$gsea_engine %||% "fgsea"), "clusterprofiler") &&
+            !is.null(e$gsea_padj_method) && !e$gsea_padj_method %in% c("BH", "fdr")) {
+            warning("enrichment$gsea_padj_method = \"", e$gsea_padj_method,
+                    "\" is used by the clusterProfiler engine only; the fgsea engine ",
+                    "reports Benjamini-Hochberg padj.", call. = FALSE)
+        }
 
         if (!is.null(e$databases)) {
             valid_db <- c("KEGG", "GO_BP", "GO_MF", "GO_CC")
@@ -141,10 +151,31 @@ validate_rna_config <- function(cfg) {
             }
         }
 
-        if (!is.null(e$gsea)) {
-            if (!is.list(e$gsea)) stop("enrichment$gsea must be a mapping.")
-            assert_scalar_bool(e$gsea$per_pathway_artifacts,
+        # [[ ]], not $: with no `gsea` key, e$gsea partially matches a single
+        # gsea_* key (gsea_padj_method, ...) and validates it as the block.
+        g <- e[["gsea"]]
+        if (!is.null(g)) {
+            if (!is.list(g)) stop("enrichment$gsea must be a mapping.")
+            assert_scalar_bool(g$per_pathway_artifacts,
                                "enrichment$gsea$per_pathway_artifacts", allow_null = TRUE)
+            assert_scalar_num(g$min_size, "enrichment$gsea$min_size",
+                              allow_null = TRUE, min_val = 1)
+            assert_scalar_num(g$max_size, "enrichment$gsea$max_size",
+                              allow_null = TRUE, min_val = 1)
+            # Compare an explicit max_size with the minimum that will apply,
+            # which is the default (resolve_rna_gsea_settings()) when min_size
+            # is unset. A database with fewer genes than min_size is not a
+            # config error: its units are evaluated with no set in range.
+            eff_min <- resolve_rna_gsea_settings(
+                list(modes = list(rna = list(enrichment = e))))$min_size
+            if (!is.null(g$max_size) && eff_min >= g$max_size) {
+                stop(sprintf(paste0(
+                    "enrichment$gsea$max_size (%s) must be greater than the gene-set ",
+                    "minimum size (%s%s); no gene set could be tested."),
+                    format(g$max_size), format(eff_min),
+                    if (is.null(g$min_size)) ", the default" else ", enrichment$gsea$min_size"),
+                    call. = FALSE)
+            }
         }
         assert_scalar_bool(e$gsea_per_pathway_artifacts,
                            "enrichment$gsea_per_pathway_artifacts", allow_null = TRUE)
