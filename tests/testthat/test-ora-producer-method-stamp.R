@@ -23,11 +23,13 @@ test_that("compound ORA stamps its result without disturbing it", {
     cache <- withr::local_tempdir()
     saveRDS(
         data.frame(
-            pathway  = c(rep("map00010", 4), rep("map00020", 4), rep("map00030", 2)),
+            # map00030 carries three measured compounds: the compound floor
+            # (compound_min_measured()) is three.
+            pathway  = c(rep("map00010", 4), rep("map00020", 4), rep("map00030", 3)),
             compound = c(sprintf("C%05d", 1:4), sprintf("C%05d", 5:8),
-                         "C00001", "C00009"),
+                         "C00001", "C00009", "C00010"),
             name     = c(rep("Glycolysis", 4), rep("Citrate cycle", 4),
-                         rep("Pentose phosphate", 2)),
+                         rep("Pentose phosphate", 3)),
             stringsAsFactors = FALSE
         ),
         file.path(cache, "kegg_compound_pathways.rds")

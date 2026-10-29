@@ -581,7 +581,9 @@ test_that("every legend with text from outside its call is checked", {
         # worst case checked in test-enzyme-metabolite-pairs.R
         "describe_enzyme_metabolite_table", "enzyme_metabolite_config", "em", "cfg",
         # evaluated from the template below
-        "loadings_gsea_legend", "diablo_loadings_caveat")
+        "loadings_gsea_legend", "diablo_loadings_caveat",
+        # every variant counted in test-pathway-coverage.R
+        "pathway_coverage_legend")
     used <- unique(unlist(strsplit(dyn$dynamic, ",", fixed = TRUE)))
     expect_identical(setdiff(used, known), character(0))
     # A name-filled legend leaves room for a name of three words.
