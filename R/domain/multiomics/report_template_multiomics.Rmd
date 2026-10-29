@@ -1394,7 +1394,10 @@ pv_metab_pdf <- file.path(multi_ora_dir, "pathview_top_metabolomics_pathways.pdf
 pv_prot_pdf <- file.path(multi_ora_dir, "pathview_top_proteomics_pathways.pdf")
 has_pv_metab <- file.exists(pv_metab_pdf)
 has_pv_prot <- file.exists(pv_prot_pdf)
-has_per_omics_pv <- has_pv_metab || has_pv_prot
+pv_gsea_pdf <- file.path(multi_ora_dir, "pathview_gsea_and_pairs.pdf")
+pv_gsea_sel <- file.path(multi_ora_dir, "pathview_gsea_and_pairs_selection.tsv")
+has_pv_gsea <- file.exists(pv_gsea_pdf)
+has_per_omics_pv <- has_pv_metab || has_pv_prot || has_pv_gsea
 has_any_pv <- has_pathview || has_per_omics_pv
 
 # One index feeds the overview table and every tab, so a map is named and
@@ -1402,7 +1405,8 @@ has_any_pv <- has_pathview || has_per_omics_pv
 pv_index <- pathview_map_index(pathview_dir, multi_ora = has_pathview,
                                metab_top = has_pv_metab, prot_top = has_pv_prot,
                                multi_ora_label = pathview_support$label,
-                               contrast_labels = pathview_contrast_labels)
+                               contrast_labels = pathview_contrast_labels,
+                               gsea_pair = has_pv_gsea)
 ```
 
 ```{r pathview-all-pdf, eval=has_any_pv, include=FALSE}
@@ -1417,7 +1421,7 @@ if (dir.exists(pathview_dir)) {
     # filled half the PDF with pages carrying no data.
     all_pv_pngs <- sort(list.files(
         pathview_dir,
-        pattern = "\\.(multi_ora|metab_top|prot_top)[^/]*\\.png$",
+        pattern = "\\.(multi_ora|metab_top|prot_top|gsea_pair)[^/]*\\.png$",
         full.names = TRUE))
 }
 
@@ -1480,8 +1484,11 @@ cat(pathview_support$intro,
               "so compound nodes are uncolored.\n\n")
     })
 cat(sprintf("[Download these maps (PDF)](%s)\n\n", pathview_pdf))
+# Kept out of the legend below, which is held to 100 words with its threshold text.
+cat("A box standing for several genes prints only one name; where a different",
+    "member passed the node rule, its symbol is written just above the box.\n\n")
 
-pv_multi <- pv_index[pv_index$set == "multi_ora", ]
+pv_multi <-pv_index[pv_index$set == "multi_ora", ]
 for (i in seq_len(nrow(pv_multi))) {
     cat(sprintf("\n### %s {.unnumbered}\n\n", pv_multi$heading[i]))
     cat(sprintf("![%s](%s)\n\n", pv_multi$heading[i], pv_multi$png[i]))
@@ -1507,7 +1514,13 @@ for (i in seq_len(nrow(pv_metab))) {
     cat(sprintf("\n### %s {.unnumbered}\n\n", pv_metab$heading[i]))
     cat(sprintf("![%s](%s)\n\n", pv_metab$heading[i], pv_metab$png[i]))
 }
-figure_legend("Top metabolomics-enriched KEGG pathways. Compound nodes show metabolomics logFC; gene/enzyme nodes show proteomics logFC. Red = upregulated, blue/green = downregulated.")
+figure_legend(paste(
+    "Top metabolomics-enriched KEGG pathways. Compound nodes show metabolomics logFC;",
+    "gene/enzyme nodes show proteomics logFC. Red = upregulated, blue/green = downregulated.",
+    "Every measured feature is coloured here, without a significance filter; grey boxes",
+    "were measured and unchanged. A box holding a gene that passed the node rule carries",
+    "that gene's symbol just above it, since the printed label is the EC number.",
+    "A pathway shown here is not repeated among the multi-omics maps."))
 ```
 
 ```{r per-omics-pathview-prot, eval=has_pv_prot, results='asis'}
@@ -1520,7 +1533,49 @@ for (i in seq_len(nrow(pv_prot))) {
     cat(sprintf("\n### %s {.unnumbered}\n\n", pv_prot$heading[i]))
     cat(sprintf("![%s](%s)\n\n", pv_prot$heading[i], pv_prot$png[i]))
 }
-figure_legend("Top proteomics-enriched KEGG pathways. Gene/enzyme nodes show proteomics logFC; compound nodes show metabolomics logFC. Red = upregulated, blue/green = downregulated.")
+figure_legend(paste(
+    "Top proteomics-enriched KEGG pathways. Gene/enzyme nodes show proteomics logFC;",
+    "compound nodes show metabolomics logFC. Red = upregulated, blue/green = downregulated.",
+    "Every measured feature is coloured here, without a significance filter; grey boxes",
+    "were measured and unchanged. A box holding a gene that passed the node rule carries",
+    "that gene's symbol just above it, since the printed label is the EC number.",
+    "A pathway shown here is not repeated among the multi-omics maps."))
+```
+
+```{r gsea-pair-pathview, eval=has_pv_gsea, results='asis'}
+cat("\n## GSEA and Enzyme-Metabolite Pair Pathways {.unnumbered}\n\n")
+cat("KEGG pathways not reached by ORA on the DE lists, drawn because either a",
+    "per-omics GSEA called them enriched (KEGG, padj < ",
+    .PATHVIEW_THRESHOLDS$fdr_alpha, "; cross_enrichment/<omics>_enriched_pathways.csv),",
+    "or they contain a changed enzyme listed in",
+    "cross_enrichment/enzyme_metabolite_pairs.tsv. Global overview maps",
+    "(01100-01320) are not drawn. The reason for each map is in its heading",
+    "and in pathview_gsea_and_pairs_selection.tsv.\n\n")
+cat(sprintf("[Download PDF](%s)\n\n", pv_gsea_pdf))
+gsea_sel <- tryCatch(utils::read.delim(pv_gsea_sel, stringsAsFactors = FALSE),
+                     error = function(e) NULL)
+pv_gsea <- pv_index[pv_index$set == "gsea_pair", ]
+for (i in seq_len(nrow(pv_gsea))) {
+    pid <- sub("\\.gsea_pair.*$", "", basename(pv_gsea$png[i]))
+    why <- if (!is.null(gsea_sel)) gsea_sel[gsea_sel$pathway == pid, , drop = FALSE] else NULL
+    cat(sprintf("\n### %s {.unnumbered}\n\n", pv_gsea$heading[i]))
+    if (!is.null(why) && nrow(why) > 0) {
+        enz <- why$pair_enzymes[1]
+        cat(sprintf("Selected by: %s%s. Contrast: %s.\n\n", why$source[1],
+                    if (!is.na(enz) && nzchar(enz)) paste0(" (enzymes: ", enz, ")") else "",
+                    why$contrast[1]))
+    }
+    cat(sprintf("![%s](%s)\n\n", pv_gsea$heading[i], pv_gsea$png[i]))
+}
+figure_legend(paste0(
+    "KEGG maps for GSEA-enriched pathways and pathways of changed enzymes. ",
+    "Gene nodes: proteomics logFC; compound nodes: metabolomics logFC. ",
+    "Red up, green/blue down. ",
+    "A box standing for several genes prints only one name; where a different ",
+    "member passed the node rule, its symbol is written just above the box. ",
+    "A pathway already drawn in another tab is not repeated here; ",
+    "the drawn_in column of the selection table says where it is. ",
+    pathview_significance_caption()))
 ```
 
 ---
