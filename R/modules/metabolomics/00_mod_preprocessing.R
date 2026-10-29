@@ -438,7 +438,21 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   
   drift_result <- apply_drift_correction(chosen_mat, meta, cfg_mode)
   final_mat    <- drift_result$mat
-  
+
+  # Temporary safeguard until #362 settles the LOESS order. LOESS divides each
+  # feature by a fitted trend, but every scaling except "none" centers the
+  # feature on zero: most features are then skipped and the rest get a ratio
+  # applied to centered values, while drift_applied still reads TRUE. Refuse
+  # the combination instead of reporting a correction that did not happen.
+  if (isTRUE(drift_result$applied) && scaling_method != "none") {
+    stop(sprintf(paste0(
+      "mod_met_corrected: LOESS drift correction cannot run on feature-scaled ",
+      "data (preprocessing.scaling = '%s'). The correction is not valid once ",
+      "features are centered or scaled. Either set ",
+      "preprocessing.drift_correction.enabled: false, or set ",
+      "preprocessing.scaling: \"none\". See issue #362."), scaling_method))
+  }
+
   if (drift_result$applied) {
     diag_dir <- file.path(out_dir, "diagnostic_plots")
     dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)

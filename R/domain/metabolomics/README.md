@@ -70,7 +70,9 @@ There is no separate `normalization:` block.
     `drift_correction` block means off. Until this change a missing `enabled` meant
     on, so **rerunning a project that never set it can give different results**
     when its metadata met those conditions. To keep the old behaviour, set
-    `enabled: true` explicitly.
+    `enabled: true` explicitly. **LOESS cannot be combined with feature scaling:**
+    with `scaling` other than `"none"` the run stops, because the correction is
+    not valid on centered or scaled features (see #362).
 
 ## Main targets after `metab_pre`
 

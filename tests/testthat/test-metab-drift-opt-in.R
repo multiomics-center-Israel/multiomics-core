@@ -160,3 +160,57 @@ test_that("the shipped metabolomics template keeps drift correction off and vali
   expect_false(isTRUE(metab$preprocessing$drift_correction$enabled))
   expect_silent(validate_metabolomics_config(metab))
 })
+
+# --- safeguard: LOESS on feature-scaled data (temporary, see #362) -----------
+
+run_corrected <- function(fx, scaling, drift_enabled, meta = fx$meta) {
+  stage <- list(mat = fx$mat, meta = meta,
+                row_data = data.frame(feature_id = rownames(fx$mat)))
+  cfg <- list(modes = list(metabolomics = list(
+    preprocessing = list(chosen_norm = "pqn", scaling = scaling,
+                         drift_correction = list(enabled = drift_enabled)),
+    effects = list(samples = "sample_id")
+  )))
+  suppressMessages(mod_met_corrected(
+    norm_tss = stage, norm_median = stage, norm_pqn = stage, logged = stage,
+    meta = meta, out_dir = tempdir(), config = cfg
+  ))
+}
+
+# On centered data the existing LOESS skips most features and warns once per
+# skipped feature. That is exactly the #362 defect the safeguard stops; these
+# tests assert the stop, so only that one warning is muffled, nothing else.
+muffle_loess_skip_warnings <- function(expr) {
+  withCallingHandlers(expr, warning = function(w) {
+    if (startsWith(conditionMessage(w),
+                   "correct_drift_loess: predicted values < epsilon")) {
+      invokeRestart("muffleWarning")
+    }
+  })
+}
+
+test_that("explicit LOESS with any feature scaling stops with an actionable error", {
+  fx <- make_drift_fixture()
+  for (sc in c("center", "auto", "pareto", "range")) {
+    expect_error(
+      muffle_loess_skip_warnings(run_corrected(fx, scaling = sc, drift_enabled = TRUE)),
+      "cannot run on feature-scaled data", info = sc)
+  }
+})
+
+test_that("explicit LOESS with scaling 'none' still runs", {
+  fx  <- make_drift_fixture()
+  out <- run_corrected(fx, scaling = "none", drift_enabled = TRUE)
+  expect_true(out$info$drift_applied)
+  expect_every_feature_corrected(out$mat, fx$mat, out$info$drift_info)
+})
+
+test_that("the safeguard does not fire when LOESS could not run anyway", {
+  fx   <- make_drift_fixture()
+  # No injection-order column: the preconditions fail, nothing is corrected,
+  # so there is nothing invalid to refuse.
+  meta <- fx$meta[, c("sample_id", "is_QC")]
+  out  <- run_corrected(fx, scaling = "auto", drift_enabled = TRUE, meta = meta)
+  expect_false(out$info$drift_applied)
+  expect_equal(out$mat, scale_metab(fx$mat, method = "auto"))
+})
