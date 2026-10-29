@@ -124,6 +124,60 @@ compute_cpm <- function(counts) {
     sweep(counts, 2, lib, "/") * 1e6
 }
 
+#' Linear TMM-normalized CPM
+#'
+#' The linear counterpart of the TMMlogCPM branch of \code{normalize_counts()}:
+#' the same \code{DGEList} and TMM factors, so the same effective library sizes,
+#' but no log and no prior count. Unlike \code{compute_cpm()}, library sizes
+#' are TMM-scaled.
+#'
+#' @param counts Raw count matrix (genes x samples), the same matrix that
+#'   \code{normalize_counts()} received.
+#' @return Numeric matrix of CPM values with the dimnames of \code{counts}.
+#' @examples
+#' counts <- matrix(c(10, 0, 5, 20, 3, 8), nrow = 3,
+#'                  dimnames = list(c("G1", "G2", "G3"), c("S1", "S2")))
+#' compute_tmm_cpm(counts)
+compute_tmm_cpm <- function(counts) {
+    dge <- edgeR::DGEList(counts = as.matrix(counts))
+    dge <- edgeR::calcNormFactors(dge, method = "TMM")
+    edgeR::cpm(dge, log = FALSE)
+}
+
+#' Rank genes for the top-variable PCA
+#'
+#' Orders genes by decreasing variance of \code{mat}, as the top-variable PCA
+#' always has, after dropping genes whose mean CPM is below
+#' \code{min_mean_cpm}. On log-CPM with a small prior count, genes near zero
+#' counts can reach a large variance from counting noise alone; the gate keeps
+#' them out of the candidates without changing the matrix. With
+#' \code{mean_cpm = NULL} or \code{min_mean_cpm = 0} every gene is a candidate
+#' and the order is the one \code{order(var, decreasing = TRUE)} gives.
+#'
+#' @param mat Expression matrix (genes x samples) whose variance is ranked.
+#' @param mean_cpm Mean linear CPM per gene, in the row order of \code{mat}, or
+#'   NULL when the input has no linear CPM (the gate is then not applied).
+#' @param min_mean_cpm Smallest mean CPM a gene needs to be a candidate.
+#' @return Integer row indices of \code{mat}, candidates only, most variable first.
+#' @examples
+#' mat <- matrix(c(1, 9, 2, 2, 5, 1), nrow = 3,
+#'               dimnames = list(c("G1", "G2", "G3"), c("S1", "S2")))
+#' rank_top_variable_genes(mat, mean_cpm = c(0.5, 4, 2), min_mean_cpm = 1)
+rank_top_variable_genes <- function(mat, mean_cpm = NULL, min_mean_cpm = 0) {
+    gene_vars <- apply(mat, 1, var, na.rm = TRUE)
+    if (is.null(mean_cpm)) {
+        return(order(gene_vars, decreasing = TRUE))
+    }
+    if (length(mean_cpm) != nrow(mat)) {
+        stop(sprintf(
+            "rank_top_variable_genes(): mean_cpm has %d values but mat has %d genes; pass one per row of mat.",
+            length(mean_cpm), nrow(mat)
+        ), call. = FALSE)
+    }
+    eligible <- which(!is.na(mean_cpm) & mean_cpm >= min_mean_cpm)
+    eligible[order(gene_vars[eligible], decreasing = TRUE)]
+}
+
 # compute TPM if gene_length exist
 compute_tpm <- function(counts, gene_lengths_bp) {
     stopifnot(!is.null(rownames(counts)))

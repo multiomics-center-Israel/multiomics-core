@@ -212,6 +212,19 @@ modes:
         max_samples_for_heatmaps: 120     # Skip distance/corr heatmaps above this
         max_samples_for_expr_heatmap: 60  # Skip expression heatmap above this
 
+      # Top-variable PCA (the report's "By Top Variable Genes" plots, top 500/1000/2000/5000).
+      # Only genes with mean TMM-normalized CPM >= min_mean_cpm are ranked by variance.
+      # On log-CPM, genes with very few reads can show a large variance from counting
+      # noise alone. This affects those plots only: not the main all-gene PCA, the gene
+      # filter, expr_work, DE, clustering or any other output. A PCA_topN plot is drawn
+      # only when at least N genes pass. Applies to TMMlogCPM only; with VST or
+      # preprocessed input all genes are ranked, as before.
+      # The default (1) also applies when the key is absent, so existing projects get
+      # different top-variable PCA plots on their next run; set 0 to keep the previous
+      # selection.
+      top_variable_pca:
+        min_mean_cpm: 1   # default: 1; 0 disables the gate
+
       # Sample correlation/distance heatmap visualization (all optional)
       # These settings improve readability for large sample sets
       heatmap_viz:

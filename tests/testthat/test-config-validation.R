@@ -344,6 +344,18 @@ test_that("validate_rna_config errors on invalid normalization method", {
     expect_error(validate_rna_config(cfg))
 })
 
+test_that("validate_rna_config checks qc$top_variable_pca$min_mean_cpm", {
+    cfg <- create_mock_rna_config()
+    for (ok in c(0, 1, 2.5)) {
+        cfg$qc <- list(top_variable_pca = list(min_mean_cpm = ok))
+        expect_true(validate_rna_config(cfg))
+    }
+    cfg$qc <- list(top_variable_pca = list(min_mean_cpm = -1))
+    expect_error(validate_rna_config(cfg), "min_mean_cpm")
+    cfg$qc <- list(top_variable_pca = list(min_mean_cpm = "1"))
+    expect_error(validate_rna_config(cfg), "min_mean_cpm")
+})
+
 # --- Enrichment block validation (the `enrichment` section) ---
 
 test_that("validate_rna_config accepts a valid enrichment block", {

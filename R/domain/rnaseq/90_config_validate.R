@@ -59,6 +59,10 @@ validate_rna_config <- function(cfg) {
         assert_scalar_num(f$threshold, "filtering$threshold", allow_null = TRUE, min_val = 0)
     }
 
+    # 4b. QC: candidate gate for the top-variable PCA (0 disables it)
+    assert_scalar_num(cfg$qc$top_variable_pca$min_mean_cpm, "qc$top_variable_pca$min_mean_cpm",
+                      allow_null = TRUE, min_val = 0)
+
     # 5. DE
     if (!is.null(cfg$de)) {
         d <- cfg$de

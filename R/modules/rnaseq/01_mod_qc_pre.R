@@ -126,28 +126,58 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
 
     # ---------- PCA with top variable genes (for report dropdown) ----------
     n_top_values <- c(500, 1000, 2000, 5000)
-    n_features <- nrow(mat)
     cfg_temp <- cfg
     cfg_temp$effects$color <- primary_color
 
-    for (n_top in n_top_values) {
-        if (n_top <= n_features) {
-            # Select top N most variable genes
-            gene_vars <- apply(mat, 1, var, na.rm = TRUE)
-            top_idx <- order(gene_vars, decreasing = TRUE)[1:n_top]
-            mat_top <- mat[top_idx, , drop = FALSE]
-
-            f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
-            tryCatch({
-                p_top <- qc_pca_scatter(mat_top, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top)
-                files <- c(files, f_pca_top)
-                plots[[sprintf("pca_top%d", n_top)]] <- p_top
-                message(sprintf("  Generated PCA with top %d variable genes", n_top))
-            }, error = function(e) {
-                message(sprintf("  Could not generate PCA with top %d genes: %s", n_top, e$message))
-            })
+    # Candidates must reach a mean TMM CPM; this gate changes which genes the
+    # top-N PCAs rank, never expr_work or the genes kept downstream. Only
+    # TMMlogCPM has a linear TMM CPM behind it: VST already flattens the
+    # mean-variance trend, and preprocessed input has no counts.
+    min_mean_cpm <- as.numeric(cfg$qc$top_variable_pca$min_mean_cpm %||% 1)
+    mean_cpm <- NULL
+    if (identical(pre$info$expr_work_method, "TMMlogCPM")) {
+        if (!identical(rownames(pre$expr_filt), rownames(mat)) ||
+            !identical(colnames(pre$expr_filt), colnames(mat))) {
+            stop("[rnaseq QC] expr_filt and expr_work have different genes or samples, ",
+                 "so the mean CPM for the top-variable PCA cannot be matched to expr_work. ",
+                 "preprocess_rna() should return them aligned.", call. = FALSE)
         }
+        mean_cpm <- rowMeans(compute_tmm_cpm(pre$expr_filt))
+        message(sprintf("  Top-variable PCA candidates: %d of %d genes with mean TMM CPM >= %s",
+                        sum(mean_cpm >= min_mean_cpm), nrow(mat), format(min_mean_cpm)))
+    } else {
+        min_mean_cpm <- NA_real_
+        message(sprintf("  Top-variable PCA: mean-CPM gate not applied (expression is %s, not TMMlogCPM); ranking all %d genes",
+                        pre$info$expr_work_method %||% "of unknown method", nrow(mat)))
     }
+    ranked <- rank_top_variable_genes(mat, mean_cpm, min_mean_cpm)
+
+    for (n_top in n_top_values) {
+        f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
+        if (n_top > length(ranked)) {
+            # A plot left by an earlier run would otherwise be shown as this run's.
+            if (file.exists(f_pca_top)) file.remove(f_pca_top)
+            message(sprintf("  Skipping PCA with top %d variable genes: only %d candidate genes",
+                            n_top, length(ranked)))
+            next
+        }
+        mat_top <- mat[ranked[seq_len(n_top)], , drop = FALSE]
+        tryCatch({
+            p_top <- qc_pca_scatter(mat_top, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top)
+            files <- c(files, f_pca_top)
+            plots[[sprintf("pca_top%d", n_top)]] <- p_top
+            message(sprintf("  Generated PCA with top %d variable genes", n_top))
+        }, error = function(e) {
+            message(sprintf("  Could not generate PCA with top %d genes: %s", n_top, e$message))
+        })
+    }
+
+    # What the report states about the top-N PCAs; min_mean_cpm is NA when the
+    # gate was not applied.
+    f_pca_sel <- file.path(out_qc, "PCA_top_variable_selection.csv")
+    utils::write.csv(data.frame(min_mean_cpm = min_mean_cpm, n_candidates = length(ranked)),
+                     f_pca_sel, row.names = FALSE)
+    files <- c(files, f_pca_sel)
 
     # ---------- Density (primary color only) ----------
     cfg_temp <- cfg
