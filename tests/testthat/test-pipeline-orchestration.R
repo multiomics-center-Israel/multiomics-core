@@ -140,6 +140,35 @@ test_that("pipe_proteomics contains expected target names", {
     expect_true("prot_de_res" %in% names)
 })
 
+test_that("pipe_proteomics adds the pooled-ranking target beside the legacy one", {
+    result <- pipe_proteomics()
+    by_name <- setNames(result, get_target_names(result))
+    expect_true("prot_pathway_pooled_res" %in% names(by_name))
+    expect_true("prot_pathway_res" %in% names(by_name))
+
+    target_expr <- function(tgt) {
+        expr <- tgt$command$expr
+        if (is.list(expr) || is.expression(expr)) expr <- expr[[1]]
+        expr
+    }
+    # The legacy target still calls the legacy module, unchanged.
+    expect_identical(target_expr(by_name$prot_pathway_res)[[1]], quote(mod_proteomics_pathway))
+    expect_identical(target_expr(by_name$prot_pathway_pooled_res)[[1]],
+                     quote(mod_proteomics_pathway_pooled))
+
+    # The report waits for it.
+    report_vars <- all.vars(target_expr(by_name$prot_report))
+    expect_true("prot_pathway_pooled_res" %in% report_vars)
+})
+
+test_that("the pooled-ranking target is a single-omics output only", {
+    # multiomics consumes prot_pathway_res; the pooled target must not be built
+    # when only the core proteomics targets are requested.
+    names_core <- get_target_names(pipe_proteomics(skip_outputs = TRUE))
+    expect_false("prot_pathway_pooled_res" %in% names_core)
+    expect_true("prot_pathway_res" %in% names_core)
+})
+
 test_that("pipe_proteomics returns expected number of targets", {
     result <- pipe_proteomics()
     expect_gte(length(result), 10)
