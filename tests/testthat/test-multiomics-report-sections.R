@@ -640,17 +640,16 @@ test_that("the loadings legends stay within 100 words with their caveat", {
     expect_lte(n_words(paste(ora$text, caveat)), 100)
 })
 
-test_that("the DIABLO variable loadings plot stays in the report", {
+test_that("the DIABLO variable and interactive loadings plots are gone", {
     src <- paste(template_lines(), collapse = "\n")
-    expect_true(grepl("diablo_variable_plot.png", src, fixed = TRUE))
-    expect_true(grepl("```{r diablo-variable-legend", src, fixed = TRUE))
-    # ... unless a project turns it off.
-    expect_true(grepl('show_diablo_variable_plot <- show_section("diablo_variable_plot")',
-                      src, fixed = TRUE))
-    expect_true(grepl("```{r diablo-variable-plot, eval=has_diablo && show_diablo_variable_plot,",
-                      src, fixed = TRUE))
-    expect_true(grepl("```{r diablo-variable-legend, eval=has_diablo && show_diablo_variable_plot,",
-                      src, fixed = TRUE))
+    for (gone in c("diablo_variable_plot", "diablo-variable-plot", "diablo-variable-legend",
+                   "diablo_loadings_interactive", "diablo-loadings-interactive",
+                   "Interactive Loadings Plot")) {
+        expect_false(grepl(gone, src, fixed = TRUE), info = gone)
+    }
+    diablo <- readLines(file.path(root_dir, "R", "domain", "multiomics",
+                                  "04_integration_diablo.R"), warn = FALSE)
+    expect_false(any(grepl("plotVar|plot_diablo_loadings_interactive", diablo)))
 })
 
 # ---- figures dropped on request --------------------------------------------

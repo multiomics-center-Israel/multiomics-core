@@ -192,9 +192,6 @@ show_mechanistic        <- show_section("mechanistic")
 # does not measure. MultiGSEA still writes the PNG/CSV pairs to its folder.
 show_multigsea_pairwise <- isTRUE(section_cfg[["multigsea_pairwise"]])
 
-# The DIABLO variable (correlation-circle) loadings plot; FALSE leaves it out.
-show_diablo_variable_plot <- show_section("diablo_variable_plot")
-
 # Detect which sections have data
 has_diablo      <- dir.exists(diablo_dir) && length(list.files(diablo_dir, "\\.png$")) > 0
 has_snf         <- dir.exists(snf_dir) && length(list.files(snf_dir, "\\.png$")) > 0
@@ -1891,18 +1888,6 @@ figure_legend("DIABLO sample scores plot. Samples are projected onto the first t
 render_commentary("diablo_sample_plot")
 ```
 
-```{r diablo-variable-plot, eval=has_diablo && show_diablo_variable_plot, results='asis'}
-p <- file.path(diablo_dir, "diablo_variable_plot.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
-}
-```
-
-```{r diablo-variable-legend, eval=has_diablo && show_diablo_variable_plot, results='asis'}
-figure_legend("DIABLO variable loadings plot. Top contributing features from each omics layer are shown on the first two components.")
-render_commentary("diablo_variable_plot")
-```
-
 ```{r diablo-circos, eval=has_diablo, results='asis'}
 circos_path <- file.path(diablo_dir, "diablo_circos.png")
 if (file.exists(circos_path)) {
@@ -1915,26 +1900,6 @@ if (file.exists(circos_path)) {
 if (file.exists(file.path(diablo_dir, "diablo_circos.png"))) {
     figure_legend("DIABLO circos plot showing cross-omics feature correlations. Sectors represent omics layers; bar heights show DIABLO loading magnitude (component 1). Chords connect feature pairs with absolute Pearson correlation above the cutoff. Red chords indicate positive correlation; blue chords indicate negative correlation. Chord intensity and width scale with correlation strength.")
     render_commentary("diablo_circos")
-}
-```
-
-```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
-int_html <- file.path(diablo_dir, "diablo_loadings_interactive.html")
-int_rds <- file.path(diablo_dir, "diablo_loadings_interactive.rds")
-if (file.exists(int_rds)) {
-    cat("\n### Interactive Loadings Plot {.unnumbered}\n\n")
-    widget <- readRDS(int_rds)
-    cat(knitr::knit_child(text = c(
-        '```{r diablo-interactive-widget, echo=FALSE, fig.height=7}',
-        'widget',
-        '```'
-    ), envir = environment(), quiet = TRUE))
-    cat("\n\n")
-    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and coloured by KEGG pathway membership where one is known; for organisms with no KEGG mapping every feature shows as Unmapped. Hover for feature details.")
-} else if (file.exists(int_html)) {
-    cat("\n### Interactive Loadings Plot {.unnumbered}\n\n")
-    cat(sprintf('<iframe src="%s" width="100%%" height="650" frameborder="0" style="border:1px solid #ddd; border-radius:4px;"></iframe>\n\n', int_html))
-    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and coloured by KEGG pathway membership where one is known; for organisms with no KEGG mapping every feature shows as Unmapped. Hover for feature details.")
 }
 ```
 
