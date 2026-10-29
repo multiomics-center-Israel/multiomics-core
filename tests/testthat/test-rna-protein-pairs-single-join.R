@@ -366,3 +366,21 @@ test_that("the shipped template leaves every report section on", {
     expect_true(show_section("group_distance"))
     expect_true(show_section("a_section_nobody_has_named"))
 })
+
+test_that("the scatter labels report r over all pairs and over the significant union", {
+    # Synthetic: the union carries a clear relationship, the rest is flat, so
+    # the two lines must differ and each must name its own n.
+    x <- c(1:10, rep(0, 6))
+    y <- c(1:10 + c(0.2, -0.2), c(1, -1, 2, -2, 1, -1))
+    sig <- c(rep(TRUE, 10), rep(FALSE, 6))
+    out <- rna_protein_fc_cor_lines(x, y, sig)
+    expect_length(out, 2)
+    expect_match(out[1], "^All pairs \\(n = 16\\): Pearson r = ")
+    expect_match(out[2], "^RNA or protein FDR<0.05 \\(n = 10\\): Pearson r = 0\\.99")
+    expect_match(out[2], "Spearman's ρ = ")
+    expect_match(rna_protein_fc_cor_lines(x, y, c(TRUE, TRUE, TRUE, rep(FALSE, 13)))[2],
+                 "RNA or protein FDR<0.05: n < 4")
+    # NA significance counts as not significant, as the category column does.
+    expect_match(rna_protein_fc_cor_lines(x, y, c(rep(NA, 6), rep(TRUE, 10)))[2],
+                 "\\(n = 10\\)")
+})
