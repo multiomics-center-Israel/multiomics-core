@@ -51,7 +51,7 @@ There is no separate `normalization:` block.
 | `chosen_norm` | `none`, `tss`, `median`, `pqn`, `eigenms`, `eigenms_forced`, `bio_factor`, or `null` |
 | `transform`, `pseudocount` | `transform` sets the log transform of `met_log`, so it affects only `median` and `none`. `tss`, `pqn`, `eigenms`, `eigenms_forced` and `bio_factor` always use `log2(x + pseudocount)` |
 | `scaling` | Optional feature scaling |
-| `drift_correction` | Optional LOESS signal-drift correction (QC samples + injection order) |
+| `drift_correction` | Optional LOESS signal-drift correction (QC samples + injection order). Opt-in: runs only with `enabled: true` |
 
 -   **`chosen_norm: null` is QC-review mode.** The pipeline builds the normalizations,
     a QC suite for the log matrix and for `tss`, `median`, `pqn`, `eigenms` and
@@ -64,6 +64,13 @@ There is no separate `normalization:` block.
 -   **`chosen_norm: none`** skips sample normalization, for tables normalized upstream.
     `transform` and `scaling` still apply, so set `transform: "none"` as well if the
     table is also already log-scaled.
+-   **LOESS drift correction is opt-in.** It runs only when
+    `drift_correction.enabled` is explicitly `true` and the metadata has the
+    injection-order and QC columns with at least 4 QC samples. A missing or empty
+    `drift_correction` block means off. Until this change a missing `enabled` meant
+    on, so **rerunning a project that never set it can give different results**
+    when its metadata met those conditions. To keep the old behaviour, set
+    `enabled: true` explicitly.
 
 ## Main targets after `metab_pre`
 

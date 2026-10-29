@@ -183,6 +183,20 @@ validate_metabolomics_config <- function(cfg) {
     assert_one_of(norm$scaling, "preprocessing$scaling",
                   c("none", "center", "auto", "pareto", "range"),
                   allow_null = TRUE)
+
+    # LOESS drift correction is opt-in: apply_drift_correction() runs it only
+    # for an explicit TRUE. A quoted "true" would therefore leave it off without
+    # a word, and a bare `drift_correction: true` would fail deep in the run.
+    dc <- norm[["drift_correction"]]
+    if (!is.null(dc)) {
+      if (!is.list(dc)) {
+        stop("preprocessing$drift_correction must be a block of settings ",
+             "(for example with 'enabled: true' on the next, indented line), ",
+             "not a single value.")
+      }
+      assert_scalar_bool(dc[["enabled"]], "preprocessing$drift_correction$enabled",
+                         allow_null = TRUE)
+    }
   }
   invisible(TRUE)
 }
