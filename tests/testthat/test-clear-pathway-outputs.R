@@ -24,10 +24,12 @@ test_that("clear_pathway_outputs removes only the pathway writers' files", {
 
     expect_setequal(basename(removed), c("pathway_A_vs_B_KEGG_fgsea.csv",
                                          "pathway_volcano_data_A_vs_B.csv",
-                                         "gene_annotation.csv",
                                          "pathway_A_vs_B_KEGG_fgsea.png"))
     expect_false(any(file.exists(removed)))
     expect_true(file.exists(file.path(d, "notes.txt")))
+    # The report's gene-symbol source stays until the offline route writes its
+    # own (#338); removing it now would leave offline reports with raw IDs.
+    expect_true(file.exists(file.path(d, "gene_annotation.csv")))
     expect_true(file.exists(file.path(d, "plots", "other.png")))
     # The offline route's subtrees are not touched
     expect_true(file.exists(file.path(d, "GSEA", "pathway_kept.csv")))

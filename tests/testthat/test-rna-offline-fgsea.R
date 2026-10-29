@@ -559,20 +559,25 @@ test_that("an offline run leaves no GSEA unit from an earlier run behind", {
         file.path(fx$out_dir, "Enrichment", "GSEA"), 0.05)), 0L)
 })
 
-test_that("removing a stale manifest leaves every other output in place", {
+test_that("removing a stale manifest leaves the offline outputs and gene annotation in place", {
     out <- withr::local_tempdir()
     enr <- file.path(out, "Enrichment")
     dir.create(file.path(enr, "GSEA", "KEGG"), recursive = TRUE)
-    keep <- c(file.path(enr, "pathway_c1_KEGG_fgsea.csv"),
-              file.path(enr, "gene_annotation.csv"),
+    keep <- c(file.path(enr, "gene_annotation.csv"),
               file.path(enr, "GSEA", "KEGG", "results.csv"),
               file.path(out, "enrichment_manifest.csv"))   # same name, outside Enrichment/
     for (f in keep) writeLines("x", f)
     writeLines("analysis,evaluated", file.path(enr, "enrichment_manifest.csv"))
+    # An online-route table is cleared too, by clear_pathway_outputs(): without a
+    # manifest the report falls back to listing these flat files, so a stale one
+    # would read as this run's result. Both go with the online route (#339).
+    online <- file.path(enr, "pathway_c1_KEGG_fgsea.csv")
+    writeLines("x", online)
 
     cfg <- list(modes = list(rna = list(enrichment = list(enabled = FALSE))))
     suppressMessages(mod_rnaseq_pathway(list(tables = list()), NULL, cfg, out))
     expect_false(file.exists(file.path(enr, "enrichment_manifest.csv")))
+    expect_false(file.exists(online))
     expect_true(all(file.exists(keep)))
 })
 

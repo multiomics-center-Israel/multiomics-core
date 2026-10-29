@@ -1205,9 +1205,12 @@ run_pathway_analysis <- function(de_tables,
 #' directory, would present them as this run's results. Call this before
 #' writing, so the directory holds only what the current run produced.
 #'
-#' Only the files those two writers (and the RNA module's gene annotation and
-#' pathway-volcano tables) produce are removed; subdirectories such as the
-#' offline route's \code{ORA/} and \code{GSEA/} trees are left alone.
+#' Only the files those two writers (and the RNA module's pathway-volcano
+#' tables) produce are removed; subdirectories such as the offline route's
+#' \code{ORA/} and \code{GSEA/} trees are left alone. \code{gene_annotation.csv}
+#' is left too: the report takes gene symbols from it and the offline route does
+#' not write one yet, so removing it would turn offline reports to raw IDs. It
+#' is retired together with its replacement (#338).
 #'
 #' @param enrich_dir The Enrichment directory, e.g. \code{<out_dir>/Enrichment}.
 #' @return The removed paths, invisibly (empty when there was nothing to remove).
@@ -1221,7 +1224,6 @@ clear_pathway_outputs <- function(enrich_dir) {
     if (!dir.exists(enrich_dir)) return(invisible(character()))
     old <- c(
         list.files(enrich_dir, pattern = "^pathway_.*\\.csv$", full.names = TRUE),
-        file.path(enrich_dir, "gene_annotation.csv"),
         list.files(file.path(enrich_dir, "plots"), pattern = "^pathway_.*\\.png$",
                    full.names = TRUE)
     )
