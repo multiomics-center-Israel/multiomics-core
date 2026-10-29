@@ -209,7 +209,7 @@ test_that("membership is empty when no GSEA pathway is significant", {
 local_stub_gsea_worker <- function(gsea_result_for, env = parent.frame()) {
     target <- globalenv()
     orig <- get(".make_gsea_worker", envir = target)
-    stub <- function(pvalueCutoff, pAdjustMethod) {
+    stub <- function(...) {
         function(job) list(ranking_method = job$ranking_method,
                            contrast = job$contrast, db_name = job$db_name,
                            gsea_result = gsea_result_for)

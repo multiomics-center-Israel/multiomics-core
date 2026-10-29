@@ -87,9 +87,36 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
     # ---- choose DE method ----
     method <- cfg$de$method %||% "limma"
 
+    # pre$expr_filt is the measured matrix and is never batch-corrected, so it is
+    # the DE input in modes "covariate" and "none". legacy_corrected reproduces
+    # the pre-de_mode behaviour: the corrected QC matrix with the measured
+    # missingness restored, which the correction step used to store in expr_filt.
+    bc <- get_proteomics_batch_config(cfg)
+    # Logged because a YAML `de_mode: null` gives no hint of what ran.
+    message(sprintf("Proteomics DE batch handling: de_mode '%s'%s -- %s.",
+                    bc$de_mode,
+                    if (bc$de_mode_explicit) "" else " (resolved from de_mode: null)",
+                    switch(bc$de_mode,
+                           covariate = sprintf(paste0("batch column '%s' in the limma design, ",
+                                                      "fitted on uncorrected values"),
+                                               bc$batch_col %||% "?"),
+                           none = "batch is not in the DE model",
+                           legacy_corrected = "DE fitted on batch-corrected values (legacy)")))
+    expr_for_de <- pre$expr_filt
+    if (identical(bc$de_mode, "legacy_corrected")) {
+        if (!isTRUE(pre$batch_corrected)) {
+            stop("batch_correction$de_mode is 'legacy_corrected' but no batch correction ",
+                 "ran, so there are no corrected values to fit on.\n",
+                 "  Set batch_correction$method, or use de_mode 'covariate' or 'none'.")
+        }
+        expr_for_de <- pre$expr_imp_single[rownames(pre$expr_filt), colnames(pre$expr_filt),
+                                           drop = FALSE]
+        expr_for_de[is.na(pre$expr_filt)] <- NA_real_
+    }
+
     # --- Shared step: generate multiple imputations ---
     imputations <- make_imputations_proteomics(
-        expr_mat = pre$expr_filt,
+        expr_mat = expr_for_de,
         cfg      = config,
         verbose  = verbose
     )
@@ -112,13 +139,24 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             config         = config
         )
 
+        # The design depends on the metadata only, so run 1 speaks for every
+        # run; warning per run would repeat the same text no_repetitions times.
+        batch_design <- runs[[1]]$batch_design
+        if (!is.null(batch_design)) {
+            notes <- c(batch_design$notes,
+                       with(batch_design$contrasts,
+                            sprintf("Contrast '%s': %s", Contrast, Note)[nzchar(Note)]))
+            for (n in notes) warning("Batch design: ", n, call. = FALSE)
+        }
+
         return(list(
             method = "limma",
             imputations = imputations,
             runs = runs,
             runs_de_tables = runs_de_tables,
             summary_df = summary_df,
-            de_model = runs[[1]]$fit2
+            de_model = runs[[1]]$fit2,
+            batch_design = batch_design
         ))
     }
 
