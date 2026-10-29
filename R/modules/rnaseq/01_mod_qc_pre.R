@@ -254,7 +254,8 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         # Use primary color for heatmap
         cfg_temp <- cfg
         cfg_temp$effects$color <- primary_color
-        hm_clusters <- wrap_qc_heatmap(mat, meta, cfg_temp, stage = stage, out_file = f_hm)
+        hm_clusters <- wrap_qc_heatmap(mat, meta, cfg_temp, stage = stage, out_file = f_hm,
+                                       annot_cols = annot_cols)
         files <- c(files, f_hm)
         plots$heatmap_clusters <- hm_clusters
 
