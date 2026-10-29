@@ -151,8 +151,9 @@ compute_tmm_cpm <- function(counts) {
 #' \code{min_mean_cpm}. On log-CPM with a small prior count, genes near zero
 #' counts can reach a large variance from counting noise alone; the gate keeps
 #' them out of the candidates without changing the matrix. With
-#' \code{mean_cpm = NULL} or \code{min_mean_cpm = 0} every gene is a candidate
-#' and the order is the one \code{order(var, decreasing = TRUE)} gives.
+#' \code{mean_cpm = NULL}, or \code{min_mean_cpm = 0} and no missing mean CPM,
+#' every gene is a candidate and the order is the one
+#' \code{order(var, decreasing = TRUE)} gives.
 #'
 #' @param mat Expression matrix (genes x samples) whose variance is ranked.
 #' @param mean_cpm Mean linear CPM per gene, in the row order of \code{mat}, or

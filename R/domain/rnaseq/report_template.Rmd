@@ -855,6 +855,10 @@ if (file.exists(pca_sel_file)) {
         sprintf("Genes were ranked by variance of log-CPM among the %s genes with a mean TMM-normalized CPM of at least %s; a top-N plot is shown only when at least N genes qualify. The PC1 vs PC2 tab uses all genes kept after filtering.",
                 n_cand, format(pca_sel$min_mean_cpm))
     }, "\n\n")
+    # Below, the selector falls back to the all-genes plot when no top-N plot exists.
+    if (length(list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$")) == 0) {
+        cat("Too few genes qualified for any top-N plot; the plot below uses all genes.\n\n")
+    }
 }
 ```
 

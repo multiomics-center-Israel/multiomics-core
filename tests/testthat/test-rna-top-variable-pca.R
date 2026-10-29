@@ -219,12 +219,13 @@ rna_report_template <- function() {
     candidates[file.exists(candidates)][1]
 }
 
-run_rule_chunk <- function(sidecar = NULL) {
+run_rule_chunk <- function(sidecar = NULL, top_pngs = "PCA_top500.png") {
     rmd <- rna_report_template()
     fence <- find_rmd_chunk_lines(rmd, "pca-var-genes-rule")
     code <- readLines(rmd, warn = FALSE)[(fence[1] + 1):(fence[2] - 1)]
     env <- new.env(parent = globalenv())
     env$diag_dir <- withr::local_tempdir(.local_envir = parent.frame())
+    file.create(file.path(env$diag_dir, top_pngs))
     if (!is.null(sidecar)) {
         utils::write.csv(sidecar, file.path(env$diag_dir, "PCA_top_variable_selection.csv"), row.names = FALSE)
     }
@@ -239,4 +240,11 @@ test_that("the report states the rule that ran, and nothing without the sidecar"
                  "no mean-CPM restriction was applied", fixed = TRUE)
     expect_match(run_rule_chunk(data.frame(min_mean_cpm = 0, n_candidates = 300)),
                  "restriction disabled", fixed = TRUE)
+    expect_false(grepl("Too few genes", run_rule_chunk(data.frame(min_mean_cpm = 1, n_candidates = 9812))))
+})
+
+test_that("the report says when no top-N plot qualified and the all-genes plot is shown", {
+    out <- run_rule_chunk(data.frame(min_mean_cpm = 1, n_candidates = 320), top_pngs = character(0))
+    expect_match(out, "320 genes with a mean TMM-normalized CPM", fixed = TRUE)
+    expect_match(out, "the plot below uses all genes", fixed = TRUE)
 })
