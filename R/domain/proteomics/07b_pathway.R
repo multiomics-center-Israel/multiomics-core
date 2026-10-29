@@ -99,12 +99,24 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
 #' Uses the Genes column from summary_df (semicolon-separated,
 #' takes first symbol per protein).
 #'
+#' When several proteins map to one gene symbol, one row is kept per symbol.
+#' \code{priority} decides which: \code{"padj"} (the legacy rule) keeps the
+#' lowest adjusted p-value; \code{"observed"} keeps the protein with the most
+#' observed (pre-imputation) values, then the highest average expression, which
+#' needs \code{n_observed} and \code{AveExpr} columns and is what the
+#' pooled-ranking enrichment uses. Under "observed", a protein with a finite
+#' \code{stat} is preferred over one without, so a gene is not dropped from the
+#' ranking when another of its proteins has a usable statistic.
+#'
 #' @param de_table  DE table with FeatureID column
 #' @param summary_df Original summary data.frame with Genes column
 #' @param config    Full config list
+#' @param priority  "padj" (default) or "observed"; see above.
 #' @return Modified de_table with FeatureID remapped to gene symbols,
 #'         original ID stored in ProteinID
-map_proteins_to_gene_symbols <- function(de_table, summary_df, config) {
+map_proteins_to_gene_symbols <- function(de_table, summary_df, config,
+                                         priority = c("padj", "observed")) {
+    priority <- match.arg(priority)
     cfg <- config$modes$proteomics
     src_id_col <- cfg$de_table$id_col %||% "FeatureID"
 
@@ -131,54 +143,35 @@ map_proteins_to_gene_symbols <- function(de_table, summary_df, config) {
     mapped <- gene_map[de_table$FeatureID]
     de_table$FeatureID <- ifelse(is.na(mapped), de_table$FeatureID, mapped)
 
-    # Remove duplicates (keep lowest padj per gene symbol)
-    de_table <- de_table[order(de_table$padj, na.last = TRUE), ]
+    # Remove duplicates (keep one protein per gene symbol, chosen by priority)
+    ord <- switch(priority,
+        padj     = order(de_table$padj, na.last = TRUE),
+        observed = order(if (is.null(de_table$stat)) logical(nrow(de_table)) else !is.finite(de_table$stat),
+                         -de_table$n_observed, -de_table$AveExpr, na.last = TRUE)
+    )
+    de_table <- de_table[ord, ]
     de_table <- de_table[!duplicated(de_table$FeatureID), ]
 
     de_table
 }
 
 # ==============================================================================
-# ORCHESTRATOR
+# GENE SETS
 # ==============================================================================
 
-#' Run proteomics pathway enrichment (ORA + fGSEA)
+#' Resolve organism, annotation and gene sets for proteomics enrichment
 #'
-#' @param de_res   DE results list (with summary_df)
-#' @param pre      Preprocessed proteomics object
-#' @param config   Full config list
-#' @param out_dir  Output root directory
-#' @return Pathway results list (from run_pathway_analysis)
-run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
+#' Shared by the legacy enrichment (run_proteomics_pathway()) and the
+#' pooled-ranking enrichment, so both test the same collections.
+#'
+#' @param de_tables Named list of per-contrast tables whose FeatureID column
+#'   holds the identifiers the gene sets are matched on.
+#' @param config Full config list.
+#' @return list(organism, annotation, gene_sets), or NULL (with a message) when
+#'   no gene set could be loaded.
+prepare_proteomics_gene_sets <- function(de_tables, config) {
     cfg <- config$modes$proteomics
     pw_cfg <- cfg$pathway %||% list()
-
-    message("=== Proteomics Pathway Enrichment ===")
-
-    summary_df <- de_res$summary_df
-    if (is.null(summary_df)) {
-        message("No summary_df available. Skipping pathway analysis.")
-        return(NULL)
-    }
-
-    # Identify contrasts
-    contrasts <- sub("^padj\\.imputs\\.", "",
-                     grep("^padj\\.imputs\\.", colnames(summary_df), value = TRUE))
-
-    if (length(contrasts) == 0) {
-        message("No contrasts found. Skipping pathway analysis.")
-        return(NULL)
-    }
-
-    # Build per-contrast DE tables. When annotation is skipped (non-model runs
-    # whose custom GMT is keyed on the raw Protein.Group FeatureID), do NOT remap
-    # FeatureID to Genes symbols — the DIA-NN Genes column may hold description
-    # text rather than symbols, which would break the FeatureID<->GMT match.
-    skip_symbol_remap <- isTRUE((cfg$annotation %||% list())$skip_annotation)
-    de_tables <- lapply(setNames(contrasts, contrasts), function(cn) {
-        tbl <- extract_de_table_for_pathway(summary_df, cn, config)
-        if (skip_symbol_remap) tbl else map_proteins_to_gene_symbols(tbl, summary_df, config)
-    })
 
     # ------------------------------------------------------------------
     # Resolve organism from config (no auto-detect for proteomics)
@@ -254,6 +247,57 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         message("No gene sets loaded. Skipping pathway analysis.")
         return(NULL)
     }
+
+    list(organism = organism, annotation = annotation_df, gene_sets = gene_sets)
+}
+
+# ==============================================================================
+# ORCHESTRATOR
+# ==============================================================================
+
+#' Run proteomics pathway enrichment (ORA + fGSEA)
+#'
+#' @param de_res   DE results list (with summary_df)
+#' @param pre      Preprocessed proteomics object
+#' @param config   Full config list
+#' @param out_dir  Output root directory
+#' @return Pathway results list (from run_pathway_analysis)
+run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
+    cfg <- config$modes$proteomics
+    pw_cfg <- cfg$pathway %||% list()
+
+    message("=== Proteomics Pathway Enrichment ===")
+
+    summary_df <- de_res$summary_df
+    if (is.null(summary_df)) {
+        message("No summary_df available. Skipping pathway analysis.")
+        return(NULL)
+    }
+
+    # Identify contrasts
+    contrasts <- sub("^padj\\.imputs\\.", "",
+                     grep("^padj\\.imputs\\.", colnames(summary_df), value = TRUE))
+
+    if (length(contrasts) == 0) {
+        message("No contrasts found. Skipping pathway analysis.")
+        return(NULL)
+    }
+
+    # Build per-contrast DE tables. When annotation is skipped (non-model runs
+    # whose custom GMT is keyed on the raw Protein.Group FeatureID), do NOT remap
+    # FeatureID to Genes symbols — the DIA-NN Genes column may hold description
+    # text rather than symbols, which would break the FeatureID<->GMT match.
+    skip_symbol_remap <- isTRUE((cfg$annotation %||% list())$skip_annotation)
+    de_tables <- lapply(setNames(contrasts, contrasts), function(cn) {
+        tbl <- extract_de_table_for_pathway(summary_df, cn, config)
+        if (skip_symbol_remap) tbl else map_proteins_to_gene_symbols(tbl, summary_df, config)
+    })
+
+    gs_info <- prepare_proteomics_gene_sets(de_tables, config)
+    if (is.null(gs_info)) return(NULL)
+    organism      <- gs_info$organism
+    annotation_df <- gs_info$annotation
+    gene_sets     <- gs_info$gene_sets
 
     # Run shared pathway analysis
     method   <- pw_cfg$method   %||% "both"

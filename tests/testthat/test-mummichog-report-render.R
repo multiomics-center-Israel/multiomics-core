@@ -236,6 +236,17 @@ tab_body <- function(html, from, to) {
   substr(html, a, b)
 }
 
+# The data of the tables in one tab: the htmlwidget JSON payloads, without the
+# tab's prose. The Summary legend defines every row label whether or not a row
+# carries it, so a label assertion made on the whole tab cannot fail (or, negated,
+# cannot pass); made on the payload it checks the rows.
+tab_table_data <- function(tab) {
+  m <- regmatches(tab, gregexpr(
+    '<script[^>]*data-for="htmlwidget-[^"]*"[^>]*>.*?</script>', tab, perl = TRUE))[[1]]
+  expect_gt(length(m), 0L, label = "number of table widgets in the tab")
+  paste(m, collapse = " ")
+}
+
 
 test_that("the mummichog section renders with GSEA and evidence", {
   skip_unless_renderable()
@@ -261,14 +272,15 @@ test_that("the mummichog section renders with GSEA and evidence", {
   expect_match(summary_tab, "Top 20 Mummichog pathways for this contrast", fixed = TRUE)
   # pageLength 20 for this table only, so the whole top 20 fits one page.
   expect_match(summary_tab, '"pageLength":20', fixed = TRUE)
+  summary_rows <- tab_table_data(summary_tab)
   expect_match(summary_tab, "Fatty acid degradation", fixed = TRUE)
-  expect_match(summary_tab, "Mummichog-only candidate", fixed = TRUE)
-  expect_match(summary_tab, "Not tested", fixed = TRUE)
+  expect_match(summary_rows, "Mummichog-only candidate", fixed = TRUE)
+  expect_match(summary_rows, "Not tested", fixed = TRUE)
   expect_match(summary_tab, "2 ECs / 3 features", fixed = TRUE)
   expect_match(summary_tab, "no adjusted pathway p-value is reported", fixed = TRUE)
   # Ranked, but not nominal: listed, and never called a candidate.
   expect_match(summary_tab, "Glycolysis", fixed = TRUE)
-  expect_match(summary_tab, "No nominal Mummichog signal", fixed = TRUE)
+  expect_match(summary_rows, "No nominal Mummichog signal", fixed = TRUE)
 
   # Each plot tab carries its own plot, legend and one-line count.
   ora_tab <- tab_body(html, "ora-plot", "gsea-plot")
@@ -376,9 +388,10 @@ test_that("a contrast with no nominal pathway says so above its ranked rows", {
                fixed = TRUE)
   expect_match(summary_tab, "not significant results", fixed = TRUE)
   # The ranked rows are still listed, none as a candidate.
+  summary_rows <- tab_table_data(summary_tab)
   expect_match(summary_tab, "Fatty acid degradation", fixed = TRUE)
-  expect_match(summary_tab, "No nominal Mummichog signal", fixed = TRUE)
-  expect_false(grepl("Mummichog-only candidate", summary_tab, fixed = TRUE))
+  expect_match(summary_rows, "No nominal Mummichog signal", fixed = TRUE)
+  expect_false(grepl("Mummichog-only candidate", summary_rows, fixed = TRUE))
   expect_match(tab_body(html, "pathway-evidence", "advanced-downloads"),
                "No Summary pathway has a nominal ORA result with ORA-derived evidence",
                fixed = TRUE)

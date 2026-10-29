@@ -14,6 +14,8 @@ output:
     fig_height: 7
     self_contained: true
     code_folding: hide
+params:
+  rna_info: NULL
 ---
 
 ```{r setup, include=FALSE}
@@ -182,6 +184,11 @@ render_commentary <- function(figure_id) {
 cfg <- yaml::read_yaml(config_path)
 rna_cfg <- cfg$modes$rna
 
+# Every filtering sentence and table row below reads this one description of
+# the filter that ran (params$rna_info = preprocess_rna()'s info), not the
+# filtering config keys.
+rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
+
 # Section visibility flags (default-off for MA + p-value distribution after
 # Apr 2026 reviewer feedback; toggle on via report_sections in config).
 .rna_rs        <- rna_cfg$report_sections %||% list()
@@ -295,8 +302,6 @@ cat("## Downstream Analysis (multiomics-core)\n\n")
 
 norm_method <- rna_cfg$normalization$method %||% "TMM"
 prior_ct <- rna_cfg$normalization$prior.count %||% 1
-filt_min <- rna_cfg$filtering$auto_filter$min %||% 0.5
-filt_max <- rna_cfg$filtering$auto_filter$max %||% 2.0
 de_method <- rna_cfg$de$method %||% "deseq2"
 deseq_mode <- rna_cfg$de$deseq_mode %||% "default"
 p_cut <- rna_cfg$de$p_cutoff %||% 0.05
@@ -309,22 +314,28 @@ pathway_enabled <- isTRUE(rna_cfg$pathway$enabled)
 pathway_method <- rna_cfg$pathway$method %||% "fgsea"
 pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
 
+# normalize_counts() runs VST only for method "VST"; everything else is edgeR log-CPM,
+# whose prior.count is in reads (scaled by library size), not an offset in CPM units.
+norm_desc <- if (identical(norm_method, "VST")) {
+    "the DESeq2 variance-stabilizing transformation (VST, blind to the design)"
+} else {
+    sprintf(paste0("edgeR TMM scaling with log2-CPM transformation ",
+                   "(prior.count = %s, in read units scaled by library size)"), prior_ct)
+}
+
 cat(sprintf(
     paste0(
-        "Gene filtering was performed using an adaptive density-based threshold ",
-        "(KDE on log2-CPM distribution), selecting an optimal CPM threshold within the ",
-        "[%.1f\u2013%.1f] range. Genes passing the threshold in at least one complete ",
-        "biological group were retained. Normalization was performed using the %s method ",
-        "with log2-CPM transformation (prior count = %d). ",
+        "%s Normalization was performed using %s. ",
         "Differential expression was tested using %s (%s test, %s mode). ",
         "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
     ),
-    filt_min, filt_max,
-    norm_method, prior_ct,
+    rna_filt$methods,
+    norm_desc,
     toupper(de_method), "Wald", deseq_mode,
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
 ))
+if (!is.null(rna_filt$de_note)) cat(" ", rna_filt$de_note, sep = "")
 
 if (pathway_enabled) {
     cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
@@ -355,10 +366,10 @@ if (!is.null(tech$upstream_de_note)) {
     cat(tech$upstream_de_note, " ")
     cat(sprintf(
         paste0(
-            "This report applies additional filtering: adaptive CPM-based gene filtering, ",
+            "This report applies additional filtering: gene filtering (%s), ",
             "%s normalization, and a fold-change cutoff of \u2265 %.1f"
         ),
-        norm_method, fc_cut
+        rna_filt$short, norm_method, fc_cut
     ))
     if (!is.na(our_de_n)) {
         cat(sprintf(", resulting in **%s DEGs**", format(as.integer(our_de_n), big.mark = ",")))
@@ -410,17 +421,16 @@ prior_count <- rna_cfg$normalization$prior.count %||% 1
 settings <- data.frame(
   Parameter = c(
     "Normalization Method",
-    paste0("Prior Count (added before log2 to avoid log(0): log2(CPM + ", prior_count, "))"),
-    "Filtering Group Column", "Auto-filter CPM Threshold Range",
+    "Prior Count (edgeR log2-CPM; in read units, scaled by library size)",
+    "Gene Filtering (details under Filtering Strategy)",
     "DE Method", "DESeq2 Mode",
     "Adjusted p-value Cutoff", "Linear FC Cutoff",
     "Clustering Enabled"
   ),
   Value = c(
     rna_cfg$normalization$method %||% "N/A",
-    prior_count,
-    rna_cfg$filtering$group_col %||% "N/A",
-    paste0(rna_cfg$filtering$auto_filter$min %||% "?", " – ", rna_cfg$filtering$auto_filter$max %||% "?", " CPM (pipeline selects optimal within this range)"),
+    if (identical(rna_cfg$normalization$method, "VST")) "not used (VST)" else prior_count,
+    rna_filt$short,
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
     ifelse(isTRUE(rna_cfg$clustering$enabled), "Yes", "No")
@@ -442,43 +452,40 @@ kable(contrasts)
 
 ## Filtering Strategy
 
-The pipeline applies **CPM-based auto-filtering** to remove lowly expressed genes before differential expression analysis. Genes that do **not** reach a minimum expression level (CPM threshold) are removed. This is a standard and necessary practice in RNA-seq to:
+```{r filtering-strategy, results='asis'}
+# Describes the filter recorded by preprocess_rna(), not the filtering config.
+if (rna_filt$mode %in% c("adaptive", "fixed")) {
+    cat("Lowly expressed genes were removed before differential expression analysis.",
+        "Genes with very low counts have unreliable fold-change estimates and add",
+        "multiple-testing burden without adding information.\n\n")
+}
+cat(rna_filt$methods, "\n\n")
+if (rna_filt$mode %in% c("adaptive", "fixed")) {
+    cat("Because a gene only has to pass in one group, genes expressed in a single",
+        "condition are kept even when they are low elsewhere.\n\n")
+}
+if (!is.null(rna_filt$de_note)) cat(rna_filt$de_note, "\n\n")
 
-1. **Reduce noise**: Genes with very low counts have unreliable fold-change estimates
-2. **Improve statistical power**: Fewer tests means less severe multiple testing correction
-3. **Remove technical artifacts**: Many zero/low counts represent sequencing noise, not biology
-
-**How auto-filtering works:**
-
-```{r filtering-strategy}
 filter_params <- data.frame(
   Parameter = c(
+    "Filtering Mode",
+    "Filtering Matrix",
     "Grouping Column",
-    "CPM Threshold Search Range",
-    "Fallback Threshold",
+    "Threshold Applied",
     "Filtering Rule"
   ),
   Value = c(
-    rna_cfg$filtering$group_col,
-    paste0(rna_cfg$filtering$auto_filter$min, " – ", rna_cfg$filtering$auto_filter$max, " CPM (pipeline automatically selects the optimal threshold within this range)"),
-    paste0(rna_cfg$filtering$auto_filter$fallback %||% 1.0, " CPM"),
-    "Gene is KEPT only if it has CPM ≥ threshold in ALL samples of at least ONE biological group"
+    rna_filt$short,
+    if (is.na(rna_filt$matrix)) "N/A" else rna_filt$matrix,
+    if (is.na(rna_filt$group_col)) "N/A (no group-based filtering)" else rna_filt$group_col,
+    rna_filt$threshold_label,
+    rna_filt$rule %||% "N/A"
   ),
   stringsAsFactors = FALSE
 )
-kable(filter_params, col.names = c("Parameter", "Value"))
+print(knitr::kable(filter_params, col.names = c("Parameter", "Value")))
+cat("\n\n")
 ```
-
-**Algorithm:**
-
-1. Calculate CPM (counts per million) for each gene in each sample
-2. For each candidate threshold (from min to max range):
-   - For each biological group, check if the gene has CPM ≥ threshold in ALL samples of that group
-   - A gene is **kept** if it meets the threshold in at least one complete group; otherwise it is **removed**
-3. The pipeline automatically selects the optimal threshold that balances gene retention with noise reduction
-4. The selected threshold is shown in the QC plot below
-
-This group-aware filtering ensures that genes specific to certain conditions are retained, even if they have low expression in other conditions. Genes that are lowly expressed across **all** conditions are removed as uninformative.
 
 ---
 
@@ -607,7 +614,8 @@ cat("</div>\n")
 
 .tm_steps <- list(
     list(label = "Filtering",
-         ran   = !is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before != .tm_n_after),
+         ran   = if (rna_filt$mode != "unknown") rna_filt$applied else
+                     !is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before != .tm_n_after),
     list(label = "Normalization",
          ran   = (tolower(rna_cfg$normalization$method %||% "tmm") != "none")),
     list(label = "Differential expression",
@@ -651,9 +659,8 @@ cat('</tbody></table>\n')
 
 ## Gene Filtering
 
-Counts before and after the filtering rule defined under *Analysis Parameters → Filtering Strategy*.
-Lowly expressed genes were removed using the auto-filtering strategy described above.
-The pipeline evaluates CPM distributions across biological groups and selects an optimal threshold.
+Counts before and after the gene filter described under *Analysis Parameters → Filtering Strategy*
+(`r rna_filt$short`).
 
 ```{r filter-stats}
 # Read raw and filtered counts to get gene numbers
@@ -686,13 +693,20 @@ if (!is.na(n_genes_raw) && !is.na(n_genes_filt)) {
 }
 ```
 
-```{r filter-plot, fig.cap="CPM filtering threshold selection"}
-if (file.exists(filter_plot)) knitr::include_graphics(filter_plot)
+```{r filter-plot, fig.cap="Filtering threshold selection"}
+# Only the adaptive mode writes this plot. Shown only when this run is known to
+# have filtered adaptively, so a copy left by an earlier run never stands in.
+show_filter_plot <- file.exists(filter_plot) && identical(rna_filt$mode, "adaptive")
+if (show_filter_plot) knitr::include_graphics(filter_plot)
 ```
 
 ```{r legend-filter-plot, results='asis', echo=FALSE}
-if (file.exists(filter_plot)) {
-    figure_legend("CPM filtering threshold selection. The pipeline evaluates the number of genes retained at each candidate CPM threshold within the specified range and selects the optimal value that balances noise reduction with gene retention.")
+if (show_filter_plot) {
+    figure_legend(paste(
+        "Filtering threshold selection. Density of log2(expression + 0.1) values pooled over all genes and samples.",
+        "The red line is drawn at log2 of the threshold applied, which is the selected local minimum unless the",
+        "range limits or the fallback set the threshold (see Filtering Strategy).",
+        sprintf("Threshold applied: %s.", rna_filt$threshold_label)))
 }
 ```
 
@@ -2730,15 +2744,84 @@ cat("\n---\n\n")
 # Enrichment / Pathway Analysis
 
 ```{r pathway-setup}
-# Check if enrichment results exist
-has_enrichment <- dir.exists(enrich_dir) && length(list.files(enrich_dir, pattern = "\\.csv$")) > 0
-has_pathway_plots <- dir.exists(enrich_plot_dir) && length(list.files(enrich_plot_dir, pattern = "\\.png$")) > 0
+# Did enrichment run? The offline path records every evaluated unit in
+# enrichment_manifest.csv, including units with nothing significant, which
+# write no result table; the online path leaves its flat CSVs here.
+manifest_file <- file.path(enrich_dir, "enrichment_manifest.csv")
+enr_manifest <- if (file.exists(manifest_file)) {
+    tryCatch(read.csv(manifest_file, stringsAsFactors = FALSE), error = function(e) NULL)
+} else NULL
+evaluated <- if (!is.null(enr_manifest) && "evaluated" %in% names(enr_manifest)) {
+    as.logical(enr_manifest$evaluated) %in% TRUE
+} else logical(0)
+offline_ran <- any(evaluated)
+flat_csvs <- setdiff(list.files(enrich_dir, pattern = "\\.csv$"), basename(manifest_file))
+# "not_run": no record of enrichment; "failed": the offline path ran but no unit
+# was evaluated (each one failed, or none could be built); "completed": at least
+# one unit was evaluated (offline) or the online path wrote its tables.
+enr_status <- if (offline_ran) {
+    "completed"
+} else if (!is.null(enr_manifest)) {
+    "failed"
+} else if (dir.exists(enrich_dir) && length(flat_csvs) > 0) {
+    "completed"
+} else {
+    "not_run"
+}
+has_enrichment <- identical(enr_status, "completed")
+n_failed_units <- sum(!evaluated)
+n_sig_units <- if (offline_ran && "n_significant" %in% names(enr_manifest)) {
+    sum(enr_manifest$n_significant[evaluated] > 0, na.rm = TRUE)
+} else NA_integer_
+gsea_plot_dir <- file.path(enrich_dir, "GSEA")
+offline_dotplots <- if (dir.exists(gsea_plot_dir)) {
+    list.files(gsea_plot_dir, pattern = "^dotplot\\.png$",
+               full.names = TRUE, recursive = TRUE)
+} else character(0)
+# Keep only unit dotplots (<db>/ranking_by_<ranking>/<contrast>/dotplot.png),
+# so a stray file neither opens an empty section nor hides the legacy plots.
+offline_dotplots <- offline_dotplots[grepl(
+    "^[^/]+/ranking_by_[^/]+/[^/]+/dotplot\\.png$",
+    substring(offline_dotplots, nchar(gsea_plot_dir) + 2L))]
+legacy_dotplots <- if (dir.exists(enrich_plot_dir)) {
+    list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
+} else character(0)
+has_pathway_plots <- length(offline_dotplots) + length(legacy_dotplots) > 0
+# The cutoffs enrichment ran with: a GSEA set is significant at padj <= gsea_cut;
+# offline ORA was run with ora_cut as clusterProfiler's pvalueCutoff.
+enr_settings <- resolve_rna_gsea_settings(cfg)
+gsea_cut <- enr_settings$sig_cutoff
+ora_cut  <- enr_settings$ora_cutoff
 ```
 
 ```{r pathway-skip, eval=!has_enrichment, results='asis'}
-cat("Pathway analysis was not run or produced no results. To enable it, set ",
-    "`pathway.enabled: true` in the configuration file and ensure the required ",
-    "R packages are installed (fgsea, org.*.eg.db, clusterProfiler).\n")
+if (identical(enr_status, "failed")) {
+    cat("Pathway analysis was run, but no analysis unit completed: every ORA/GSEA ",
+        "unit failed or none could be built (", nrow(enr_manifest), " recorded in ",
+        "`Enrichment/enrichment_manifest.csv`). See the pipeline log for the errors.\n",
+        sep = "")
+} else {
+    cat("Pathway analysis was not run. To enable it, set ",
+        "`pathway.enabled: true` in the configuration file and ensure the required ",
+        "R packages are installed (fgsea, org.*.eg.db, clusterProfiler).\n")
+}
+```
+
+```{r pathway-status, eval=has_enrichment && offline_ran, results='asis'}
+if (identical(n_sig_units, 0L)) {
+    cat(sprintf(paste0(
+        "Pathway analysis completed: %d analysis unit(s) were evaluated and none ",
+        "reached significance (GSEA adjusted p-value ≤ %s; ORA adjusted p-value ",
+        "cutoff %s).\n\n"), sum(evaluated), format(gsea_cut), format(ora_cut)))
+} else {
+    cat(sprintf("Pathway analysis completed: %d of %d evaluated analysis unit(s) have significant results.\n\n",
+                n_sig_units, sum(evaluated)))
+}
+if (n_failed_units > 0) {
+    cat(sprintf(paste0(
+        "%d analysis unit(s) failed and are not shown; they are listed with ",
+        "status \"failed\" in `Enrichment/enrichment_manifest.csv`.\n\n"), n_failed_units))
+}
 ```
 
 ```{r pathway-annotation, eval=has_enrichment}
@@ -2757,14 +2840,29 @@ if (file.exists(anno_file)) {
 **Key metrics:**
 
 - **NES (Normalized Enrichment Score)**: The primary statistic from fGSEA. Positive NES indicates the pathway is enriched in **up-regulated** genes; negative NES indicates enrichment in **down-regulated** genes. The magnitude reflects the degree of enrichment.
-- **padj**: Benjamini-Hochberg adjusted p-value (FDR). Pathways with padj < 0.05 are considered significant.
+- **padj**: Benjamini-Hochberg adjusted p-value (FDR). Pathways with padj ≤ `r gsea_cut` are considered significant.
 - **size**: Number of genes in the pathway that were present in the dataset.
 
 ## fGSEA Results {.tabset}
 
 ```{r fgsea-tables-prep, eval=has_enrichment, include=FALSE}
-# Pre-load fGSEA data for rendering in regular (non-asis) chunks
-fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+# Offline: the significant rows of every ranking's results.csv, one row per
+# pathway and ranking, and the evaluated (contrast, database) units from the
+# manifest, so a unit with nothing significant is still shown. Online: the
+# flat pathway_<contrast>_<db>_fgsea.csv files.
+offline_gsea <- NULL
+offline_units <- NULL
+if (offline_ran) {
+    offline_gsea <- read_offline_gsea_tables(file.path(enrich_dir, "GSEA"), gsea_cut)
+    gsea_ran <- enr_manifest[enr_manifest$analysis == "GSEA" & evaluated, , drop = FALSE]
+    offline_units <- unique(data.frame(contrast = as.character(gsea_ran$item),
+                                       database = as.character(gsea_ran$database),
+                                       stringsAsFactors = FALSE))
+    offline_units <- offline_units[order(offline_units$contrast, offline_units$database), ,
+                                   drop = FALSE]
+}
+fgsea_files <- if (offline_ran) character(0) else
+    list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
 fgsea_tables <- list()
 if (length(fgsea_files) > 0) {
     for (i in seq_along(fgsea_files)) {
@@ -2772,7 +2870,7 @@ if (length(fgsea_files) > 0) {
         label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
         label_clean <- gsub("_", " ", label)
         fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
-        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj < 0.05, ]
+        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj <= gsea_cut, ]
         if (nrow(sig) > 0) {
             sig <- sig[order(sig$padj), ]
             if ("pathway_name" %in% names(sig)) {
@@ -2791,12 +2889,44 @@ if (length(fgsea_files) > 0) {
 ```
 
 ```{r fgsea-tables, eval=has_enrichment, results='asis'}
-if (length(fgsea_tables) > 0) {
+if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
+    cat("GSEA was run with several gene rankings. They are alternative analyses of ",
+        "the same differential-expression results, not independent evidence, and none ",
+        "is primary. Each row below is one pathway in one ranking: a pathway significant ",
+        "under several rankings appears once per ranking, and p-values are not combined ",
+        "across rankings. Only pathways with adjusted p-value ≤ ", format(gsea_cut),
+        " are shown; every tested pathway is in ",
+        "`Enrichment/GSEA/<database>/ranking_by_<ranking>/<contrast>/results.csv`. ",
+        "Direction is not given for the unsigned ranking, whose NES sign does not mean ",
+        "up or down.\n\n", sep = "")
+    for (u in seq_len(nrow(offline_units))) {
+        cn <- offline_units$contrast[u]; db <- offline_units$database[u]
+        cat(sprintf("\n### %s — %s\n\n", cn, db))
+        if (identical(cn, "any_contrast")) {
+            cat("Genes ranked by their minimum p-value across all contrasts (unsigned).\n\n")
+        }
+        rows <- offline_gsea[offline_gsea$contrast == cn & offline_gsea$database == db, ,
+                             drop = FALSE]
+        if (nrow(rows) == 0) {
+            cat(sprintf("No significant pathways (padj ≤ %s) in any ranking for this contrast/database.\n\n",
+                        format(gsea_cut)))
+            next
+        }
+        cat(sprintf("%d row(s): %d distinct pathway(s) across %d ranking(s).\n\n",
+                    nrow(rows), length(unique(rows$ID)), length(unique(rows$Ranking))))
+        print(knitr::kable(
+            rows[, c("Pathway", "ID", "Ranking", "NES", "Direction", "pval", "padj", "size")],
+            caption = sprintf("Significant pathways by ranking — %s, %s", cn, db),
+            row.names = FALSE, digits = 4))
+        cat("\n\n")
+    }
+} else if (length(fgsea_tables) > 0) {
     for (i in seq_along(fgsea_tables)) {
         tbl <- fgsea_tables[[i]]
         cat(sprintf("\n### %s {.tabset}\n\n", tbl$label))
         if (is.null(tbl$data)) {
-            cat("No significant pathways (padj < 0.05) for this contrast/database.\n\n")
+            cat(sprintf("No significant pathways (padj ≤ %s) for this contrast/database.\n\n",
+                        format(gsea_cut)))
             next
         }
         sig_show <- tbl$data
@@ -2830,17 +2960,39 @@ if (length(fgsea_tables) > 0) {
             cat("\n\n")
         }
     }
+} else if (offline_ran) {
+    cat("No GSEA unit was evaluated in this run. Every evaluated unit is listed in ",
+        "`Enrichment/enrichment_manifest.csv`.\n")
 } else {
     cat("No fGSEA result files found.\n")
 }
 ```
 
-## Pathway Dotplots {.tabset}
+<!-- Dotplot section is emitted only when at least one plot exists. -->
+```{r pathway-dotplots-heading, eval=has_pathway_plots, results='asis'}
+cat("\n## Pathway Dotplots {.tabset}\n\n")
+```
 
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
-plot_pngs <- list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
-if (length(plot_pngs) > 0) {
-    for (pp in plot_pngs) {
+if (length(offline_dotplots) > 0) {
+    # Show one tab per contrast/database, with all available rankings inside.
+    # Paths were checked against the unit layout in the setup chunk.
+    rel <- substring(offline_dotplots, nchar(gsea_plot_dir) + 2L)
+    p <- strsplit(rel, "/", fixed = TRUE)
+    db <- vapply(p, `[[`, character(1), 1L)
+    ranking <- sub("^ranking_by_", "", vapply(p, `[[`, character(1), 2L))
+    contrast <- vapply(p, `[[`, character(1), 3L)
+    group <- paste(contrast, db, sep = " — ")
+    for (key in unique(group)) {
+        cat(sprintf("\n### %s\n\n", key))
+        for (i in which(group == key)) {
+            label <- paste(contrast[i], db[i], ranking[i], sep = " — ")
+            cat(sprintf("\n**Ranking: %s**\n\n", ranking[i]))
+            cat(sprintf("![%s](%s)\n\n", label, offline_dotplots[i]))
+        }
+    }
+} else if (length(legacy_dotplots) > 0) {
+    for (pp in legacy_dotplots) {
         label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
         label <- gsub("_", " ", label_raw)
         cat(sprintf("\n### %s\n\n", label))
@@ -2862,7 +3014,43 @@ if (file.exists(anno_file_le)) {
     anno_le <- read.csv(anno_file_le, stringsAsFactors = FALSE)
 }
 
-fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+if (offline_ran && !is.null(offline_gsea) && nrow(offline_gsea) > 0) {
+    # The leading edge each ranking's GSEA reported (fgsea's leadingEdge, or
+    # clusterProfiler's core_enrichment), unchanged; top 10 pathways per ranking.
+    for (key in unique(paste(offline_gsea$contrast, offline_gsea$database, sep = "\r"))) {
+        rows <- offline_gsea[paste(offline_gsea$contrast, offline_gsea$database, sep = "\r") == key, ,
+                             drop = FALSE]
+        cat(sprintf("\n### %s — %s\n\n", rows$contrast[1], rows$database[1]))
+        le_rows <- do.call(rbind, lapply(split(rows, rows$ranking_method), function(r) {
+            head(r[order(r$padj), , drop = FALSE], 10)
+        }))
+        le_df <- data.frame(
+            Pathway = le_rows$Pathway,
+            ID = le_rows$ID,
+            Ranking = le_rows$Ranking,
+            NES = round(le_rows$NES, 2),
+            padj = signif(le_rows$padj, 3),
+            `Leading Edge Genes` = vapply(strsplit(le_rows$leading_edge, ",", fixed = TRUE),
+                function(g) {
+                    g <- g[!is.na(g) & nzchar(g)]
+                    if (!is.null(anno_le)) {
+                        sym <- anno_le$symbol[match(g, anno_le$gene_id)]
+                        g[!is.na(sym)] <- sym[!is.na(sym)]
+                    }
+                    paste(head(g, 15), collapse = ", ")
+                }, character(1)),
+            check.names = FALSE, stringsAsFactors = FALSE)
+        print(knitr::kable(le_df, caption = sprintf("Leading edge genes, top pathways per ranking — %s, %s",
+                                                    rows$contrast[1], rows$database[1]),
+                           row.names = FALSE))
+        cat("\n\n")
+    }
+} else if (offline_ran) {
+    cat("No significant pathways with leading edge information.\n\n")
+}
+
+fgsea_files <- if (offline_ran) character(0) else
+    list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
 if (length(fgsea_files) > 0) {
     for (ff in fgsea_files) {
         label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
@@ -2870,7 +3058,7 @@ if (length(fgsea_files) > 0) {
         cat(sprintf("\n### %s\n\n", label_clean))
 
         fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
-        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj < 0.05, ]
+        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj <= gsea_cut, ]
 
         if (nrow(sig) > 0 && "leadingEdge" %in% names(sig)) {
             sig <- head(sig[order(sig$padj), ], 10)  # Top 10 pathways
@@ -2929,7 +3117,7 @@ files_tbl <- data.frame(
     "Full results table (TSV) — all genes with fold changes, p-values, and pass flags",
     "DESeq2 summary for significant genes",
     "DE gene counts per contrast (up/down/total)",
-    "Filtered raw counts matrix (genes that passed CPM threshold)",
+    "Raw counts matrix after gene filtering",
     "TMMlogCPM-normalized expression matrix"
   ),
   stringsAsFactors = FALSE
@@ -2960,12 +3148,9 @@ This section provides a summary suitable for publication methods sections.
 
 ```{r methods-text, results='asis'}
 # Auto-generate methods paragraph based on config
-norm_method <- rna_cfg$normalization$method %||% "TMMlogCPM"
 de_method <- rna_cfg$de$method %||% "DESeq2"
 padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
 lfc_cut <- rna_cfg$de$linear_fc_cutoff %||% 1.5
-filter_min <- rna_cfg$filtering$auto_filter$min %||% 0.5
-filter_max <- rna_cfg$filtering$auto_filter$max %||% 2.0
 
 # Get sample and gene counts
 n_samples <- if (exists("meta") && is.data.frame(meta)) nrow(meta) else "N"
@@ -2975,9 +3160,48 @@ n_de <- if (!is.null(de_summary_full)) {
     if (!is.na(pass_col)) sum(de_summary_full[[pass_col]] == TRUE, na.rm = TRUE) else "N"
 } else "N"
 
-# Pathway info
-pathway_method <- rna_cfg$pathway$method %||% "fGSEA"
-pathway_dbs <- paste(rna_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and ")
+# Pathway info. Describes the route that ran: the offline path from its
+# manifest (evaluated units only), the online path from its fgsea tables. ORA
+# and GSEA use different cutoffs, so each is stated with its own.
+pathway_methods_text <- if (offline_ran) {
+    ran <- enr_manifest[as.logical(enr_manifest$evaluated) %in% TRUE, , drop = FALSE]
+    gsea_ran <- ran[ran$analysis == "GSEA", , drop = FALSE]
+    ora_ran  <- ran[ran$analysis == "ORA", , drop = FALSE]
+    parts <- character(0)
+    if (nrow(gsea_ran) > 0) {
+        fgsea_engine <- identical(enr_settings$engine, "fgsea")
+        rankings <- sort(unique(gsea_ran$group))
+        rankings <- ifelse(rankings %in% names(.RNA_GSEA_RANKING_LABELS),
+                           .RNA_GSEA_RANKING_LABELS[rankings], rankings)
+        parts <- c(parts, sprintf(paste0(
+            "Gene set enrichment analysis was performed with %s on %s gene sets, ",
+            "ranking genes by %s; these are alternative rankings of the same results, not ",
+            "independent evidence, and each is reported on its own. Gene sets with %s ",
+            "adjusted p-value ≤ %s were considered significantly enriched."),
+            if (fgsea_engine) "fgsea" else "clusterProfiler::GSEA",
+            paste(sort(unique(gsea_ran$database)), collapse = ", "),
+            paste(rankings, collapse = "; "),
+            if (fgsea_engine) "a Benjamini-Hochberg" else "an",
+            format(gsea_cut)))
+    }
+    if (nrow(ora_ran) > 0) {
+        parts <- c(parts, sprintf(paste0(
+            "Over-representation analysis was performed with clusterProfiler::enricher on %s ",
+            "gene sets for the differentially expressed gene lists and gene clusters, with ",
+            "an adjusted p-value cutoff of %s."),
+            paste(sort(unique(ora_ran$database)), collapse = ", "), format(ora_cut)))
+    }
+    paste(parts, collapse = " ")
+} else if (length(list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$")) > 0) {
+    sprintf(paste0(
+        "Pathway enrichment analysis was conducted using %s on %s gene sets. ",
+        "fGSEA gene sets with adjusted p-value ≤ %s are reported as significant."),
+        rna_cfg$pathway$method %||% "fGSEA",
+        paste(rna_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and "),
+        format(gsea_cut))
+} else {
+    ""
+}
 
 cat("**RNA-seq Analysis Methods**\n\n")
 
@@ -2986,18 +3210,11 @@ cat(sprintf(
 n_samples
 ))
 
-cat(sprintf(
-"Lowly expressed genes were filtered using an adaptive CPM threshold approach (range: %.1f–%.1f CPM), ",
-filter_min, filter_max
-))
+cat(rna_filt$methods, " ")
 
 cat(sprintf(
-"retaining genes with sufficient expression in at least one biological group. "
-))
-
-cat(sprintf(
-"Expression values were normalized using the %s method, which applies TMM (Trimmed Mean of M-values) scaling factors followed by log2 CPM transformation. ",
-norm_method
+"Expression values were normalized using %s. ",
+norm_desc
 ))
 
 cat(sprintf(
@@ -3016,19 +3233,14 @@ format(as.numeric(n_genes_final), big.mark = ","),
 format(as.numeric(n_de), big.mark = ",")
 ))
 
-cat(sprintf(
-"Pathway enrichment analysis was conducted using %s on %s gene sets. ",
-pathway_method, pathway_dbs
-))
-
-cat("Pathways with adjusted p-value < 0.05 were considered significantly enriched.\n\n")
+cat(pathway_methods_text, "\n\n")
 
 cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). Lowly expressed genes were filtered using adaptive CPM thresholds (%.1f–%.1f CPM range). Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.",
-filter_min, filter_max, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). %s",
+rna_filt$methods, norm_desc, de_method, padj_cut, lfc_cut, pathway_methods_text
 ))
 
 cat("\n</div>\n")

@@ -70,6 +70,27 @@ mod_proteomics_exports <- function(
     }
 
     # =========================================================================
+    # 3b. Batch design diagnostics (batch modelled in limma). The report shows
+    #     these files; removing them when batch is not modelled keeps a previous
+    #     run's tables from reading as this run's.
+    # =========================================================================
+    bd_cells_path     <- file.path(dirs$datasets, "batch_design_cells.tsv")
+    bd_contrasts_path <- file.path(dirs$datasets, "batch_design_contrasts.tsv")
+    bd <- de_res$batch_design
+    if (is.null(bd)) {
+        unlink(c(bd_cells_path, bd_contrasts_path))
+    } else {
+        # Design-level notes ride along as rows with Contrast "(design)".
+        bd_rows <- rbind(bd$contrasts, if (length(bd$notes) > 0) {
+            data.frame(Contrast = "(design)", Shared_batches = NA_character_,
+                       SE_inflation = NA_real_, Note = bd$notes, stringsAsFactors = FALSE)
+        })
+        files <- c(files,
+                   save_tsv(bd$cells, dirs$datasets, basename(bd_cells_path)),
+                   save_tsv(bd_rows, dirs$datasets, basename(bd_contrasts_path)))
+    }
+
+    # =========================================================================
     # 4. Build final_results ONCE (the key optimization)
     # =========================================================================
     final_results <- NULL

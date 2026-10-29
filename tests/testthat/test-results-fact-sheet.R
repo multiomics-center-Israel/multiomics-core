@@ -388,6 +388,33 @@ test_that("F6 the nested local-enrichment layout is found too", {
     expect_equal(s$value[s$claim == claim], "3 tested; 2 significant")
 })
 
+test_that("F6 nested GSEA units are counted at the GSEA cutoff, ORA units at the DE cutoff", {
+    root <- file.path(withr::local_tempdir(), "rna")
+    write_run(root, "contrast")
+    tab <- data.frame(ID = c("p1", "p2", "p3"), padj = c(0.01, 0.08, 0.9))
+    for (u in list(c("GSEA", "KEGG", "ranking_by_fc", "S_vs_N"),
+                   c("ORA", "KEGG", "contrasts", "S_vs_N"))) {
+        unit <- do.call(file.path, as.list(c(root, "Enrichment", u)))
+        dir.create(unit, recursive = TRUE, showWarnings = FALSE)
+        write.csv(tab, file.path(unit, "results.csv"), row.names = FALSE)
+    }
+    cfg <- fixture_config()
+    cfg$modes$rna$de$p_cutoff <- 0.1
+    cfg$modes$rna$enrichment <- list(gsea_pvalue_cutoff = 0.05)
+
+    s <- build_rnaseq_fact_sheet(root, cfg, pre = list(meta = fixture_meta()),
+                                 inputs = list(contrasts = fixture_contrasts()))
+    gsea <- grep("(GSEA: ", s$claim, value = TRUE, fixed = TRUE)
+    ora  <- grep("(ORA: ", s$claim, value = TRUE, fixed = TRUE)
+    expect_length(gsea, 1)
+    expect_length(ora, 1)
+    # padj 0.08 is not significant under the GSEA rule (0.05) but is at the DE cutoff (0.1).
+    expect_match(gsea, "adjusted p <= 0.05", fixed = TRUE)
+    expect_equal(s$value[s$claim == gsea], "3 tested; 1 significant")
+    expect_match(ora, "adjusted p <= 0.1", fixed = TRUE)
+    expect_equal(s$value[s$claim == ora], "3 tested; 2 significant")
+})
+
 test_that("F6 missing values in the normalised matrix do not silently drop the structure rows", {
     root <- file.path(withr::local_tempdir(), "rna")
     write_run(root, "contrast")
