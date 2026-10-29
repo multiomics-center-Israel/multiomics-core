@@ -90,9 +90,10 @@ test_that("ORA worker captures only scalar thresholds (no local_tables / gene_li
     expect_lt(smib(w), 0.1)   # worker closure is tiny
 })
 
-test_that("GSEA worker captures only scalar thresholds (no local_tables)", {
+test_that("GSEA worker captures only scalar settings (no local_tables)", {
     w <- .make_gsea_worker(pvalueCutoff = 0.05, pAdjustMethod = "fdr")
-    expect_setequal(ls(environment(w)), c("pvalueCutoff", "pAdjustMethod"))
+    expect_setequal(ls(environment(w)), c("pvalueCutoff", "pAdjustMethod", "engine",
+                                          "min_size", "max_size", "seed"))
     expect_false("local_tables" %in% ls(environment(w)))
     expect_lt(smib(w), 0.1)
 })
@@ -223,15 +224,29 @@ make_gsea_fixture <- function() {
 }
 
 test_that("GSEA is reproducible and worker-count invariant under the seeded future path", {
-    skip_if_not_installed("clusterProfiler")
+    skip_if_not_installed("fgsea")
     fx <- make_gsea_fixture()
     run1  <- function() suppressWarnings(suppressMessages(
-        run_gsea_all(fx$ranked, fx$lt, output_dir = NULL, workers = 1L, seed = 111L, dotplot = FALSE)))
+        run_gsea_all(fx$ranked, fx$lt, output_dir = NULL, workers = 1L, seed = 111L,
+                     dotplot = FALSE, min_size = 2)))
     o1  <- run1()
     o1b <- run1()
     o2  <- suppressWarnings(suppressMessages(
-        run_gsea_all(fx$ranked, fx$lt, output_dir = NULL, workers = 2L, seed = 111L, dotplot = FALSE)))
+        run_gsea_all(fx$ranked, fx$lt, output_dir = NULL, workers = 2L, seed = 111L,
+                     dotplot = FALSE, min_size = 2)))
 
+    expect_gt(length(o1$results), 0L)
     expect_identical(o1$results, o1b$results)   # same seed -> identical (reproducible)
     expect_identical(o1$results, o2$results)     # workers=1 vs workers=2 -> identical (RNG preserved)
+})
+
+test_that("clusterProfiler engine stays reproducible and worker-count invariant", {
+    skip_if_not_installed("clusterProfiler")
+    fx <- make_gsea_fixture()
+    run <- function(workers) suppressWarnings(suppressMessages(
+        run_gsea_all(fx$ranked, fx$lt, output_dir = NULL, workers = workers, seed = 111L,
+                     dotplot = FALSE, engine = "clusterProfiler")))
+    o1 <- run(1L)
+    expect_identical(o1$results, run(1L)$results)
+    expect_identical(o1$results, run(2L)$results)
 })

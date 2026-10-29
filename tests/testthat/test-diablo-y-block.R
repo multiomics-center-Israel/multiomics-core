@@ -150,6 +150,22 @@ test_that("only the two Y artifacts are retired, not other files in the director
     expect_true(file.exists(file.path(out_dir, "notes_Y.txt")))
 })
 
+test_that("the retired variable and interactive loadings plots are removed on a rerun", {
+    # These plots are no longer drawn; copies from an earlier run must not sit
+    # beside the current results. Other plots in the directory stay.
+    out_dir <- withr::local_tempdir()
+    retired <- c("diablo_variable_plot.png",
+                 "diablo_loadings_interactive.html",
+                 "diablo_loadings_interactive.rds")
+    for (f in retired) writeLines("stale", file.path(out_dir, f))
+    writeLines("keep", file.path(out_dir, "diablo_sample_plot.png"))
+
+    write_diablo_results(make_fake_diablo_results(), out_dir)
+
+    for (f in retired) expect_false(file.exists(file.path(out_dir, f)), info = f)
+    expect_true(file.exists(file.path(out_dir, "diablo_sample_plot.png")))
+})
+
 test_that("a block genuinely named Y-something is not caught by the skip", {
     # setdiff() matches the whole name, so only the exact "Y" block is dropped.
     res <- make_fake_diablo_results()

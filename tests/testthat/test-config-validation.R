@@ -140,6 +140,57 @@ test_that("validate_proteomics_config errors on invalid p_adjust_method", {
     expect_error(validate_proteomics_config(cfg))
 })
 
+test_that("validate_proteomics_config accepts the pooled_ranking block", {
+    cfg <- create_mock_proteomics_config()
+    cfg$pathway$pooled_ranking <- list(
+        enabled = TRUE,
+        camerapr = list(inter_gene_cor = 0.01, use_ranks = FALSE)
+    )
+    expect_true(validate_proteomics_config(cfg))
+    cfg$pathway$pooled_ranking$camerapr$inter_gene_cor <- 0
+    expect_true(validate_proteomics_config(cfg))
+})
+
+test_that("validate_proteomics_config rejects invalid pooled_ranking settings", {
+    base <- create_mock_proteomics_config()
+    base$pathway$pooled_ranking <- list(
+        enabled = TRUE,
+        camerapr = list(inter_gene_cor = 0.01, use_ranks = FALSE)
+    )
+    for (rho in list(1, -1, -0.01, 1.2, NA_real_, "0.01", c(0.01, 0.02))) {
+        cfg <- base
+        cfg$pathway$pooled_ranking$camerapr$inter_gene_cor <- rho
+        expect_error(validate_proteomics_config(cfg), "inter_gene_cor")
+    }
+    cfg <- base
+    cfg$pathway$pooled_ranking$enabled <- "yes"
+    expect_error(validate_proteomics_config(cfg), "pooled_ranking\\$enabled")
+    cfg <- base
+    cfg$pathway$pooled_ranking$camerapr$use_ranks <- NA
+    expect_error(validate_proteomics_config(cfg), "use_ranks")
+})
+
+test_that("the legacy gsea_ranking options are unchanged", {
+    for (r in c("stat", "lfc", "abs_lfc")) {
+        cfg <- create_mock_proteomics_config()
+        cfg$pathway$gsea_ranking <- r
+        expect_true(validate_proteomics_config(cfg))
+    }
+    cfg <- create_mock_proteomics_config()
+    cfg$pathway$gsea_ranking <- "z_pooled"
+    expect_error(validate_proteomics_config(cfg))
+})
+
+test_that("the proteomics template ships pooled_ranking disabled with valid defaults", {
+    f <- file.path(root_dir, "config", "templates", "proteins_config.yaml")
+    skip_if_not(file.exists(f))
+    pw <- yaml::read_yaml(f)$modes$proteomics$pathway
+    expect_identical(pw$gsea_ranking, "stat")
+    expect_false(pw$pooled_ranking$enabled)
+    expect_equal(pw$pooled_ranking$camerapr$inter_gene_cor, 0.01)
+    expect_false(pw$pooled_ranking$camerapr$use_ranks)
+})
+
 test_that("validate_proteomics_config errors on invalid scale_in", {
     cfg <- create_mock_proteomics_config()
     cfg$scale_in <- "log10"

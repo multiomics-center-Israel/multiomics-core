@@ -363,6 +363,7 @@ test_that("the shipped template leaves every report section on", {
 
     show_section <- function(name) !identical(sections[[name]], FALSE)
     expect_true(show_section("translation_efficiency"))
-    expect_true(show_section("group_distance"))
+    # group_distance is the exception: off unless a project sets it true.
+    expect_false(isTRUE(sections[["group_distance"]]))
     expect_true(show_section("a_section_nobody_has_named"))
 })
