@@ -1336,6 +1336,101 @@ if (dir.exists(enrich_per_contrast_dir)) {
 
 ---
 
+```{r go-hierarchy-setup, include=FALSE}
+# Read the settings through the pipeline's own resolver and the figures through
+# the index the writer produced; the report decides nothing about seeds.
+go_hier_dir <- file.path(run_dir, "go_hierarchy")
+go_hier_cfg <- go_hierarchy_config(cfg)
+show_go_hierarchy <- go_hier_cfg$enabled
+go_hier_index <- if (show_go_hierarchy) read_go_hierarchy_index(go_hier_dir) else NULL
+```
+
+`r if (show_go_hierarchy) "# GO hierarchy of GSEA results {.tabset}"`
+
+```{r go-hierarchy-methods, eval=show_go_hierarchy, results='asis'}
+cat(paste(
+    "GO terms were taken from each gene-based layer's existing gene set",
+    "enrichment analysis (fgsea, run in the proteomics and RNA pathway steps on",
+    sprintf("GO %s gene sets); no enrichment is recomputed here.",
+            paste(go_hier_cfg$ontologies, collapse = ", ")),
+    sprintf("Terms with adjusted p < %s were used as seed terms, up to %d per",
+            format(go_hier_cfg$fdr), go_hier_cfg$max_seed_terms),
+    "direction in order of adjusted p, drawn separately for positive NES (sets",
+    "towards the top of the ranking, higher in the first group of the contrast)",
+    "and negative NES.",
+    if (identical(go_hier_cfg$ancestors, "all"))
+        "Each seed's ancestors along is_a and part_of links were added from GO.db,"
+    else paste("For each seed, one shortest path to the root of the ontology along",
+               "is_a and part_of links was added from GO.db; other ancestors are left out,"),
+    "and links are drawn only among the terms shown.",
+    "Terms on these paths are shown for context only: the GSEA used direct, unpropagated",
+    "GO annotations and a gene-set size range, so a grey term was either not",
+    "significant or not tested. Neighbouring GO terms share many genes, so",
+    "related seed terms are not independent observations. The figures are",
+    "descriptive and hypothesis-generating.\n\n"))
+```
+
+```{r go-hierarchy-body, eval=show_go_hierarchy, results='asis'}
+gh_idx <- go_hier_index
+if (is.null(gh_idx) || nrow(gh_idx) == 0) {
+    cat("*GO hierarchy figures were enabled, but none was produced; the run log says why.*\n\n")
+} else {
+    failed <- gh_idx[is.na(gh_idx$layer), , drop = FALSE]
+    for (n in failed$note) cat(sprintf("*%s*\n\n", n))
+    gh_idx <- gh_idx[!is.na(gh_idx$layer), , drop = FALSE]
+    for (layer in unique(gh_idx$layer)) {
+        cat(sprintf("\n## %s {.tabset .unnumbered}\n\n", tools::toTitleCase(layer)))
+        l_idx <- gh_idx[gh_idx$layer == layer, , drop = FALSE]
+        no_results <- l_idx[is.na(l_idx$contrast), , drop = FALSE]
+        for (n in no_results$note) cat(sprintf("*%s*\n\n", n))
+        l_idx <- l_idx[!is.na(l_idx$contrast), , drop = FALSE]
+        for (cn in unique(l_idx$contrast)) {
+            cat(sprintf("\n### %s {.tabset .unnumbered}\n\n", gsub("_", " ", cn)))
+            c_idx <- l_idx[l_idx$contrast == cn, , drop = FALSE]
+            for (ont in unique(c_idx$ontology)) {
+                cat(sprintf("\n#### GO %s {.tabset .unnumbered}\n\n", ont))
+                o_idx <- c_idx[c_idx$ontology == ont, , drop = FALSE]
+                for (i in seq_len(nrow(o_idx))) {
+                    u <- o_idx[i, ]
+                    cat(sprintf("\n##### %s {.unnumbered}\n\n", u$direction_label))
+                    if (is.na(u$png) || !file.exists(u$png)) {
+                        cat(sprintf("*%s*\n\n", u$note))
+                        next
+                    }
+                    # The static figure is small at page width; the HTML beside it can
+                    # be zoomed. Linked relative to the report, which sits in run_dir.
+                    has_html <- !is.na(u$html) && file.exists(u$html)
+                    if (has_html) {
+                        rel_html <- substring(u$html, nchar(run_dir) + 2)
+                        cat(sprintf('<a href="%s" target="_blank"><img src="%s" style="max-width:100%%;"></a>\n\n',
+                                    rel_html, knitr::image_uri(u$png)))
+                        cat(sprintf('<p><a href="%s" target="_blank">Open the interactive graph (zoom, pan, search terms)</a></p>\n\n',
+                                    rel_html))
+                    } else {
+                        cat(sprintf("![](%s)\n\n", u$png))
+                    }
+                    go_legend <- go_hierarchy_legend(ont, go_hier_cfg$fdr, u$direction,
+                                                     u$direction_label, u$note,
+                                                     go_hier_cfg$ancestors)
+                    figure_legend(go_legend)
+                    seeds <- utils::read.csv(u$nodes_csv, stringsAsFactors = FALSE)
+                    seeds <- seeds[seeds$is_seed, , drop = FALSE]
+                    seeds <- seeds[order(seeds$padj), , drop = FALSE]
+                    tbl <- data.frame(
+                        Term = seeds$term, `GO ID` = seeds$go_id,
+                        NES = sprintf("%.2f", seeds$NES),
+                        padj = formatC(seeds$padj, format = "g", digits = 2),
+                        Size = seeds$size, check.names = FALSE)
+                    cat(knitr::kable(tbl, format = "html", row.names = FALSE,
+                                     table.attr = "class='table table-condensed'"))
+                    cat("\n\n")
+                }
+            }
+        }
+    }
+}
+```
+
 # Pathway Maps (Pathview) {.tabset}
 
 ```{r pathview-setup, include=FALSE}
