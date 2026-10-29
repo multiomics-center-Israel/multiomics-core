@@ -51,6 +51,9 @@ test_that("each whole-section switch is read and gates its heading", {
     expect_true(grepl('`r if (has_group_dist) "# Sample Concordance Across Omics"`',
                       src, fixed = TRUE))
     expect_true(grepl("has_group_dist <- show_sample_concordance &&", src, fixed = TRUE))
+    # The group-distance figures are opt-in, unlike the other switches.
+    expect_true(grepl('show_group_distance     <- isTRUE(section_cfg[["group_distance"]])',
+                      src, fixed = TRUE))
     setup_at <- as.integer(regexpr("```{r group-dist-setup", src, fixed = TRUE))
     heading_at <- as.integer(regexpr('"# Sample Concordance Across Omics"', src, fixed = TRUE))
     expect_gt(setup_at, 0)
