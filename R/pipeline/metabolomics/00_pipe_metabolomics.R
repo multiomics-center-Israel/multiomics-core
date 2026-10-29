@@ -414,7 +414,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
           files    = metab_mummichog_report_files,
           pre      = metab_pre,
           de_res   = metab_de_res,
-          config   = config
+          config   = config,
+          enrichment_res = metab_enrichment_res
         ),
         memory = "transient"
       ),

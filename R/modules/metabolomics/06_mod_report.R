@@ -77,7 +77,8 @@ mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
 #' @param out_dir         Output directory for this mode.
 #' @param mummichog_sections Per-contrast mummichog sections from
 #'   `mod_mummichog_sections()` (`metab_mummichog_sections`), already carrying
-#'   the ORA plot and table, the complementary GSEA and the supporting evidence.
+#'   the ORA plot and table, the complementary GSEA, the supporting evidence
+#'   and the Summary.
 #'   Built upstream rather than here so those analytical outputs — and the
 #'   standalone exports made from them — do not depend on `rmarkdown` or on this
 #'   report running at all (see issue #306). NULL or empty keeps the section

@@ -38,16 +38,22 @@
 #' @param de_res   DE results from `mod_metabolomics_de()`. Supplies both the
 #'   ranking statistic and `de_res$method`, which decides which column that is.
 #' @param config   Full pipeline config.
+#' @param enrichment_res Identified-metabolite enrichment results
+#'   (`metab_enrichment_res`), so each contrast's Summary can say whether a
+#'   pathway is also supported there. NULL makes every comparable pathway read
+#'   "Not tested".
 #' @return A named list keyed by contrast — `list(title, subtitle, plot, table,
-#'   gsea, gsea_plot, evidence, slug)` per section — exactly as
+#'   gsea, gsea_plot, evidence, summary, slug)` per section — exactly as
 #'   `build_mummichog_report_sections()` returns it. Empty list when there is
 #'   nothing to show.
-mod_mummichog_sections <- function(pathways, files, pre, de_res, config) {
+mod_mummichog_sections <- function(pathways, files, pre, de_res, config,
+                                   enrichment_res = NULL) {
     build_mummichog_report_sections(
         pathways, config,
         files    = files,
         row_data = pre$row_data,
-        de_res   = de_res)
+        de_res   = de_res,
+        enrichment_res = enrichment_res)
 }
 
 
@@ -55,7 +61,8 @@ mod_mummichog_sections <- function(pathways, files, pre, de_res, config) {
 #'
 #' Saves each section's presentation exports into `mummichog_pinned/` (plots as
 #' PNG + PDF, tables as TSV + CSV: the ORA bubble and pathway table, the GSEA
-#' scatter and table, and the three evidence tables when they were built), named
+#' scatter and table, the three evidence tables when they were built, and the
+#' Summary), named
 #' by the section's de-duplicated slug so labels that collapse to the same token
 #' cannot overwrite each other. The engine's own mcg_* result files are
 #' untouched.
@@ -77,11 +84,13 @@ mod_mummichog_exports <- function(sections, files, out_dir) {
                                             contrast_label = s$slug,
                                             gsea      = s$gsea,
                                             gsea_plot = s$gsea_plot,
-                                            evidence  = s$evidence))
+                                            evidence  = s$evidence,
+                                            summary   = s$summary))
     }
 
     # A contrast the stage ran but that produced no section never reaches the
-    # loop above, so the by-name GSEA clearing inside save_mummichog_exports()
+    # loop above, so the by-name GSEA and Summary clearing inside
+    # save_mummichog_exports()
     # never runs for it and a previous run's table would survive. Clearing is
     # safe for those contrasts because there is nothing of theirs to keep;
     # whether they should get a GSEA analysis at all is a section-contract

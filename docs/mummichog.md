@@ -100,17 +100,37 @@ Under `<metab_out_dir>/mummichog_pinned/`, one subdirectory per contrast (`<cont
 -   `<contrast>/v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
 -   `<contrast>/v2/mummichog_manifest.tsv` and `<contrast>/v2/runner.log`.
 
-Plus, directly under `mummichog_pinned/`, the presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), the GSEA exports described below, the `mummichog_evidence_*_<contrast>.{tsv,csv}` supporting-evidence tables, and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
+Plus, directly under `mummichog_pinned/`, the presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), the GSEA exports described below, the `mummichog_evidence_*_<contrast>.{tsv,csv}` supporting-evidence tables, `mummichog_summary_<contrast>.{tsv,csv}` (the Summary table, described below), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
 
 These exports are written by their own target (`metab_mummichog_exports`), not by the report. They are produced wherever the stage runs — **single-omics and multiomics alike** — and they do not need `rmarkdown`: a run without it loses the HTML report and nothing else. Before this was split out (issue #306) the supporting evidence and the GSEA were computed inside the report module, so both vanished in multiomics mode and whenever `rmarkdown` was missing.
 
 To map pathways back to your feature ids, `join_features_to_results()` uses the feature id mummichog echoes into its own tables (via the 5th input column) — not the fragile post-de-duplication row numbers.
 
+## The report section
+
+Per contrast, the tabs are:
+
+1.  **Summary** — the top 20 pathways (all of them if fewer), ranked by the smaller of the raw Mummichog ORA and GSEA p-values (a missing value counts as `Inf`). Rows need not be significant: a pathway is *nominal* when ORA or GSEA is below `p_cutoff`, and when none is, the tab says so above the table. Columns: Pathway, Identified-metabolite support, Mummichog ORA (`p = …`; empirical raw p, no adjusted value exists), Mummichog GSEA (`p = …; FDR = …`), Mummichog contribution, Supporting evidence (`n ECs / m features`, distinct measured features, shown only for pathways nominal in ORA; `Not available — GSEA-only signal` for a GSEA-only pathway; `—` for a pathway nominal in neither), Annotation agreement (EC counts, zeros omitted). The `mummichog_summary_<contrast>` export holds the same rows; the complete ORA and GSEA results are under Advanced / Downloads.
+2.  **ORA plot** — the bubble plot with a one-line count of nominal pathways.
+3.  **GSEA plot** — the scatter with a one-line count of nominal pathways and how many survive BH correction.
+4.  **Pathway Evidence** — Pathway → EmpiricalCompound → measured features for the Summary pathways that are nominal in ORA and have evidence (a GSEA-only pathway's ORA evidence row stays under Advanced, so it is never read as ORA support). A Mixed EC also shows each feature's annotation and agreement.
+5.  **Advanced / Downloads** — the full ORA and GSEA tables (ES, NES, leading edge, ES-fallback flags, deviations), the full evidence tables at every grain, and a preview of the feature-level table (the exported file is complete).
+
+The Summary compares a Mummichog pathway with enrichment on identified metabolites (ORA, QEA and GSEA; not ssGSEA) through the **exact pathway id** both sides share — the model's pathway `id` and the GMT id, e.g. `mng00010`. Never by name. Three questions are kept apart:
+
+| | means |
+| --- | --- |
+| joinable | the model gives the pathway a single id, and that id is in the identified-enrichment GMT |
+| tested | the id appears in at least one of this contrast's identified ORA / QEA / GSEA result tables |
+| supported | at least one tested method has FDR < 0.05 |
+
+Identified-metabolite support reads `Not comparable` (not joinable), `Not tested` (joinable, not tested), the supporting methods such as `ORA + QEA`, or `None` (tested, not supported). Mummichog contribution reads `No nominal Mummichog signal` (neither ORA nor GSEA below `p_cutoff` — a ranked row, never a candidate), then for nominal rows `Not comparable`, `Confirms identified signal` (supported) or `Mummichog-only candidate` (otherwise) — a hypothesis, not a confirmed finding. Nothing here computes a statistic: it reads the existing results (`build_mummichog_summary()`, `R/domain/metabolomics/06h_mummichog_summary.R`).
+
 ## Complementary GSEA (MS peaks-to-pathways)
 
 Alongside the ORA above, the pipeline runs a MetaboAnalyst-style GSEA over the same mapped EmpiricalCompound universe. It is **additive computationally**: the pinned mummichog engine, its statistics and its outputs are untouched, and the ORA bubble plot and table are still produced and still exported.
 
-In the HTML report, though, **the GSEA scatter is each contrast's primary plot**. The tabs run GSEA Plot → GSEA Results Table → ORA Bubble Plot → ORA Results Table → Supporting Evidence, so the first figure a reader meets is NES against -log10(GSEA p-value). The ORA bubble keeps its own tab under its own name; it is never shown under a GSEA heading. A contrast without GSEA gets the explanation in that first tab instead of a plot — see [When GSEA has no results](#when-gsea-has-no-results).
+In the HTML report each contrast has five tabs: **Summary → ORA plot → GSEA plot → Pathway Evidence → Advanced / Downloads** (see [The report section](#the-report-section)). The ORA bubble and the GSEA scatter each keep their own tab under their own name; the ORA bubble is never shown under a GSEA heading. A contrast without GSEA gets the explanation in its GSEA plot tab instead of a plot — see [When GSEA has no results](#when-gsea-has-no-results).
 
 Where ORA tests the features that clear the significance cutoff, GSEA uses the **complete ranked EmpiricalCompound list with no cutoff**, so it can reach pathways whose ECs shift coherently without any single feature reaching significance.
 
@@ -136,17 +156,17 @@ GSEA needs `fgsea` and a **readable** metabolic model — the built-in `human_mf
 
 ### When GSEA has no results
 
-The GSEA Plot tab is rendered for **every** contrast, including ones with nothing to plot, so the primary tab always answers what GSEA found. What it says depends on which of three things happened:
+The GSEA plot tab is rendered for **every** contrast, including ones with nothing to plot, so it always answers what GSEA found. What it says depends on which of three things happened:
 
-| State | The GSEA Plot tab shows |
+| State | The GSEA plot tab shows |
 | --- | --- |
 | GSEA ran and the scatter was built | the scatter and its NES / -log10(p) legend |
-| GSEA ran but the scatter could not be drawn | a sentence saying so, pointing at the GSEA Results Table, which is unaffected |
+| GSEA ran but the scatter could not be drawn | a sentence saying so, pointing at the full GSEA table under Advanced / Downloads, which is unaffected |
 | GSEA produced nothing | the explanation below. No plot. |
 
 That last message deliberately **does not assert a cause**. A missing GSEA result means either that the analysis could not run (no `fgsea`, no readable model, no DE table for the contrast, or `gsea_enabled: false`) *or* that it ran and no pathway passed the size filter — a legitimate negative result. The report cannot tell the two apart, so it names both and points at the run's console log, which can. Reporting a real negative as a misconfiguration would be worse than saying less.
 
-In none of these states is the ORA bubble shown under a GSEA heading. ORA always lives in its own tabs, under its own name, with its own legend.
+In none of these states is the ORA bubble shown under a GSEA heading. ORA always lives in its own tab, under its own name, with its own legend.
 
 ### Outputs
 

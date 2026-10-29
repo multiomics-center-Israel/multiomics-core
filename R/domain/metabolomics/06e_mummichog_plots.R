@@ -247,8 +247,13 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #'   `NULL` it is resolved from `config` once for all contrasts. mummichog
 #'   exports no pathway -> compound membership, so without a readable model
 #'   there is no evidence to build.
+#' @param enrichment_res Identified-metabolite enrichment results
+#'   (`mod_metabolomics_enrichment()`), read by the Summary to say whether a
+#'   mummichog pathway is also supported there. Omit it and every comparable
+#'   pathway reads "Not tested".
 #' @return A named list keyed by contrast, each `list(title, subtitle, plot,
-#'   table, gsea, gsea_plot, evidence, slug)`. `slug` is a filesystem-safe,
+#'   table, gsea, gsea_plot, evidence, summary, slug)`. `summary` is the table
+#'   from `build_mummichog_summary()`. `slug` is a filesystem-safe,
 #'   de-duplicated token for the contrast (mirrors the engine's per-contrast
 #'   directory naming) so the standalone exports never collide. `plot` remains
 #'   the ORA bubble and keeps its meaning; `gsea` is the result list from
@@ -258,7 +263,8 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #'   nothing to show.
 build_mummichog_report_sections <- function(pathways_by_contrast, config,
                                             files = NULL, row_data = NULL,
-                                            de_res = NULL, model = NULL) {
+                                            de_res = NULL, model = NULL,
+                                            enrichment_res = NULL) {
   if (is.null(pathways_by_contrast)) return(list())
   # Tolerate a bare single tibble (name it "contrast").
   if (is.data.frame(pathways_by_contrast)) {
@@ -289,6 +295,9 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
   annot <- normalize_metab_annotation(row_data, mapping_file = mapping_file)
   files_by_contrast <- if (is.null(files)) list() else
     group_mummichog_files_by_contrast(files)
+  # The pathway ids the identified-metabolite enrichment can speak about; a
+  # mummichog pathway outside them is not comparable with it at all.
+  library_ids <- mmc_identified_pathway_library(config)
 
   sections <- list()
   for (i in seq_along(pathways_by_contrast)) {
@@ -370,10 +379,16 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
       plot_mummichog_gsea_scatter(gsea$table, title = ttl$title,
                                   subtitle = ttl$subtitle, p_cutoff = p_cut)
 
+    summary <- build_mummichog_summary(
+      tbl, gsea_table = gsea$table, evidence = evidence,
+      pathway_ids = model$pathway_ids,
+      identified  = mmc_identified_support(enrichment_res, contrast),
+      library_ids = library_ids, p_cutoff = p_cut)
+
     sections[[contrast]] <- list(title = ttl$title, subtitle = ttl$subtitle,
                                  plot = plot, table = tbl,
                                  gsea = gsea, gsea_plot = gsea_plot,
-                                 evidence = evidence)
+                                 evidence = evidence, summary = summary)
   }
 
   # Assign a de-duplicated, filesystem-safe slug per section (same sanitise +
@@ -387,16 +402,17 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
   sections
 }
 
-#' Clear GSEA exports belonging to contrasts that produced no report section
+#' Clear GSEA and Summary exports belonging to contrasts with no report section
 #'
-#' `save_mummichog_exports()` clears a contrast's stale GSEA files by name, but
-#' it only runs for contrasts that HAVE a section. A contrast the mummichog
-#' stage ran whose ORA table is absent or unplottable produces no section, so
-#' nothing clears its GSEA exports and a previous run's table survives on disk
-#' reading as current.
+#' `save_mummichog_exports()` clears a contrast's stale GSEA and Summary files
+#' by name, but it only runs for contrasts that HAVE a section. A contrast the
+#' mummichog stage ran whose ORA table is absent or unplottable produces no
+#' section, so nothing clears those exports and a previous run's tables survive
+#' on disk reading as current.
 #'
-#' Deliberately narrow: it removes only the four GSEA files, only for contrasts
-#' with no live section, and never a slug a live section owns. Whether such a
+#' Deliberately narrow: it removes only the four GSEA files and the two Summary
+#' files, only for contrasts with no live section, and never a slug a live
+#' section owns. Whether such a
 #' contrast should get a GSEA analysis at all is a separate question about the
 #' section contract, tracked rather than decided here.
 #'
@@ -430,7 +446,8 @@ clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
   dest_dir <- file.path(out_dir, "mummichog_pinned")
   paths <- unlist(lapply(orphans, function(slug) c(
     file.path(dest_dir, paste0("mummichog_gsea_table_", slug, c(".tsv", ".csv"))),
-    file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf")))
+    file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf"))),
+    file.path(dest_dir, paste0("mummichog_summary_", slug, c(".tsv", ".csv")))
   )), use.names = FALSE)
 
   gone <- paths[file.exists(paths)]
@@ -469,10 +486,14 @@ clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
 #'   written as `mummichog_gsea_scatter_<contrast>.{png,pdf}`. This contrast's
 #'   four GSEA files are cleared by name first, for the same reason the evidence
 #'   ones are: GSEA can legitimately disappear from a rerun.
+#' @param summary Optional Summary table from `build_mummichog_summary()`;
+#'   written as `mummichog_summary_<contrast>.{tsv,csv}` (a zero-row table is
+#'   still written: "nothing reached nominal p" is a result). Cleared by name
+#'   first, like the others.
 #' @return Character vector of the files written (may be empty).
 save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL,
                                    gsea = NULL, gsea_plot = NULL,
-                                   evidence = NULL) {
+                                   evidence = NULL, summary = NULL) {
   # Write next to the engine's result tree (same dir as mod_mummichog_pinned()),
   # so every mummichog artefact sits together under mummichog_pinned/. The stage
   # runs first and only wipes its v2/ subdir, so these top-level files persist.
@@ -514,8 +535,12 @@ save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL,
   )
   unlink(gsea_exports[file.exists(gsea_exports)])
 
+  summary_exports <- file.path(dest_dir,
+                               paste0("mummichog_summary", suffix, c(".tsv", ".csv")))
+  unlink(summary_exports[file.exists(summary_exports)])
+
   if (is.null(plot) && is.null(table) && is.null(evidence) &&
-      is.null(gsea) && is.null(gsea_plot)) {
+      is.null(gsea) && is.null(gsea_plot) && is.null(summary)) {
     return(character(0))
   }
 
@@ -558,6 +583,8 @@ save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL,
   if (!is.null(table)) {
     written <- c(written, save_tsv_csv(table, "mummichog_pathway_table"))
   }
+
+  written <- c(written, save_tsv_csv(summary, "mummichog_summary"))
 
   # The report caps its GSEA table too; this is the complete one.
   if (!is.null(gsea)) {

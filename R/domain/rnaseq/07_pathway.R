@@ -108,3 +108,156 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
   volcano_df$pathways <- pathway_memberships
   volcano_df
 }
+
+# ==============================================================================
+# GSEA SETTINGS
+# ==============================================================================
+
+#' GSEA engines the offline RNA path can run
+#' @noRd
+.RNA_GSEA_ENGINES <- c("fgsea", "clusterProfiler")
+
+#' Resolve the RNA GSEA settings
+#'
+#' The one reader of the offline RNA GSEA engine and gene-set size limits, and
+#' of the enrichment seed, which the online path also takes from here. The
+#' online path keeps its own size limits (`modes.rna.pathway.min_size` /
+#' `max_size`, default 10 / 500), read where it calls run_pathway_analysis().
+#'
+#' - `engine`: `modes.rna.enrichment.gsea_engine`, default "fgsea". "fgsea"
+#'   runs the shared fgsea call (run_fgsea_core()) and keeps every tested set;
+#'   "clusterProfiler" reproduces earlier offline runs (clusterProfiler::GSEA,
+#'   non-significant sets dropped).
+#' - `min_size` / `max_size`: `modes.rna.enrichment.gsea.min_size` /
+#'   `max_size`, defaulting to the limits of the earlier offline runs: 4, and
+#'   NULL, which run_gsea_all() reads as the number of unique genes in each
+#'   database's TERM2GENE table (no upper limit in practice). The
+#'   clusterProfiler engine always uses those defaults.
+#' - `sig_cutoff`: the adjusted-p cutoff at which an offline GSEA set counts
+#'   as significant (`padj <= sig_cutoff`): `enrichment.gsea_pvalue_cutoff`,
+#'   then `enrichment.pvalue_cutoff`, then 0.05. The module, the Shiny payload,
+#'   the pipeline summary and the RNA report all read it from here.
+#' - `ora_cutoff`: the cutoff the offline cluster-based ORA is run with
+#'   (`enrichment.pvalue_cutoff`, then 0.05; clusterProfiler::enricher's
+#'   `pvalueCutoff`, applied to the adjusted p-value). Read here so the
+#'   summary and the report describe the cutoff ORA actually used.
+#' - `seed`: `params.seed`, default 1.
+#'
+#' @param config Full pipeline config.
+#' @return list(engine, min_size, max_size, sig_cutoff, ora_cutoff, seed);
+#'   `max_size` may be NULL.
+resolve_rna_gsea_settings <- function(config) {
+  rna  <- config$modes$rna %||% list()
+  enr  <- rna$enrichment %||% list()
+  # [[ ]] not $: enr$gsea would partially match enr$gsea_engine when the
+  # gsea block is absent and hand back the engine string.
+  gsea <- enr[["gsea", exact = TRUE]] %||% list()
+
+  engine <- enr$gsea_engine %||% "fgsea"
+  # Case-insensitive, as validate_rna_config() accepts it.
+  hit <- if (is.character(engine) && length(engine) == 1L) {
+    match(tolower(engine), tolower(.RNA_GSEA_ENGINES))
+  } else NA_integer_
+  if (is.na(hit)) {
+    stop("modes.rna.enrichment.gsea_engine must be one of: ",
+         paste(.RNA_GSEA_ENGINES, collapse = ", "), " (got: ",
+         paste(format(engine), collapse = ", "), ").", call. = FALSE)
+  }
+  engine <- .RNA_GSEA_ENGINES[hit]
+
+  list(
+    engine   = engine,
+    min_size = gsea$min_size %||% 4,
+    max_size = gsea$max_size,
+    sig_cutoff = enr$gsea_pvalue_cutoff %||% enr$pvalue_cutoff %||% 0.05,
+    ora_cutoff = enr$pvalue_cutoff %||% 0.05,
+    seed     = config$params$seed %||% 1L
+  )
+}
+
+# ==============================================================================
+# OFFLINE GSEA RESULT TABLES (for the RNA report)
+# ==============================================================================
+
+#' Reader-facing names of the offline GSEA rankings
+#'
+#' The rankings are alternative analyses of the same DE results, not
+#' independent evidence; none is primary. `any_contrast` is not a ranking but
+#' the pseudo-contrast of `pval_wo_direction` (minimum p-value across contrasts).
+#' @noRd
+.RNA_GSEA_RANKING_LABELS <- c(
+  fc                  = "log2 fold change",
+  pval_with_direction = "signed -log10 p-value",
+  pval_wo_direction   = "unsigned -log10 p-value"
+)
+
+#' Read the significant rows of every offline GSEA unit, one row per ranking
+#'
+#' Reads each `<db>/ranking_by_<ranking>/<contrast>/results.csv` under
+#' `gsea_root` and keeps the rows at `padj <= sig_cutoff`. Every row is one
+#' pathway in one ranking: p-values are never combined across rankings, and a
+#' pathway significant in several rankings appears once per ranking. Columns
+#' are mapped from either engine's table (fgsea: `pval`, `size`, `leadingEdge`;
+#' clusterProfiler: `pvalue`, `setSize`, `core_enrichment`) without
+#' recomputing anything. `Direction` is left NA for unsigned rankings, where
+#' the sign of NES does not say up or down.
+#'
+#' @param gsea_root The offline GSEA directory (`Enrichment/GSEA`).
+#' @param sig_cutoff Adjusted-p cutoff (resolve_rna_gsea_settings()$sig_cutoff).
+#' @return data.frame with contrast, database, ranking_method, Ranking, Pathway,
+#'   ID, NES, Direction, pval, padj, size and leading_edge (comma-separated gene
+#'   IDs), ordered by contrast, database, Pathway and ranking; zero rows when
+#'   nothing is significant or no table exists.
+read_offline_gsea_tables <- function(gsea_root, sig_cutoff) {
+  cols <- c("contrast", "database", "ranking_method", "Ranking", "Pathway", "ID",
+            "NES", "Direction", "pval", "padj", "size", "leading_edge")
+  empty <- as.data.frame(
+    setNames(replicate(length(cols), character(0), simplify = FALSE), cols),
+    stringsAsFactors = FALSE)
+  files <- if (dir.exists(gsea_root)) {
+    list.files(gsea_root, pattern = "^results\\.csv$", recursive = TRUE,
+               full.names = TRUE)
+  } else character(0)
+  # The fgsea column, or the clusterProfiler one it was copied from.
+  pick <- function(df, a, b) {
+    if (a %in% names(df)) df[[a]] else if (b %in% names(df)) df[[b]] else NA
+  }
+
+  rows <- lapply(files, function(f) {
+    df <- tryCatch(utils::read.csv(f, stringsAsFactors = FALSE),
+                   error = function(e) NULL)
+    if (is.null(df) || !"padj" %in% names(df) || nrow(df) == 0) return(NULL)
+    df <- df[!is.na(df$padj) & df$padj <= sig_cutoff, , drop = FALSE]
+    if (nrow(df) == 0) return(NULL)
+    ranking <- as.character(df$ranking_method)
+    genes <- if ("leadingEdge" %in% names(df)) {
+      as.character(df$leadingEdge)
+    } else {
+      gsub("/", ",", as.character(pick(df, "core_enrichment", "core_enrichment")),
+           fixed = TRUE)
+    }
+    labelled <- ranking %in% names(.RNA_GSEA_RANKING_LABELS)
+    data.frame(
+      contrast       = as.character(df$contrast),
+      database       = as.character(df$database),
+      ranking_method = ranking,
+      Ranking        = ifelse(labelled, unname(.RNA_GSEA_RANKING_LABELS[ranking]), ranking),
+      Pathway        = as.character(pick(df, "Description", "pathway")),
+      ID             = as.character(df$ID),
+      NES            = as.numeric(df$NES),
+      Direction      = ifelse(ranking == "pval_wo_direction", NA_character_,
+                              ifelse(df$NES > 0, "Up-regulated", "Down-regulated")),
+      pval           = as.numeric(pick(df, "pval", "pvalue")),
+      padj           = as.numeric(df$padj),
+      size           = as.integer(pick(df, "size", "setSize")),
+      leading_edge   = genes,
+      stringsAsFactors = FALSE
+    )
+  })
+  out <- do.call(rbind, Filter(Negate(is.null), rows))
+  if (is.null(out)) return(empty)
+  rank_order <- match(out$ranking_method, names(.RNA_GSEA_RANKING_LABELS))
+  out <- out[order(out$contrast, out$database, out$Pathway, rank_order), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}

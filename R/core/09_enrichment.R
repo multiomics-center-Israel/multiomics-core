@@ -877,18 +877,183 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 }
 
 
+#' Restrict gene sets to the ranked genes and the size window
+#'
+#' Applies the rule fgsea applies internally (unique members found in the
+#' ranking, then \code{min_size <= size <= max_size}), so a method given these
+#' sets tests exactly the sets fgsea tests, with the same members. One
+#' exception: a set holding every ranked gene is dropped (with a message),
+#' because a competitive test has no genes outside it to compare against.
+#'
+#' @param gs Named list of character vectors (one gene set per element).
+#' @param ranks Named numeric vector of ranks.
+#' @param min_size,max_size Inclusive set-size window after intersection.
+#' @return Named list of character vectors, each a proper subset of
+#'   \code{names(ranks)}.
+#' @keywords internal
+.filter_sets_to_ranks <- function(gs, ranks, min_size, max_size) {
+    ids <- names(ranks)
+    kept <- lapply(gs, function(p) ids[unique(stats::na.omit(match(p, ids)))])
+    sizes <- lengths(kept)
+    kept <- kept[sizes >= min_size & sizes <= max_size]
+    full <- lengths(kept) == length(ids)
+    if (any(full)) {
+        message("    cameraPR: dropped ", sum(full), " set(s) holding every ranked gene ",
+                "(nothing outside the set to compare): ",
+                paste(names(kept)[full], collapse = ", "))
+    }
+    kept[!full]
+}
+
+#' Competitive gene-set test on a pre-ranked statistic (limma::cameraPR)
+#'
+#' cameraPR compares the mean statistic of a set's members with that of the
+#' other genes, allowing for a fixed inter-gene correlation. limma adds an FDR
+#' column only when more than one set is tested, so the BH adjustment is done
+#' here, always.
+#'
+#' @param ranks Named numeric vector of finite ranking statistics (one per gene).
+#' @param sets Named list of character vectors, already restricted to
+#'   \code{names(ranks)} (see \code{.filter_sets_to_ranks()}).
+#' @param inter_gene_cor Assumed inter-gene correlation, at least 0 and below 1.
+#'   Negative values are rejected: cameraPR's variance inflation factor
+#'   1 + rho * (n - 1) is negative for sets larger than 1 - 1/rho, which
+#'   gives NaN p-values.
+#' @param use_ranks Logical; use the rank-based version of the test.
+#' @return data.frame with \code{pathway}, \code{NGenes}, \code{Direction},
+#'   \code{PValue}, \code{FDR}, \code{inter_gene_cor} and \code{use_ranks},
+#'   ordered by \code{PValue}. Zero rows when there is nothing to test. The two
+#'   settings are written into every row so the report can describe the test
+#'   that produced the table.
+run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) {
+    if (!is.numeric(inter_gene_cor) || length(inter_gene_cor) != 1L ||
+        !is.finite(inter_gene_cor) || inter_gene_cor < 0 || inter_gene_cor >= 1) {
+        stop("run_camerapr(): inter_gene_cor must be one number in [0, 1).",
+             call. = FALSE)
+    }
+    if (!is.logical(use_ranks) || length(use_ranks) != 1L || is.na(use_ranks)) {
+        stop("run_camerapr(): use_ranks must be TRUE or FALSE.", call. = FALSE)
+    }
+    if (any(!is.finite(ranks))) {
+        stop("run_camerapr(): ranks must be finite; drop non-finite values before ",
+             "filtering the sets, so every method sees the same genes.", call. = FALSE)
+    }
+    empty <- data.frame(pathway = character(0), NGenes = integer(0),
+                        Direction = character(0), PValue = numeric(0), FDR = numeric(0),
+                        inter_gene_cor = numeric(0), use_ranks = logical(0),
+                        stringsAsFactors = FALSE)
+    if (length(sets) == 0 || length(ranks) < 3L) return(empty)
+
+    index <- lapply(sets, function(s) unique(match(s, names(ranks))))
+    # cameraPR does not reject an NA index; it returns an NA p-value for the
+    # set, which would pass through to the table unnoticed.
+    if (any(vapply(index, anyNA, logical(1)))) {
+        stop("run_camerapr(): every set member must be in names(ranks); filter the ",
+             "sets with .filter_sets_to_ranks() first.", call. = FALSE)
+    }
+    # cameraPR divides by the number of genes outside the set, so a set of
+    # every ranked gene gives a non-finite statistic written as a normal row.
+    if (any(lengths(index) >= length(ranks))) {
+        stop("run_camerapr(): a set holds every ranked gene, so there is nothing ",
+             "outside it to compare; filter the sets with .filter_sets_to_ranks() first.",
+             call. = FALSE)
+    }
+    tab <- limma::cameraPR(ranks, index, use.ranks = use_ranks,
+                           inter.gene.cor = inter_gene_cor, sort = FALSE)
+    out <- data.frame(
+        pathway        = names(sets),
+        NGenes         = as.integer(tab$NGenes),
+        Direction      = tab$Direction,
+        PValue         = tab$PValue,
+        FDR            = stats::p.adjust(tab$PValue, method = "BH"),
+        inter_gene_cor = inter_gene_cor,
+        use_ranks      = use_ranks,
+        stringsAsFactors = FALSE
+    )
+    out <- out[order(out$PValue), , drop = FALSE]
+    rownames(out) <- NULL
+    out
+}
+
+#' Run fgsea on one ranked vector with the pipeline's shared settings
+#'
+#' The single fgsea call used by the online path (run_pathway_analysis()) and
+#' the offline RNA path (run_gsea_all() with engine "fgsea"), so both use the
+#' same multilevel settings, seed handling and output shape. Every gene set
+#' within the size limits is returned; no p-value cutoff is applied here, so
+#' filtering for display stays with the caller. padj is fgsea's
+#' Benjamini-Hochberg adjustment.
+#'
+#' @param ranks Named numeric vector of gene scores (names are gene IDs).
+#' @param gene_sets Named list of character vectors (one per gene set).
+#' @param min_size Minimum gene set size after matching to `ranks`.
+#' @param max_size Maximum gene set size after matching to `ranks`.
+#' @param seed Integer seed; fgseaMultilevel is stochastic, so without it terms
+#'   near the cutoff change between otherwise identical runs.
+#' @param n_perm_simple Number of permutations for the initial simple step.
+#' @param bpparam Optional BiocParallel backend passed to fgsea; NULL keeps
+#'   fgsea's default.
+#' @return data.frame with fgsea's columns (pathway, pval, padj, log2err, ES,
+#'   NES, size, leadingEdge), leadingEdge collapsed to a comma-separated
+#'   string; zero rows when no set passes the size limits.
+run_fgsea_core <- function(ranks, gene_sets, min_size = 10, max_size = 500,
+                           seed = 1L, n_perm_simple = 10000L, bpparam = NULL) {
+    args <- list(pathways = gene_sets, stats = ranks, minSize = min_size,
+                 maxSize = max_size, nPermSimple = n_perm_simple)
+    if (!is.null(bpparam)) args$BPPARAM <- bpparam
+    res <- withr::with_seed(seed, do.call(fgsea::fgsea, args))
+    df <- as.data.frame(res)
+    if (nrow(df) > 0) {
+        df$leadingEdge <- vapply(df$leadingEdge, paste, character(1), collapse = ",")
+    }
+    df
+}
+
+#' Convert a TERM2GENE / TERM2NAME pair into an fgsea gene-set list
+#'
+#' Sets are listed in order of first appearance in `term2gene` rather than
+#' sorted, because sorting depends on the locale and fgsea's random draws
+#' follow the order of the sets. Term names are attached as the
+#' `descriptions` attribute, the convention load_gene_sets() uses and
+#' add_pathway_names() reads.
+#'
+#' @param term2gene Data.frame whose first two columns are term ID and gene ID.
+#' @param term2name Optional data.frame whose first two columns are term ID and
+#'   term name.
+#' @return Named list of unique gene-ID vectors, with a named character
+#'   `descriptions` attribute when `term2name` is given.
+term2gene_to_gene_sets <- function(term2gene, term2name = NULL) {
+    terms <- as.character(term2gene[[1]])
+    genes <- as.character(term2gene[[2]])
+    keep  <- !is.na(terms) & !is.na(genes) & nzchar(terms) & nzchar(genes)
+    terms <- terms[keep]
+    genes <- genes[keep]
+    sets  <- lapply(split(genes, factor(terms, levels = unique(terms))), unique)
+
+    if (!is.null(term2name) && nrow(term2name) > 0) {
+        nm <- stats::setNames(as.character(term2name[[2]]), as.character(term2name[[1]]))
+        nm <- nm[!duplicated(names(nm))]
+        attr(sets, "descriptions") <- nm[intersect(names(sets), names(nm))]
+    }
+    sets
+}
+
+
 #' Run pathway analysis on DE results
 #'
 #' @param de_tables Named list of DE result data frames (from run_deseq2_de()$tables).
 #'   Each table has columns: FeatureID, log2FoldChange, pvalue, padj, stat, etc.
 #' @param gene_sets Named list of gene set collections from load_gene_sets()
 #' @param annotation Gene annotation data frame (gene_id, symbol, entrez_id)
-#' @param method "fgsea", "ora", or "both"
-#' @param min_size Minimum gene set size for fGSEA
-#' @param max_size Maximum gene set size for fGSEA
+#' @param method One or more of "fgsea", "ora", "camerapr"; "both" means
+#'   fgsea and ORA.
+#' @param min_size Minimum gene set size (fGSEA, ORA and cameraPR)
+#' @param max_size Maximum gene set size (fGSEA, ORA and cameraPR)
 #' @param seed Integer seed for fgsea's stochastic multilevel step.
 #' @param p_cutoff Adjusted-p cutoff defining a significant feature for ORA.
 #' @param lfc_cutoff Absolute log2 fold-change cutoff for ORA.
+#' @param camerapr_inter_gene_cor Inter-gene correlation for cameraPR.
+#' @param camerapr_use_ranks Logical; rank-based cameraPR.
 #' @return Named list (by contrast) of named lists (by db+method) of result data frames
 #' @export
 run_pathway_analysis <- function(de_tables,
@@ -899,7 +1064,9 @@ run_pathway_analysis <- function(de_tables,
                                   max_size = 500,
                                   seed = 1L,
                                   p_cutoff = 0.05,
-                                  lfc_cutoff = log2(1.5)) {
+                                  lfc_cutoff = log2(1.5),
+                                  camerapr_inter_gene_cor = 0.01,
+                                  camerapr_use_ranks = FALSE) {
 
     if (length(gene_sets) == 0) {
         message("No gene sets available. Skipping pathway analysis.")
@@ -923,24 +1090,20 @@ run_pathway_analysis <- function(de_tables,
 
             tryCatch({
                 # ---- fGSEA ----
-                if (method %in% c("fgsea", "both")) {
+                if (any(method %in% c("fgsea", "both"))) {
 
                     # Prefer the Wald statistic, fall back to sign(lfc)*-log10(p);
                     # see .build_fgsea_ranks() for why the choice is made on
                     # values rather than on the column being present.
                     ranks <- .build_fgsea_ranks(res)
 
-                    # fgseaMultilevel is stochastic: without a seed, terms near
-                    # the padj threshold flip between otherwise identical runs.
-                    fgsea_res <- withr::with_seed(seed, fgsea::fgsea(
-                        pathways = gs,
-                        stats = ranks,
-                        minSize = min_size,
-                        maxSize = max_size,
-                        nPermSimple = 10000
-                    ))
-
-                    fgsea_df <- as.data.frame(fgsea_res)
+                    fgsea_df <- run_fgsea_core(
+                        ranks     = ranks,
+                        gene_sets = gs,
+                        min_size  = min_size,
+                        max_size  = max_size,
+                        seed      = seed
+                    )
 
                     if (nrow(fgsea_df) == 0) {
                         message("    fgsea: no gene set overlap — skipping ", db_name)
@@ -948,9 +1111,6 @@ run_pathway_analysis <- function(de_tables,
                         fgsea_df$contrast <- contrast_name
                         fgsea_df$database <- db_name
                         fgsea_df$method <- "fgsea"
-
-                        # Collapse leading edge to comma-separated string
-                        fgsea_df$leadingEdge <- sapply(fgsea_df$leadingEdge, paste, collapse = ",")
 
                         # Add pathway names (GO term names, etc.)
                         fgsea_df <- add_pathway_names(fgsea_df, db_name, gs)
@@ -962,8 +1122,31 @@ run_pathway_analysis <- function(de_tables,
                     }
                 }
 
+                # ---- cameraPR ----
+                # Same ranking and the same filtered sets as fgsea, so the two
+                # tables cover identical sets with identical members (except a
+                # set of every ranked gene, which cameraPR cannot test).
+                if ("camerapr" %in% method) {
+                    ranks <- .build_fgsea_ranks(res)
+                    sets <- .filter_sets_to_ranks(gs, ranks, min_size, max_size)
+                    cam_df <- run_camerapr(ranks, sets,
+                                           inter_gene_cor = camerapr_inter_gene_cor,
+                                           use_ranks = camerapr_use_ranks)
+                    if (nrow(cam_df) == 0) {
+                        message("    cameraPR: no gene set overlap — skipping ", db_name)
+                    } else {
+                        cam_df$contrast <- contrast_name
+                        cam_df$database <- db_name
+                        cam_df$method <- "camerapr"
+                        cam_df <- add_pathway_names(cam_df, db_name, gs)
+                        contrast_results[[paste0(db_name, "_camerapr")]] <- cam_df
+                        message("    cameraPR: ", sum(cam_df$FDR < 0.05, na.rm = TRUE),
+                                " pathways at FDR < 0.05")
+                    }
+                }
+
                 # ---- ORA ----
-                if (method %in% c("ora", "both")) {
+                if (any(method %in% c("ora", "both"))) {
 
                     # Identify significant up/down genes. Cutoffs come from the
                     # caller's de: block rather than being hard-coded, so ORA
@@ -1293,7 +1476,9 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
 
             clean_analysis <- gsub("[^a-zA-Z0-9_-]", "_", analysis_name)
 
-            if ("padj" %in% colnames(res_df)) {
+            if (all(c("PValue", "Direction") %in% colnames(res_df))) {
+                top_pathways <- head(res_df[order(res_df$PValue), ], 20)
+            } else if ("padj" %in% colnames(res_df)) {
                 top_pathways <- head(res_df[order(res_df$padj), ], 20)
             } else if ("pvalue" %in% colnames(res_df)) {
                 top_pathways <- head(res_df[order(res_df$pvalue), ], 20)
@@ -1308,7 +1493,25 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
             # Truncate long names for display (max 60 characters)
             top_pathways$pathway_label <- substr(top_pathways[[label_col]], 1, 60)
 
-            if ("NES" %in% colnames(top_pathways)) {
+            if (all(c("PValue", "Direction") %in% colnames(top_pathways))) {
+                # cameraPR has no enrichment score: plot significance, with the
+                # direction of the set's mean statistic as colour.
+                p <- ggplot2::ggplot(top_pathways,
+                                     ggplot2::aes(x = -log10(PValue),
+                                                  y = reorder(pathway_label, -log10(PValue)))) +
+                    ggplot2::geom_point(ggplot2::aes(size = NGenes, color = Direction)) +
+                    ggplot2::scale_color_manual(values = c(Up = "#b2182b", Down = "#2166ac"),
+                                                name = "Direction") +
+                    ggplot2::labs(
+                        title = paste("Top Pathways:", contrast_name),
+                        subtitle = analysis_name,
+                        x = "-log10(p-value)",
+                        y = "",
+                        size = "Gene Set Size"
+                    ) +
+                    ggplot2::theme_minimal() +
+                    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+            } else if ("NES" %in% colnames(top_pathways)) {
                 p <- ggplot2::ggplot(top_pathways,
                                      ggplot2::aes(x = NES, y = reorder(pathway_label, NES))) +
                     ggplot2::geom_point(ggplot2::aes(size = size, color = -log10(padj))) +
@@ -1763,6 +1966,8 @@ build_ranked_gene_lists <- function(de_tables) {
 #'
 #' Wraps clusterProfiler::GSEA() with the legacy enrichment parameters.
 #' maxGSSize is set to the total number of unique genes in TERM2GENE (legacy behavior).
+#' Standalone helper for the clusterProfiler engine; the pipeline runs offline
+#' GSEA through run_gsea_all(), whose default engine is fgsea.
 #'
 #' @param ranked_genes Named numeric vector (gene IDs as names, ranking metric as values).
 #'   Must be sorted descending.
@@ -1921,11 +2126,21 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L,
 #' @return A 0-row data.frame with the manifest columns.
 #' @noRd
 .empty_enrichment_manifest <- function() {
+    # §17 R2: `subgroup` is the optional level under (group,item) — for ORA
+    # contrasts it is up | down | up_down | all (contrast and subgroup are kept in
+    # SEPARATE fields, never overloaded into `item`); NA for partition/binary/
+    # all_DE/GSEA. `group_type` (direction | partition | pattern | NA) and
+    # `group_label` (Up / Down / Up + Down / All / Cluster <x> / Pattern <x> /
+    # Compare Clusters / Compare Patterns) are generic, omics-agnostic display
+    # metadata driving the compare views without RNA-specific Shiny branches.
     data.frame(
         analysis      = character(0),
         database      = character(0),
         group         = character(0),
         item          = character(0),
+        subgroup      = character(0),
+        group_type    = character(0),
+        group_label   = character(0),
         evaluated     = logical(0),
         status        = character(0),
         n_significant = integer(0),
@@ -1979,14 +2194,18 @@ gsea_unit_dir <- function(gsea_root, db_name, ranking_method, contrast) {
               paste0("ranking_by_", ranking_method), contrast)
 }
 
-#' Directory for one ORA result unit under Enrichment/ORA/<db>/
+#' Base directory for one ORA result unit under Enrichment/ORA/<db>/
 #'
-#' Maps the gene-list collection + round to the nested layout:
-#'   all_DE               -> <db>/all_DE/any_contrast
-#'   contrasts            -> <db>/contrasts/with_direction/<round>
-#'   contrasts_wo_direction -> <db>/contrasts/without_direction/<round>
-#'   partition            -> <db>/clustering/partition
-#'   binary_patterns      -> <db>/clustering/binary_patterns
+#' §17 R3 (Option B) — contrast-first physical tree. Returns the BASE directory
+#' the unit's per-subgroup leaves hang under (see write_ora_unit_tree()); the
+#' user-facing `with_direction`/`without_direction` and `clustering/` splits are
+#' retired. Both `contrasts` (up/down/up_down_compare leaves) and
+#' `contrasts_wo_direction` (the `all` leaf) share ONE base `contrasts/<round>`:
+#'   all_DE               -> <db>/all_DE/<round>            (single whole-table leaf)
+#'   contrasts            -> <db>/contrasts/<round>         (+ up/down/up_down_compare)
+#'   contrasts_wo_direction -> <db>/contrasts/<round>       (+ all)
+#'   partition            -> <db>/partition                 (+ cluster_<x>/compare_clusters)
+#'   binary_patterns      -> <db>/binary_patterns           (+ pattern_<x>/compare_patterns)
 #' Unknown collections fall back to <db>/<clust_method>/<clust_round> so nothing
 #' is ever written outside ORA/<db>/.
 #'
@@ -1996,7 +2215,7 @@ gsea_unit_dir <- function(gsea_root, db_name, ranking_method, contrast) {
 #'   partition / binary_patterns.
 #' @param clust_round Round within the collection (contrast name, "any_contrast",
 #'   "k", or "best").
-#' @return The unit directory path (not created).
+#' @return The unit base directory path (not created).
 #' @noRd
 ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
     db_dir <- file.path(ora_root, db_name)
@@ -2005,54 +2224,369 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
     clust_round <- gsub("[^a-zA-Z0-9_-]", "_", clust_round)
     switch(clust_method,
         all_DE                 = file.path(db_dir, "all_DE", clust_round),
-        contrasts              = file.path(db_dir, "contrasts", "with_direction", clust_round),
-        contrasts_wo_direction = file.path(db_dir, "contrasts", "without_direction", clust_round),
-        partition              = file.path(db_dir, "clustering", "partition"),
-        binary_patterns        = file.path(db_dir, "clustering", "binary_patterns"),
+        contrasts              = file.path(db_dir, "contrasts", clust_round),
+        contrasts_wo_direction = file.path(db_dir, "contrasts", clust_round),
+        partition              = file.path(db_dir, "partition"),
+        binary_patterns        = file.path(db_dir, "binary_patterns"),
         # fallback: keep any unforeseen collection inside ORA/<db>/
         file.path(db_dir, clust_method, clust_round)
     )
 }
 
+#' Filter a 4-element ORA result to a subset of its `Cluster` labels (no recompute)
+#'
+#' §17 R3 — reuse the SAME biological result objects to materialize a per-subgroup
+#' view (UP / DOWN / a single cluster / pattern). Subsets the compareCluster S4
+#' objects (@compareClusterResult) and the enrichment tables by `Cluster`; drops
+#' unused factor levels so a filtered dotplot renders only the kept group. No
+#' enrichment is re-run — this is a pure row filter of existing results.
+#'
+#' @param ora_result The 4-element list from run_cluster_ora_compute()
+#'   (allRes, allRes_simplify, enrichment_table, enrichment_table_simplify).
+#' @param keep Character vector of `Cluster` labels to retain.
+#' @return A new 4-element list with the same shape, each element filtered to
+#'   `keep` (a compareCluster with no surviving rows becomes NULL; a table with
+#'   no surviving rows becomes a 0-row data.frame).
+#' @noRd
+.filter_ora_result_by_cluster <- function(ora_result, keep) {
+    keep <- as.character(keep)
+    filt_df <- function(df) {
+        if (is.null(df) || !("Cluster" %in% names(df))) return(df)
+        df[as.character(df$Cluster) %in% keep, , drop = FALSE]
+    }
+    filt_cc <- function(cc) {
+        if (is.null(cc)) return(NULL)
+        r <- cc@compareClusterResult
+        r <- r[as.character(r$Cluster) %in% keep, , drop = FALSE]
+        if (nrow(r) == 0) return(NULL)
+        r$Cluster <- droplevels(factor(r$Cluster))
+        cc@compareClusterResult <- r
+        cc
+    }
+    list(filt_cc(ora_result[[1]]), filt_cc(ora_result[[2]]),
+         filt_df(ora_result[[3]]), filt_df(ora_result[[4]]))
+}
+
+# --- §17 R4B: static pipeline comparison plots (ALL significant terms) ---------
+# Both operate on an already-computed ORA result table (process_enrichment_table
+# output; columns Cluster, Description/ID, Count, p.adjust, in_term, Fold_enrichment).
+# Pure plotting: NO enrichment recompute, NO RNG, fail-soft (missing ggplot2 / bad
+# columns / plot error -> warn + skip, never stop the pipeline). Interactive hover
+# + Top-N are the Shiny counterpart (§17 D10/D11); these are the complete-term
+# static artifacts the pipeline is obliged to emit (§17 D9/D10).
+
+# −log10(FDR) with a finite cap so p.adjust == 0 does not produce Inf.
+.ora_neglog10 <- function(p) {
+    p <- suppressWarnings(as.numeric(p))
+    pmin(-log10(pmax(p, .Machine$double.xmin)), 300)
+}
+# Term label for the Y axis (Description, falling back to ID).
+.ora_term_label <- function(df) {
+    lab <- if ("Description" %in% names(df)) as.character(df$Description) else NA_character_
+    idc <- if ("ID" %in% names(df)) as.character(df$ID) else NA_character_
+    ifelse(is.na(lab) | !nzchar(lab), idc, lab)
+}
+
+#' UP+DOWN diverging horizontal bar plot (§17 D9) — static, all significant terms
+#'
+#' Y = term, RIGHT = UP / LEFT = DOWN, bar length = Gene Count (`Count`), fill =
+#' −log10(FDR) (a continuous gradient — NOT a red/blue direction encoding). The
+#' left side is negative for LAYOUT ONLY (the x axis shows positive magnitudes);
+#' direction is read from side-of-zero + the axis title. Per-bar annotation is
+#' `count/term size · FE <fold>`. Reuses the existing up-vs-down compareCluster
+#' table verbatim (no recompute). Writes `out_file` (PDF). Fail-soft.
+#' @noRd
+plot_ora_diverging_bars <- function(df, out_file) {
+    if (is.null(df) || !is.data.frame(df) || nrow(df) == 0 || is.null(out_file))
+        return(invisible(NULL))
+    if (!requireNamespace("ggplot2", quietly = TRUE)) {
+        warning("ggplot2 not installed; skipping ORA diverging-bar plot: ", out_file)
+        return(invisible(NULL))
+    }
+    if (!all(c("Cluster", "Count") %in% names(df))) {
+        warning("plot_ora_diverging_bars(): missing Cluster/Count; skipping ", out_file)
+        return(invisible(NULL))
+    }
+    d <- df[as.character(df$Cluster) %in% c("up", "down"), , drop = FALSE]
+    if (nrow(d) == 0) return(invisible(NULL))
+    d$.term   <- .ora_term_label(d)
+    d$.count  <- suppressWarnings(as.numeric(d$Count))
+    d$.signed <- ifelse(as.character(d$Cluster) == "up", d$.count, -d$.count)
+    d$.neglog <- .ora_neglog10(d$p.adjust %||% NA)
+    size_col  <- if ("in_term" %in% names(d)) d$in_term else NA
+    fe_col    <- if ("Fold_enrichment" %in% names(d)) d$Fold_enrichment else NA
+    d$.lab    <- paste0(d$.count,
+                        ifelse(is.na(size_col), "", paste0("/", size_col)),
+                        ifelse(is.na(fe_col),   "", paste0(" · FE ", fe_col)))
+    # Order terms by strongest signal (max −log10 FDR) so the top of the plot is
+    # the most significant; terms shared by up & down align on one row.
+    ord <- stats::aggregate(.neglog ~ .term, data = d, FUN = max)
+    d$.term <- factor(d$.term, levels = ord$.term[order(ord$.neglog)])
+
+    p <- ggplot2::ggplot(d, ggplot2::aes(x = .signed, y = .term, fill = .neglog)) +
+        ggplot2::geom_col(width = 0.7) +
+        ggplot2::geom_vline(xintercept = 0, linewidth = 0.3, colour = "grey40") +
+        ggplot2::geom_text(ggplot2::aes(label = .lab,
+                                        hjust = ifelse(.signed >= 0, -0.1, 1.1)),
+                           size = 2.3) +
+        ggplot2::scale_x_continuous(labels = function(x) abs(x),
+                                    expand = ggplot2::expansion(mult = 0.18)) +
+        ggplot2::scale_fill_viridis_c(name = "-log10(FDR)", option = "C") +
+        ggplot2::labs(x = "Gene Count   (<- DOWN  |  UP ->)", y = NULL,
+                      title = "UP vs DOWN enrichment (all significant terms)") +
+        ggplot2::theme_minimal(base_size = 9) +
+        ggplot2::theme(panel.grid.major.y = ggplot2::element_blank())
+
+    n_terms <- length(levels(d$.term))
+    tryCatch(
+        ggplot2::ggsave(out_file, p, device = "pdf",
+                        width = 11, height = max(4, 0.28 * n_terms + 1),
+                        limitsize = FALSE),
+        error = function(e) message("    Diverging-bar plot failed: ", e$message))
+    invisible(out_file)
+}
+
+#' Multi-group comparison dot matrix (§17 D10) — static, all significant terms
+#'
+#' Y = term, X = group (`Cluster`: cluster or pattern), dot size = Gene Count
+#' §5/§9: Compare Contrasts — a static cross-contrast dot-matrix artifact. Combines
+#' every contrast's direction-agnostic DE ORA table (`contrasts_without_direction`
+#' result, passed as a named list contrast -> table) into ONE table with
+#' `Cluster` = contrast name, writes the COMPLETE combined CSV, and (when >= 2
+#' contrasts contribute significant rows) a dot-matrix PDF via
+#' plot_ora_compare_dotmatrix (same X=group / Y=Term ID / size=Count / colour=FDR
+#' semantics as Compare Clusters). No ORA recompute. Fail-soft. Returns `out_dir`.
+#' @noRd
+write_ora_compare_contrasts <- function(de_by_contrast, out_dir) {
+    if (is.null(de_by_contrast) || !length(de_by_contrast) || is.null(out_dir))
+        return(invisible(NULL))
+    parts <- list()
+    for (ct in names(de_by_contrast)) {
+        d <- de_by_contrast[[ct]]
+        if (is.data.frame(d) && nrow(d) > 0 &&
+            all(c("ID", "Description", "geneID") %in% names(d))) {
+            d$Cluster <- ct                       # compare group = contrast name
+            parts[[length(parts) + 1L]] <- d
+        }
+    }
+    if (!length(parts)) return(invisible(NULL))
+    combined <- do.call(rbind, parts)
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+    utils::write.csv(combined, file.path(out_dir, "compare_contrasts.csv"),
+                     quote = TRUE, row.names = FALSE)
+    # >= 2 contributing contrasts -> a meaningful comparison figure (§14; else the
+    # CSV is still written and the figure is skipped).
+    if (length(unique(as.character(combined$Cluster))) >= 2L)
+        plot_ora_compare_dotmatrix(combined,
+                                   file.path(out_dir, "compare_contrasts.pdf"))
+    invisible(out_dir)
+}
+
+#' (`Count`), dot colour = −log10(FDR). Reuses the whole unfiltered compareCluster
+#' table verbatim (no recompute). Writes `out_file` (PDF). Fail-soft. Interactive
+#' hover (Term/Group/Count/GeneRatio/FDR/Fold Enrichment) is the Shiny counterpart.
+#' @noRd
+plot_ora_compare_dotmatrix <- function(df, out_file) {
+    if (is.null(df) || !is.data.frame(df) || nrow(df) == 0 || is.null(out_file))
+        return(invisible(NULL))
+    if (!requireNamespace("ggplot2", quietly = TRUE)) {
+        warning("ggplot2 not installed; skipping ORA compare dot matrix: ", out_file)
+        return(invisible(NULL))
+    }
+    if (!all(c("Cluster", "Count") %in% names(df))) {
+        warning("plot_ora_compare_dotmatrix(): missing Cluster/Count; skipping ", out_file)
+        return(invisible(NULL))
+    }
+    d <- df
+    # §23 F: the Y-axis row identity is the biological Term ID (NOT the Description
+    # label), so a term shared across groups is ONE row with multiple points and
+    # two different IDs sharing a Description never collapse. Descriptions remain
+    # the human-readable y tick labels via scale_y_discrete().
+    d$.id     <- as.character(if ("ID" %in% names(d)) d$ID else .ora_term_label(d))
+    d$.desc   <- .ora_term_label(d)
+    d$.count  <- suppressWarnings(as.numeric(d$Count))
+    d$.neglog <- .ora_neglog10(d$p.adjust %||% NA)
+    d$.group  <- factor(as.character(d$Cluster),
+                        levels = sort(unique(as.character(d$Cluster))))
+    lab_map <- tapply(d$.desc, d$.id, function(x) x[1])       # ID -> display label
+    ord <- stats::aggregate(.neglog ~ .id, data = d, FUN = max)
+    d$.id <- factor(d$.id, levels = ord$.id[order(ord$.neglog)])
+
+    p <- ggplot2::ggplot(d, ggplot2::aes(x = .group, y = .id,
+                                         size = .count, colour = .neglog)) +
+        ggplot2::geom_point() +
+        ggplot2::scale_y_discrete(labels = function(ids) unname(lab_map[ids])) +
+        ggplot2::scale_colour_viridis_c(name = "-log10(FDR)", option = "C") +
+        ggplot2::scale_size_continuous(name = "Gene Count", range = c(1, 6)) +
+        ggplot2::labs(x = NULL, y = NULL,
+                      title = "Group comparison (all significant terms)") +
+        ggplot2::theme_minimal(base_size = 9) +
+        ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+    n_terms  <- length(levels(d$.id))
+    n_groups <- length(levels(d$.group))
+    tryCatch(
+        ggplot2::ggsave(out_file, p, device = "pdf",
+                        width = max(6, 1.1 * n_groups + 4),
+                        height = max(4, 0.26 * n_terms + 1), limitsize = FALSE),
+        error = function(e) message("    Compare dot-matrix plot failed: ", e$message))
+    invisible(out_file)
+}
+
+#' Write the Option-B contrast-first ORA subtree for one unit (serial I/O)
+#'
+#' §17 R3 — materializes the new physical layout for one (collection, round, db)
+#' unit by REUSING the existing result objects (no ORA recompute). Delegates each
+#' leaf to write_cluster_ora_outputs() with a `Cluster`-filtered view:
+#'   contrasts              -> <base>/{up, down}        (per-direction filter)
+#'                             <base>/up_down_compare   (whole up-vs-down table)
+#'   contrasts_wo_direction -> <base>/all               (whole direction-agnostic table)
+#'   partition              -> <base>/cluster_<label>   (per cluster present in the table)
+#'                             <base>/compare_clusters  (whole table; only if >=2 clusters)
+#'   binary_patterns        -> <base>/pattern_<label>   (per pattern present)
+#'                             <base>/compare_patterns  (whole table; only if >=2 patterns)
+#'   all_DE / fallback      -> <base>                   (single whole-table leaf)
+#' Per-direction / per-cluster leaves are written only for labels PRESENT in the
+#' result table (an evaluated-but-empty cluster has no artifacts). Compare / all /
+#' up_down_compare leaves hold ALL significant terms (no Top-N on disk — §17 D11).
+#'
+#' @param ora_result The 4-element list from run_cluster_ora_compute() (or NULL).
+#' @param ora_root The ORA root (e.g. Enrichment/ORA).
+#' @param db_name Database.
+#' @param collection Collection (clust_method).
+#' @param round Round (contrast / any_contrast / k / best).
+#' @inheritParams write_cluster_ora_outputs
+#' @return Invisibly the character vector of leaf directories written.
+#' @noRd
+write_ora_unit_tree <- function(ora_result, ora_root, db_name, collection, round,
+                                type = "KEGG", maxCategory = 1000,
+                                dotplot = TRUE, shared_genes = FALSE) {
+    if (length(ora_result) == 0) return(invisible(character(0)))
+    base <- ora_unit_dir(ora_root, db_name, collection, round)
+    tbl  <- ora_result[[3]]
+    present <- if (!is.null(tbl) && "Cluster" %in% names(tbl))
+                   unique(as.character(tbl$Cluster)) else character(0)
+
+    # (leaf subdir, labels, plot) specs; labels = NULL means the WHOLE table
+    # (compare / all). `plot` selects the leaf's ORA plot:
+    #   "dotplot"   = the per-group leaf; its canonical summary is the enrichment
+    #                 bar pair (top20 + full) from write_cluster_ora_outputs (§18);
+    #   "dotmatrix" = the multi-group comparison dot matrix (D10) — now ALSO used
+    #                 for Compare Up & Down (§23 G; the diverging-bars figure is
+    #                 retired as the canonical up/down comparison).
+    # §23 H: disk directory names are `up/ down/ de/ compare_up_down/`. The INTERNAL
+    # manifest/resolver subgroup ids stay `up/down/all/up_down`; only the on-disk
+    # leaf names change here (id -> dir is an explicit local mapping, no global
+    # rename of "all"). The subgroup id itself is not written to disk.
+    specs <- list()
+    add <- function(sub, labels, plot = "dotplot")
+        specs[[length(specs) + 1]] <<- list(
+            dir = if (nzchar(sub)) file.path(base, sub) else base,
+            labels = labels, plot = plot)
+
+    if (collection == "contrasts") {
+        if ("up"   %in% present) add("up",   "up")
+        if ("down" %in% present) add("down", "down")
+        add("compare_up_down", NULL, "dotmatrix")     # §23 G/H: up-vs-down dot matrix
+    } else if (collection == "contrasts_wo_direction") {
+        add("de", NULL)                               # §23 H: direction-agnostic "DE" table
+    } else if (collection %in% c("partition", "binary_patterns")) {
+        pfx <- if (collection == "partition") "cluster_" else "pattern_"
+        cmp <- if (collection == "partition") "compare_clusters" else "compare_patterns"
+        for (lab in present)
+            add(paste0(pfx, gsub("[^a-zA-Z0-9_-]", "_", lab)), lab)
+        if (length(present) >= 2) add(cmp, NULL, "dotmatrix")  # whole multi-group table
+    } else {
+        add("", NULL)                                 # all_DE / fallback: whole table at base
+    }
+
+    written <- character(0)
+    for (sp in specs) {
+        sub_res <- if (is.null(sp$labels)) ora_result
+                   else .filter_ora_result_by_cluster(ora_result, sp$labels)
+        # Skip a leaf whose filtered table is empty (defensive; per-label leaves
+        # are only added for present labels, so this is a no-op in practice).
+        st <- sub_res[[3]]
+        if (!is.null(st) && "Cluster" %in% names(st) && nrow(st) == 0) next
+
+        # Compare leaves get the comparison DOT MATRIX instead of the generic
+        # per-group enrichment bar; every leaf still gets results/simplify/shared_genes.
+        # §23 G: Compare Up & Down now uses the same dot matrix as Compare
+        # Clusters/Patterns (diverging bars retired as the canonical up/down figure).
+        is_compare <- identical(sp$plot, "dotmatrix")
+        write_cluster_ora_outputs(sub_res, unit_dir = sp$dir, type = type,
+                                  maxCategory = maxCategory,
+                                  dotplot = isTRUE(dotplot) && !is_compare,
+                                  shared_genes = shared_genes)
+        if (isTRUE(dotplot) && is_compare)
+            plot_ora_compare_dotmatrix(st, file.path(sp$dir, "compare_dotmatrix.pdf"))
+        written <- c(written, sp$dir)
+    }
+    invisible(written)
+}
+
 #' Build a pure-compute GSEA worker with a minimal captured environment
 #'
 #' Returns a `function(job)` that runs GSEA for one job. Defining it here (not
-#' nested inside run_gsea_all) bounds the closure's environment to just the two
-#' scalar arguments below — so future.apply serializes NOTHING large from the
+#' nested inside run_gsea_all) bounds the closure's environment to the scalar
+#' arguments below — so future.apply serializes NOTHING large from the
 #' closure. Everything the job needs travels IN the job: the per-job ranked
-#' vector (`job$ranked`) AND this job's single-database `job$term2gene` /
-#' `job$term2name` (both built in run_gsea_all). The worker never captures the
-#' whole multi-database `local_tables`, so future exports at most one database's
-#' tables per job. Pure computation only (no file I/O, no messages), fgsea forced
-#' serial via SerialParam. Analogous to .make_ora_worker().
+#' vector (`job$ranked`) AND this job's single-database annotation (built in
+#' run_gsea_all). The worker never captures the whole multi-database
+#' `local_tables`, so future exports at most one database per job. Pure
+#' computation only (no file I/O, no messages), fgsea forced serial via
+#' SerialParam. Analogous to .make_ora_worker().
 #'
-#' @param pvalueCutoff GSEA adjusted-p cutoff.
-#' @param pAdjustMethod P-value adjustment method.
+#' Two engines. "fgsea" (default) runs run_fgsea_core(), the call the online
+#' path also uses, on `job$gene_sets` and returns every tested set.
+#' "clusterProfiler" is the earlier clusterProfiler::GSEA() call on
+#' `job$term2gene` / `job$term2name` (minGSSize 4, maxGSSize = all annotated
+#' genes, sets above `pvalueCutoff` dropped, seeded only through the per-job
+#' RNG stream), kept so earlier offline runs can be reproduced.
+#'
+#' @param pvalueCutoff GSEA adjusted-p cutoff (clusterProfiler engine only).
+#' @param pAdjustMethod P-value adjustment method (clusterProfiler engine only).
+#' @param engine "fgsea" or "clusterProfiler".
+#' @param min_size Minimum gene-set size (fgsea engine only).
+#' @param max_size Maximum gene-set size (fgsea engine only), used when the job
+#'   carries no `max_size` of its own.
+#' @param seed Integer seed passed to run_fgsea_core() (fgsea engine only).
 #' @return A function(job) -> list(ranking_method, contrast, db_name, gsea_result).
 #' @noRd
-.make_gsea_worker <- function(pvalueCutoff, pAdjustMethod) {
-    force(pvalueCutoff); force(pAdjustMethod)
+.make_gsea_worker <- function(pvalueCutoff, pAdjustMethod, engine = "fgsea",
+                              min_size = 4, max_size = 500, seed = 1L) {
+    force(pvalueCutoff); force(pAdjustMethod); force(engine)
+    force(min_size); force(max_size); force(seed)
     function(job) {
-        ranked    <- job$ranked
-        term2gene <- job$term2gene
-        term2name <- job$term2name
-
         res <- tryCatch({
-            clusterProfiler::GSEA(
-                geneList      = ranked,
-                TERM2GENE     = term2gene,
-                TERM2NAME     = term2name,
-                minGSSize     = 4,
-                maxGSSize     = length(unique(term2gene[, 2])),
-                pAdjustMethod = pAdjustMethod,
-                pvalueCutoff  = pvalueCutoff,
-                # Serial fgsea inside each job. Outer parallelism is future.apply
-                # over jobs (see run_enrichment_jobs); fgsea's default (Windows)
-                # SnowParam spawns a 14-worker SOCK cluster PER job, which is
-                # nested parallelism — the source of "error writing to
-                # connection" failures under RStudio — and redundant here.
-                BPPARAM       = BiocParallel::SerialParam()
-            )
+            if (identical(engine, "fgsea")) {
+                run_fgsea_core(
+                    ranks     = job$ranked,
+                    gene_sets = job$gene_sets,
+                    min_size  = min_size,
+                    max_size  = job$max_size %||% max_size,
+                    seed      = seed,
+                    # Serial inside each job; see the clusterProfiler branch.
+                    bpparam   = BiocParallel::SerialParam()
+                )
+            } else {
+                term2gene <- job$term2gene
+                clusterProfiler::GSEA(
+                    geneList      = job$ranked,
+                    TERM2GENE     = term2gene,
+                    TERM2NAME     = job$term2name,
+                    minGSSize     = 4,
+                    maxGSSize     = length(unique(term2gene[, 2])),
+                    pAdjustMethod = pAdjustMethod,
+                    pvalueCutoff  = pvalueCutoff,
+                    # Serial fgsea inside each job. Outer parallelism is future.apply
+                    # over jobs (see run_enrichment_jobs); fgsea's default (Windows)
+                    # SnowParam spawns a 14-worker SOCK cluster PER job, which is
+                    # nested parallelism — the source of "error writing to
+                    # connection" failures under RStudio — and redundant here.
+                    BPPARAM       = BiocParallel::SerialParam()
+                )
+            }
         }, error = function(e) {
             structure(list(message = e$message), class = "gsea_error")
         })
@@ -2065,19 +2599,137 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
     }
 }
 
+#' Shape one offline fgsea table for storage
+#'
+#' Gives the table the identifying columns the earlier clusterProfiler tables
+#' had, so their readers (the Shiny enrichment payload, the per-pathway writer,
+#' the pathway-membership builder, the multiomics collector) see the same
+#' contract: `ID` is the term ID, `pathway` and `Description` the term name
+#' (the ID where the term has no name), `setSize`, `enrichmentScore`, `pvalue`,
+#' `p.adjust`/`padj` and `core_enrichment` ("/"-separated). fgsea's own `pval`,
+#' `ES`, `size` and `leadingEdge` stay alongside. No `method` column is added,
+#' as none was before. No statistic is recomputed.
+#'
+#' @param df Output of run_fgsea_core() (at least one row).
+#' @param gene_sets The gene-set list the job was scored on (carries the
+#'   `descriptions` attribute used for pathway names).
+#' @param db_name Database name.
+#' @param contrast Contrast (or `any_contrast`).
+#' @param ranking_method Ranking method the job used.
+#' @return data.frame, ordered by p-value.
+#' @noRd
+.format_offline_fgsea <- function(df, gene_sets, db_name, contrast, ranking_method) {
+    df <- df[order(df$pval, df$pathway), , drop = FALSE]
+    rownames(df) <- NULL
+    df$contrast       <- contrast
+    df$database       <- db_name
+    df$ranking_method <- ranking_method
+    df <- add_pathway_names(df, db_name, gene_sets)
+
+    named <- !is.na(df$pathway_name) & nzchar(df$pathway_name)
+    df$ID              <- df$pathway
+    df$Description     <- ifelse(named, df$pathway_name, df$pathway)
+    df$pathway         <- df$Description
+    df$pathway_name    <- NULL
+    df$setSize         <- df$size
+    df$enrichmentScore <- df$ES
+    df$pvalue          <- df$pval
+    df$p.adjust        <- df$padj
+    df$core_enrichment <- gsub(",", "/", df$leadingEdge, fixed = TRUE)
+    df
+}
+
+#' Wrap significant offline fgsea rows in a gseaResult for the plot helpers
+#'
+#' enrichplot's dotplot/gseaplot2 and plot_gsea_ridgeplot() take a gseaResult.
+#' This builds one from rows that were already computed and filtered for
+#' display; nothing is re-scored. Returns NULL (plots are then skipped or fall
+#' back) when DOSE, which defines the class, is not available.
+#'
+#' @param sig_df Significant rows from .format_offline_fgsea().
+#' @param ranked The ranked vector the job was scored on.
+#' @param gene_sets The gene-set list the job was scored on.
+#' @param pvalue_cutoff Display cutoff, recorded in the params slot.
+#' @return A gseaResult object, or NULL.
+#' @noRd
+.fgsea_as_gsea_result <- function(sig_df, ranked, gene_sets, pvalue_cutoff = 0.05) {
+    if (is.null(sig_df) || nrow(sig_df) == 0) return(NULL)
+    if (!requireNamespace("DOSE", quietly = TRUE)) return(NULL)
+    cls <- tryCatch(methods::getClassDef("gseaResult", where = asNamespace("DOSE")),
+                    error = function(e) NULL)
+    if (is.null(cls)) return(NULL)
+
+    sig_df <- sig_df[order(sig_df$p.adjust, sig_df$pvalue, sig_df$ID), , drop = FALSE]
+    result <- data.frame(
+        ID              = sig_df$ID,
+        Description     = sig_df$Description,
+        setSize         = sig_df$setSize,
+        enrichmentScore = sig_df$enrichmentScore,
+        NES             = sig_df$NES,
+        pvalue          = sig_df$pvalue,
+        p.adjust        = sig_df$p.adjust,
+        core_enrichment = sig_df$core_enrichment,
+        row.names       = sig_df$ID,
+        stringsAsFactors = FALSE
+    )
+    slots <- list(
+        result   = result,
+        geneSets = unclass(gene_sets)[result$ID],
+        geneList = ranked,
+        organism = "UNKNOWN",
+        setType  = "UNKNOWN",
+        keytype  = "UNKNOWN",
+        readable = FALSE,
+        # gseaplot2 reads `exponent` (fgsea's gseaParam, 1 by default).
+        params   = list(pvalueCutoff = pvalue_cutoff, pAdjustMethod = "BH",
+                        exponent = 1)
+    )
+    slots <- slots[names(slots) %in% methods::slotNames(cls)]
+    tryCatch(do.call(methods::new, c(list(Class = cls), slots)),
+             error = function(e) {
+                 message("    could not build a gseaResult for plotting: ",
+                         conditionMessage(e))
+                 NULL
+             })
+}
+
 #' Run GSEA across all ranking methods, contrasts, and databases
 #'
-#' Orchestrator that runs run_gsea_local() for every combination of
-#' ranking method x contrast x database loaded from local tables.
-#' Jobs are independent and run in parallel when future.apply is available.
+#' Orchestrator that runs GSEA for every combination of ranking method x
+#' contrast x database loaded from local tables. Jobs are independent and run
+#' in parallel when future.apply is available.
+#'
+#' With engine "fgsea" (default) every job goes through run_fgsea_core(), the
+#' fgsea call the online path uses. Every ranking is treated alike, with no
+#' primary one: each unit's full table (every tested gene set) is written to
+#' its results.csv, and the returned results hold only the sets at
+#' padj <= pvalueCutoff, under `<db>_gsea_<ranking>`, in the column layout of
+#' the clusterProfiler tables (see .format_offline_fgsea()). That is the
+#' in-memory contract the clusterProfiler engine produces too, so downstream
+#' readers see no change of shape. In particular the multiomics collector
+#' still pools all rankings of the RNA layer (no `method` column, so
+#' select_layer_method_rows() keeps every row); that is kept for compatibility
+#' only, pending a scientific review of the multiomics integration, not
+#' because pooling the minimum p-value across rankings has been approved.
 #'
 #' @param ranked_genes Output of build_ranked_gene_lists()
 #' @param local_tables Output of load_local_pathway_tables()
-#' @param pvalueCutoff Adjusted p-value cutoff
-#' @param pAdjustMethod P-value adjustment method
+#' @param pvalueCutoff Adjusted p-value cutoff (display and counts; with the
+#'   clusterProfiler engine also the filter applied by GSEA itself)
+#' @param pAdjustMethod P-value adjustment method (clusterProfiler engine; fgsea
+#'   always reports Benjamini-Hochberg)
 #' @param output_dir Directory for GSEA result CSVs
 #' @param workers Number of parallel workers (default 1 = sequential).
 #'   Parallelization uses future::plan(multisession) which is Windows-safe.
+#' @param per_pathway_artifacts,max_terms_in_dotplot,dotplot,ridgeplot,ridgeplot_all_genes,pathway_heatmaps
+#'   Output toggles (see .run_local_enrichment()).
+#' @param gene_context,expr_mat,annotation_col Optional inputs for the rich
+#'   per-pathway tables and heatmaps (serial stage only).
+#' @param seed Integer seed: the per-job RNG streams, and fgsea's own seed.
+#' @param engine "fgsea" or "clusterProfiler" (see resolve_rna_gsea_settings()).
+#' @param min_size,max_size Gene-set size limits for the fgsea engine. The
+#'   defaults are those of the earlier offline runs: 4, and NULL, which means
+#'   the number of unique genes in each database's TERM2GENE table.
 #' @return Nested list compatible with downstream consumers:
 #'   contrast -> db_method_key -> data.frame with padj, NES, etc.
 run_gsea_all <- function(ranked_genes,
@@ -2095,16 +2747,29 @@ run_gsea_all <- function(ranked_genes,
                          gene_context = NULL,
                          expr_mat = NULL,
                          annotation_col = NULL,
-                         seed = 1L) {
+                         seed = 1L,
+                         engine = "fgsea",
+                         min_size = 4,
+                         max_size = NULL) {
+
+    engine <- match.arg(engine, c("fgsea", "clusterProfiler"))
+    use_fgsea <- identical(engine, "fgsea")
 
     if (!is.null(output_dir)) {
         dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     }
 
+    # fgsea takes a named list of gene sets; convert each database's TERM2GENE
+    # once here rather than once per job.
+    gene_sets_by_db <- if (use_fgsea) {
+        lapply(local_tables, function(t) term2gene_to_gene_sets(t$TERM2GENE, t$TERM2NAME))
+    } else NULL
+
     # ------------------------------------------------------------------
     # 1. Build flat job list. Each job carries EVERYTHING it needs: its OWN
-    #    ranked vector (`ranked`) AND its OWN single database's TERM2GENE/
-    #    TERM2NAME (`term2gene`/`term2name`). Neither the whole `ranked_genes`
+    #    ranked vector (`ranked`) AND its OWN single database's annotation
+    #    (`gene_sets` for fgsea, `term2gene`/`term2name` for clusterProfiler).
+    #    Neither the whole `ranked_genes`
     #    structure nor the whole multi-database `local_tables` is captured by the
     #    worker closure, so future never broadcasts them as globals. The per-job
     #    payloads ride in the `jobs` iteration list (sent one-at-a-time to
@@ -2119,14 +2784,23 @@ run_gsea_all <- function(ranked_genes,
             if (length(ranked_genes[[ranking_method]][[contrast]]) == 0) next
 
             for (db_name in names(local_tables)) {
-                jobs[[length(jobs) + 1]] <- list(
+                job <- list(
                     ranking_method = ranking_method,
                     contrast       = contrast,
                     db_name        = db_name,
-                    ranked         = ranked_genes[[ranking_method]][[contrast]],
-                    term2gene      = local_tables[[db_name]]$TERM2GENE,
-                    term2name      = local_tables[[db_name]]$TERM2NAME
+                    ranked         = ranked_genes[[ranking_method]][[contrast]]
                 )
+                if (use_fgsea) {
+                    job$gene_sets <- gene_sets_by_db[[db_name]]
+                    # NULL keeps the earlier offline limit: every annotated
+                    # gene of this database, as the clusterProfiler engine does.
+                    job$max_size  <- max_size %||%
+                        length(unique(local_tables[[db_name]]$TERM2GENE[, 2]))
+                } else {
+                    job$term2gene <- local_tables[[db_name]]$TERM2GENE
+                    job$term2name <- local_tables[[db_name]]$TERM2NAME
+                }
+                jobs[[length(jobs) + 1]] <- job
             }
         }
     }
@@ -2147,11 +2821,13 @@ run_gsea_all <- function(ranked_genes,
     # inside run_gsea_all() would carry this whole execution frame — including
     # the large `jobs` list and `ranked_genes` — as its environment, and future
     # would serialize all of it. The factory bounds the worker's environment to
-    # only two scalar cutoffs; the ranked vector AND the single-database
-    # TERM2GENE/TERM2NAME ride in each `job` (the future_lapply iteration list,
+    # scalar settings; the ranked vector AND the single-database annotation
+    # ride in each `job` (the future_lapply iteration list,
     # sent per-job), so no multi-database `local_tables` is ever broadcast — the
     # fix for the >500 MiB future-globals failure exposed by the full Assaf run.
-    run_one_gsea_job <- .make_gsea_worker(pvalueCutoff, pAdjustMethod)
+    run_one_gsea_job <- .make_gsea_worker(pvalueCutoff, pAdjustMethod,
+                                          engine = engine, min_size = min_size,
+                                          max_size = max_size, seed = seed)
 
     # Dispatch pure GSEA compute through the generic parallel orchestration
     # layer. Assembly + all file I/O happen serially below (deterministic).
@@ -2174,9 +2850,14 @@ run_gsea_all <- function(ranked_genes,
     # Index rows are recorded only for units that actually get a stored table.
     manifest_rows <- list()
     index_rows    <- list()
+    # §17 R2: GSEA has no subgroup/compare-grouping — the new generic fields are
+    # NA here (the GSEA UI uses ranking labels separately). Columns are present so
+    # the ORA + GSEA manifests rbind cleanly.
     gsea_manifest_row <- function(status, n_sig) data.frame(
         analysis = "GSEA", database = db_name, group = ranking_method,
-        item = contrast, evaluated = !identical(status, "failed"),
+        item = contrast, subgroup = NA_character_,
+        group_type = NA_character_, group_label = NA_character_,
+        evaluated = !identical(status, "failed"),
         status = status,
         n_significant = if (identical(status, "failed")) NA_integer_ else as.integer(n_sig),
         has_simplify = FALSE, storage_key = result_key, stringsAsFactors = FALSE)
@@ -2207,45 +2888,58 @@ run_gsea_all <- function(ranked_genes,
 
         # SUCCESSFUL but zero rows -> evaluated-but-empty (a real biological
         # outcome), distinct from the failures above.
+        # (With fgsea, zero rows means no gene set was within the size limits.)
         if (nrow(as.data.frame(res)) == 0) {
             message("  ", db_name, " | ", ranking_method, " | ", contrast,
-                    ": evaluated, 0 significant")
+                    if (use_fgsea) ": no gene set within the size limits"
+                    else ": evaluated, 0 significant")
             manifest_rows[[length(manifest_rows) + 1]] <- gsea_manifest_row("empty", 0L)
             next
         }
 
-        # Convert to data.frame for storage and downstream compatibility
-        res_df <- as.data.frame(res)
-        res_df$contrast <- contrast
-        res_df$database <- db_name
-        res_df$ranking_method <- ranking_method
+        if (use_fgsea) {
+            res_df <- .format_offline_fgsea(
+                res, gene_sets_by_db[[db_name]], db_name, contrast, ranking_method)
+        } else {
+            # Convert to data.frame for storage and downstream compatibility
+            res_df <- as.data.frame(res)
+            res_df$contrast <- contrast
+            res_df$database <- db_name
+            res_df$ranking_method <- ranking_method
 
-        # Ensure downstream-required columns exist
-        if ("p.adjust" %in% colnames(res_df) && !"padj" %in% colnames(res_df)) {
-            res_df$padj <- res_df$p.adjust
+            # Ensure downstream-required columns exist
+            if ("p.adjust" %in% colnames(res_df) && !"padj" %in% colnames(res_df)) {
+                res_df$padj <- res_df$p.adjust
+            }
+            if ("Description" %in% colnames(res_df) && !"pathway" %in% colnames(res_df)) {
+                res_df$pathway <- res_df$Description
+            }
         }
-        if ("Description" %in% colnames(res_df) && !"pathway" %in% colnames(res_df)) {
-            res_df$pathway <- res_df$Description
-        }
 
-        # Store in nested structure
-        if (is.null(results[[contrast]])) results[[contrast]] <- list()
-        results[[contrast]][[result_key]] <- res_df
-
-        n_sig <- nrow(.gsea_significant_rows(res_df, pvalueCutoff))
+        sig_df <- .gsea_significant_rows(res_df, pvalueCutoff)
+        n_sig  <- nrow(sig_df)
         message("  ", db_name, " | ", ranking_method, " | ", contrast,
                 ": ", n_sig, " significant (padj <= ", pvalueCutoff, ")")
 
-        # Availability manifest + storage index for this stored unit. A stored
-        # table is a successful evaluation; status tracks whether it cleared the
-        # significance cutoff.
+        # In memory, only the significant sets, as the clusterProfiler engine
+        # (whose result is already cut at pvalueCutoff) has always stored; the
+        # full fgsea table goes to results.csv below. A unit with nothing
+        # significant is then stored nowhere in memory, as before.
+        stored <- if (use_fgsea) sig_df else res_df
+        if (nrow(stored) > 0) {
+            if (is.null(results[[contrast]])) results[[contrast]] <- list()
+            results[[contrast]][[result_key]] <- stored
+            index_rows[[length(index_rows) + 1]] <- data.frame(
+                analysis = "GSEA", database = db_name, group = ranking_method,
+                item = contrast, container = contrast, storage_key = result_key,
+                has_simplify = FALSE, simplify_key = NA_character_,
+                stringsAsFactors = FALSE)
+        }
+
+        # Availability manifest: an evaluated unit; status tracks whether it
+        # cleared the significance cutoff.
         manifest_rows[[length(manifest_rows) + 1]] <-
             gsea_manifest_row(if (n_sig > 0) "significant" else "empty", n_sig)
-        index_rows[[length(index_rows) + 1]] <- data.frame(
-            analysis = "GSEA", database = db_name, group = ranking_method,
-            item = contrast, container = contrast, storage_key = result_key,
-            has_simplify = FALSE, simplify_key = NA_character_,
-            stringsAsFactors = FALSE)
 
         # Write CSV
         if (!is.null(output_dir)) {
@@ -2255,6 +2949,13 @@ run_gsea_all <- function(ranked_genes,
             dir.create(gsea_sub_dir, recursive = TRUE, showWarnings = FALSE)
             csv_file <- file.path(gsea_sub_dir, "results.csv")
             write.csv(res_df, file = csv_file, row.names = FALSE)
+
+            # Object the plot helpers take: the clusterProfiler result itself,
+            # or, for fgsea, the significant rows wrapped as a gseaResult.
+            plot_obj <- if (!use_fgsea) res else if (n_sig > 0) {
+                .fgsea_as_gsea_result(sig_df, ranked_genes[[ranking_method]][[contrast]],
+                                      gene_sets_by_db[[db_name]], pvalueCutoff)
+            } else NULL
 
             # Generate dotplot if significant results exist (config-gated).
             # Primary: enrichplot::dotplot() on the gseaResult object.
@@ -2267,9 +2968,9 @@ run_gsea_all <- function(ranked_genes,
                 plotted <- FALSE
 
                 # Primary: enrichplot::dotplot on gseaResult S4 object
-                if (requireNamespace("enrichplot", quietly = TRUE)) {
+                if (!is.null(plot_obj) && requireNamespace("enrichplot", quietly = TRUE)) {
                     tryCatch({
-                        p <- enrichplot::dotplot(res, showCategory = show_n)
+                        p <- enrichplot::dotplot(plot_obj, showCategory = show_n)
                         ggplot2::ggsave(plot_file, p, width = 10, height = 8)
                         plot_files[[plot_key]] <- plot_file
                         plotted <- TRUE
@@ -2282,8 +2983,8 @@ run_gsea_all <- function(ranked_genes,
                 # Fallback: basic ggplot2 scatterplot (not equivalent to dotplot)
                 if (!plotted) {
                     tryCatch({
-                        top <- head(res_df[order(res_df$padj), ], show_n)
-                        top$pathway_label <- substr(top$pathway, 1, 60)
+                        top <- head(sig_df[order(sig_df$padj), ], show_n)
+                        top$pathway_label <- substr(top$Description, 1, 60)
                         p <- ggplot2::ggplot(
                             top,
                             ggplot2::aes(x = NES, y = reorder(pathway_label, NES))
@@ -2311,6 +3012,17 @@ run_gsea_all <- function(ranked_genes,
                 }
             }
 
+            # Enrichment summary bar plots (§18 D18.1) — the canonical GSEA
+            # summary figure, matching the Shiny GSEA Enrichment Plot (X = signed
+            # NES, fill = -log10(FDR), annotation "<set size> genes · LE <n>").
+            # Two static versions: Top 20 (by adj p) and Full (all significant
+            # pathways). Additive — the existing dotplot.png above is kept.
+            if (isTRUE(dotplot) && n_sig > 0) {
+                write_enrichment_bar_pair(
+                    .gsea_significant_rows(res_df, pvalueCutoff),
+                    gsea_sub_dir, plot_gsea_enrichment_bar)
+            }
+
             # ----------------------------------------------------------
             # Per-pathway GSEA artifacts (gseaplot2 PNGs + rich core-gene CSVs +
             # optional expression heatmaps). The per-pathway loop runs when EITHER
@@ -2321,7 +3033,7 @@ run_gsea_all <- function(ranked_genes,
             # ----------------------------------------------------------
             if (isTRUE(per_pathway_artifacts) || isTRUE(pathway_heatmaps)) {
                 save_gsea_per_pathway_artifacts(
-                    gsea_result    = res,
+                    gsea_result    = plot_obj,
                     res_df         = res_df,
                     output_dir     = file.path(gsea_sub_dir, "per_pathway"),
                     gene_context   = gene_context,
@@ -2329,7 +3041,11 @@ run_gsea_all <- function(ranked_genes,
                     annotation_col = annotation_col,
                     plots          = isTRUE(per_pathway_artifacts),
                     heatmaps       = isTRUE(pathway_heatmaps),
-                    sig_cutoff     = pvalueCutoff
+                    sig_cutoff     = pvalueCutoff,
+                    # Passed directly so the tables and heatmaps do not need
+                    # plot_obj, which is NULL for fgsea when DOSE is missing.
+                    ranked         = ranked_genes[[ranking_method]][[contrast]],
+                    gene_sets      = if (use_fgsea) gene_sets_by_db[[db_name]] else NULL
                 )
             }
 
@@ -2337,26 +3053,44 @@ run_gsea_all <- function(ranked_genes,
             # Additive, config-gated, fail-soft; serial stage only (never in a
             # worker). Leading-edge -> ridgeplot/plot.png + data.csv; all-genes ->
             # ridgeplot/plot_all_genes.png + data_all_genes.csv (same dir).
-            if (isTRUE(ridgeplot) || isTRUE(ridgeplot_all_genes)) {
+            #
+            # §17 D1 (legacy FC hack): the ridge X-axis shows FOLD CHANGE, not the
+            # GSEA ranking metric — the same `values_for_x_axis = ranked_genes_by_fc`
+            # the legacy always passed (Neat_RNA-Seq_1.0.Rmd). This holds for ALL
+            # specific-contrast rankings (fc / pval_with_direction / pval_wo_direction).
+            # §17 D2: `any_contrast` is a cross-contrast min-p unit with NO single FC
+            # vector — the legacy EXPLICITLY excluded it (`contrast != "any_contrast"`),
+            # so NO ridge is drawn here (matches the Shiny "FC ridge unavailable" state).
+            # The GSEA result itself is unchanged for any_contrast.
+            fc_x_values <- if (identical(contrast, "any_contrast")) NULL
+                           else ranked_genes[["fc"]][[contrast]]
+            # plot_obj is NULL for an fgsea unit with no significant set.
+            draw_ridge <- (isTRUE(ridgeplot) || isTRUE(ridgeplot_all_genes)) &&
+                          !is.null(plot_obj) &&
+                          !identical(contrast, "any_contrast") &&
+                          !is.null(fc_x_values) && length(fc_x_values) > 0
+            if (draw_ridge) {
                 ridge_key <- paste0(db_name, "_", ranking_method, "_", contrast)
                 ridge_dir <- file.path(gsea_sub_dir, "ridgeplot")
                 if (isTRUE(ridgeplot)) {
                     rp <- plot_gsea_ridgeplot(
-                        gsea_result     = res,
-                        out_dir         = ridge_dir,
-                        show_category   = max_terms_in_dotplot,
-                        x_axis_title    = paste0("ranking (", ranking_method, ")"),
-                        core_enrichment = TRUE
+                        gsea_result      = plot_obj,
+                        out_dir          = ridge_dir,
+                        show_category    = max_terms_in_dotplot,
+                        x_axis_title     = "log2 Fold Change",
+                        core_enrichment  = TRUE,
+                        values_for_x_axis = fc_x_values
                     )
                     if (!is.null(rp)) plot_files[[paste0("ridge_", ridge_key)]] <- rp
                 }
                 if (isTRUE(ridgeplot_all_genes)) {
                     rpa <- plot_gsea_ridgeplot(
-                        gsea_result     = res,
-                        out_dir         = ridge_dir,
-                        show_category   = max_terms_in_dotplot,
-                        x_axis_title    = paste0("ranking (", ranking_method, ")"),
-                        core_enrichment = FALSE
+                        gsea_result      = plot_obj,
+                        out_dir          = ridge_dir,
+                        show_category    = max_terms_in_dotplot,
+                        x_axis_title     = "log2 Fold Change",
+                        core_enrichment  = FALSE,
+                        values_for_x_axis = fc_x_values
                     )
                     if (!is.null(rpa)) plot_files[[paste0("ridge_allG_", ridge_key)]] <- rpa
                 }
@@ -2376,13 +3110,12 @@ run_gsea_all <- function(ranked_genes,
 
 #' Select the significant rows of a GSEA result at the effective cutoff
 #'
-#' clusterProfiler::GSEA() already filters its `@result` to rows with both
-#' `pvalue <= pvalueCutoff` AND `p.adjust <= pvalueCutoff`, so a valid GSEA
-#' data.frame's rows are all significant at the configured cutoff. This helper
-#' re-selects on the ADJUSTED p-value (`padj`) using the SAME configured cutoff
-#' (`gsea_pvalue_cutoff` if set, else `pvalue_cutoff`) so every downstream
-#' artifact decision (dotplot gate, per-pathway plots/tables/heatmaps, counts)
-#' tracks the config instead of a hard-coded 0.05. Uses `<=` to match GSEA's
+#' With the clusterProfiler engine, GSEA() already filters its `@result` to
+#' significant rows; with the fgsea engine every tested set is kept and this is
+#' the only significance filter. This helper selects on the ADJUSTED p-value
+#' (`padj`) using the SAME configured cutoff (`gsea_pvalue_cutoff` if set,
+#' else `pvalue_cutoff`) so every downstream artifact decision (dotplot gate,
+#' per-pathway plots/tables/heatmaps, counts) tracks the config instead of a hard-coded 0.05. Uses `<=` to match GSEA's
 #' filtering contract. NA `padj` rows are excluded.
 #'
 #' @param res_df GSEA result data.frame (must have a `padj` column).
@@ -2418,7 +3151,13 @@ run_gsea_all <- function(ranked_genes,
 #' `plots = FALSE`, deriving their gene sets in memory without writing any
 #' core-gene CSV.
 #'
-#' @param gsea_result gseaResult S4 object from clusterProfiler::GSEA()
+#' Only the gseaplot2 PNGs need the gseaResult. The core-gene CSVs and the
+#' heatmaps take the ranking and the gene sets from `ranked` / `gene_sets` when
+#' given, so they are still written when no gseaResult can be built (DOSE
+#' unavailable for the fgsea engine).
+#'
+#' @param gsea_result gseaResult S4 object (clusterProfiler::GSEA(), or
+#'   .fgsea_as_gsea_result()), or NULL to skip the gseaplot2 PNGs only.
 #' @param res_df Data.frame version of the result (with padj, pathway, etc.)
 #' @param output_dir The per_pathway/ directory for this GSEA unit.
 #' @param gene_context Optional per-gene data.frame (first column = gene ID)
@@ -2430,15 +3169,23 @@ run_gsea_all <- function(ranked_genes,
 #' @param sig_cutoff Effective adjusted-p cutoff selecting which pathways get
 #'   artifacts (the configured GSEA cutoff; default 0.05).
 #' @param max_heatmap_genes Cap on genes drawn per heatmap (guards huge sets).
+#' @param ranked Optional named ranking vector the unit was scored on; defaults
+#'   to `gsea_result@geneList`.
+#' @param gene_sets Optional named list of gene sets the unit was scored on;
+#'   defaults to `gsea_result@geneSets`.
 #' @noRd
 save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
                                             gene_context = NULL, expr_mat = NULL,
                                             annotation_col = NULL,
                                             plots = TRUE, heatmaps = FALSE,
                                             sig_cutoff = 0.05,
-                                            max_heatmap_genes = 500) {
+                                            max_heatmap_genes = 500,
+                                            ranked = NULL, gene_sets = NULL) {
 
-    if (is.null(gsea_result) || is.null(output_dir)) return(invisible(NULL))
+    if (is.null(output_dir)) return(invisible(NULL))
+    if (is.null(ranked) && !is.null(gsea_result)) ranked <- gsea_result@geneList
+    if (is.null(gene_sets) && !is.null(gsea_result)) gene_sets <- gsea_result@geneSets
+    if (is.null(ranked)) return(invisible(NULL))
 
     sig_rows <- .gsea_significant_rows(res_df, sig_cutoff)
     if (nrow(sig_rows) == 0) return(invisible(NULL))
@@ -2464,7 +3211,7 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
     ctx_key <- if (!is.null(gene_context) && ncol(gene_context) > 0) {
         names(gene_context)[1]
     } else NULL
-    gene_list <- gsea_result@geneList  # full ranked vector (gene -> value)
+    gene_list <- ranked  # full ranked vector (gene -> value)
 
     # Match the pathway's genes to expression rows on the `Gene:`-normalized key
     # (DE/pathway IDs may have the prefix stripped while expr rownames retain it —
@@ -2507,12 +3254,16 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
         pw_title   <- sig_rows$Description[i]
 
         # --- GSEA plot (enrichplot::gseaplot2) ---
-        if (isTRUE(plots) && has_enrichplot) {
+        if (isTRUE(plots) && has_enrichplot && !is.null(gsea_result)) {
             tryCatch({
                 plot_file <- file.path(plots_dir, paste0(safe_id, ".png"))
-                png(plot_file, width = 800, height = 600, res = 120)
+                png(plot_file, width = 800, height = 640, res = 120)
+                # §23 L: enlarge the middle hit-tick band (default rel_heights
+                # c(1.5, .5, 1)); NES / running-ES / ranking / hit positions /
+                # ranked metric are unchanged — layout only.
                 print(enrichplot::gseaplot2(gsea_result, geneSetID = pathway_id,
-                                            title = pw_title))
+                                            title = pw_title,
+                                            rel_heights = c(1.5, 1.1, 1)))
                 dev.off()
             }, error = function(e) {
                 tryCatch(dev.off(), error = function(e2) NULL)
@@ -2557,7 +3308,7 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
 
         # --- Per-pathway expression heatmaps (all genes + core genes) ---
         if (do_heatmaps) {
-            all_genes <- tryCatch(as.character(gsea_result@geneSets[[pathway_id]]),
+            all_genes <- tryCatch(as.character(gene_sets[[pathway_id]]),
                                   error = function(e) character(0))
             write_pathway_heatmap(all_genes, file.path(hm_all_dir, paste0(safe_id, ".png")),
                                   paste0(pw_title, " (all genes)"))
@@ -2590,17 +3341,24 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
 #'   `plot.png` and `data.csv` here.
 #' @param show_category Max pathways to show (reuses `max_terms_in_dotplot`).
 #' @param fill Fill column: "p.adjust" (default), "pvalue", or "qvalue".
-#' @param x_axis_title X-axis label (e.g. the ranking method).
+#' @param x_axis_title X-axis label. When `values_for_x_axis` is supplied this is
+#'   the fold-change label ("log2 Fold Change"), NOT the GSEA ranking metric.
 #' @param core_enrichment When TRUE (default, legacy `ridgeplot_edited`) the
 #'   density uses only each pathway's leading-edge/core genes and writes
 #'   `plot.png`/`data.csv`. When FALSE (legacy `ridgeplot_edited1(core=FALSE)`)
 #'   it uses every ranked gene in the pathway and writes
 #'   `plot_all_genes.png`/`data_all_genes.csv`.
+#' @param values_for_x_axis Optional named numeric vector (gene -> value) used for
+#'   the ridge X-axis INSTEAD of the gseaResult's `geneList` — the legacy FC hack
+#'   (`ridgeplot_edited(values_for_x_axis = ranked_genes_by_fc)`), so a
+#'   p-value-ranked GSEA still shows FOLD CHANGE on X (§17 D1). NULL (default)
+#'   falls back to `x@geneList`. Does NOT change the GSEA result, the pathway gene
+#'   sets, the ordering, or any biology — only which per-gene value is plotted.
 #' @return Invisibly the PNG path if written, else NULL.
 #' @noRd
 plot_gsea_ridgeplot <- function(gsea_result, out_dir, show_category = 20,
                                 fill = "p.adjust", x_axis_title = "ranking value",
-                                core_enrichment = TRUE) {
+                                core_enrichment = TRUE, values_for_x_axis = NULL) {
     if (!requireNamespace("ggridges", quietly = TRUE)) {
         warning("ggridges not installed; skipping GSEA ridgeplot: ", out_dir)
         return(invisible(NULL))
@@ -2644,7 +3402,11 @@ plot_gsea_ridgeplot <- function(gsea_result, out_dir, show_category = 20,
         }
         names(gs2id) <- rdf$ID
 
-        genes2values <- x@geneList  # named ranking vector (gene -> value)
+        # Ridge X-axis values: the FOLD-CHANGE vector when supplied (legacy hack,
+        # §17 D1), else the gseaResult ranking vector. This changes ONLY which
+        # per-gene value is plotted — the pathway gene sets (gs2id), the keep/NA
+        # filter, ordering (by NES) and all biology are untouched.
+        genes2values <- if (!is.null(values_for_x_axis)) values_for_x_axis else x@geneList
         gs2val <- lapply(gs2id, function(g) {
             v <- genes2values[g]; v[!is.na(v)]
         })
@@ -2669,13 +3431,21 @@ plot_gsea_ridgeplot <- function(gsea_result, out_dir, show_category = 20,
         utils::write.csv(df, file = data_file, row.names = FALSE)
 
         fill_lab <- paste0("-log10(", fill, ")")
+        # §23 K: more vertical separation per term — reduce ridge overlap (scale)
+        # and add y-axis expansion, then size the canvas dynamically so every term
+        # gets a comfortable band. Genes / FC / selection / ranking are unchanged.
+        n_cat <- max(1L, nlevels(df$category))
         p <- ggplot2::ggplot(df, ggplot2::aes(x = value, y = category, fill = fillval)) +
-            ggridges::geom_density_ridges() +
+            ggridges::geom_density_ridges(scale = 0.9, rel_min_height = 0.01) +
+            ggplot2::scale_y_discrete(expand = ggplot2::expansion(add = c(0.4, 1.2))) +
             ggplot2::scale_fill_continuous(low = "blue", high = "red", name = fill_lab) +
             ggplot2::labs(x = x_axis_title, y = NULL) +
-            ggplot2::theme_minimal()
+            ggplot2::theme_minimal(base_size = 12) +
+            ggplot2::theme(axis.text.y = ggplot2::element_text(size = 11))
 
-        ggplot2::ggsave(out_file, p, width = 8, height = 8, dpi = 150)
+        ggplot2::ggsave(out_file, p, width = 8,
+                        height = max(6, 0.6 * n_cat + 2), dpi = 150,
+                        limitsize = FALSE)
         out_file
     }, error = function(e) {
         warning("GSEA ridgeplot failed for ", out_dir, ": ", conditionMessage(e))
@@ -2945,21 +3715,221 @@ run_cluster_ora_compute <- function(clusters,
     list(allRes, allRes_simplify, enrichment_table, enrichment_table_simplify)
 }
 
+# ==============================================================================
+# ENRICHMENT SUMMARY BAR PLOTS (§18 D18.1) — the canonical static summary figure,
+# replacing the old ORA enrichplot dotplot. These pipeline builders MIRROR the
+# bdika Shiny builders (functions_shiny.R plot_ora_enrichment_bar /
+# plot_gsea_enrichment_bar) exactly: same plot type, metric, axes, colour and
+# annotation, so the static figure and the interactive figure are the SAME
+# biological visualization. The pipeline writes two static versions per unit —
+# Top 20 (by adjusted p) and Full (all significant terms) — while Shiny offers a
+# Top 20/50/All viewing control over the identical design. Kept self-contained
+# (no cross-repo sourcing); nothing here recomputes biology — every value is read
+# from the enrichment table verbatim.
+# ==============================================================================
+
+ENRICH_BAR_TOP_N        <- 20L    # top-N by adjusted p for the Top-20 static file
+ENRICH_BAR_ANNOT_SIZE   <- 4.4    # bar-end annotation text size (matches Shiny)
+ENRICH_BAR_EXPAND       <- 0.42   # axis headroom so annotations never clip
+ENRICH_BAR_TERM_CHARS   <- 60L    # y-axis term-label truncation (matches Shiny)
+ENRICH_BAR_AXIS_TEXT    <- 13L    # enlarged y-axis term labels (matches Shiny)
+
+#' DISPLAY-ONLY -log10(FDR) for the bar fill (§18 D18.1). The biological
+#' `p.adjust` is never modified — this only produces a colour value. Zero /
+#' underflowed FDRs are floored at the smallest POSITIVE adjusted p actually
+#' present (so the scale stays on the data's own range instead of exploding);
+#' non-finite input is treated as p = 1. Mirrors Shiny `.enrich_nlp`.
+#' @noRd
+.enrich_bar_nlp <- function(padj) {
+    p <- suppressWarnings(as.numeric(padj))
+    p[!is.finite(p)] <- 1
+    pos <- p[p > 0]
+    eps <- if (length(pos)) max(min(pos), 1e-300) else 1e-300
+    -log10(pmax(p, eps))
+}
+
+#' Upper colour limit for a -log10(FDR) fill: the 98th percentile, so one
+#' hyper-significant term cannot flatten the whole scale (used with
+#' `oob = scales::squish`). Mirrors Shiny `.enrich_nlp_limits`.
+#' @noRd
+.enrich_bar_nlp_limits <- function(nlp, q = 0.98) {
+    nlp <- nlp[is.finite(nlp)]
+    if (!length(nlp)) return(c(0, 1))
+    hi <- suppressWarnings(stats::quantile(nlp, q, na.rm = TRUE, names = FALSE))
+    if (!is.finite(hi) || hi <= 0) hi <- max(c(nlp, 1))
+    c(0, hi)
+}
+
+#' Truncated, unique y-axis term labels. Mirrors Shiny `.enrich_term_labels`.
+#' @noRd
+.enrich_bar_term_labels <- function(x, chars = ENRICH_BAR_TERM_CHARS) {
+    make.unique(substr(as.character(x), 1, chars))
+}
+
+#' Shared theme for the enrichment bar plots — minimal base + enlarged y-axis
+#' term labels. Mirrors Shiny `.enrich_plot_theme`.
+#' @noRd
+.enrich_bar_theme <- function(base_size = 12) {
+    ggplot2::theme_minimal(base_size = base_size) +
+        ggplot2::theme(axis.text.y = ggplot2::element_text(size = ENRICH_BAR_AXIS_TEXT),
+                       panel.grid.major.y = ggplot2::element_blank())
+}
+
+#' Pixel-free dynamic height (inches) for a bar plot of `n` terms — so the Full
+#' figure grows tall enough that every term label stays readable rather than
+#' being crushed into a fixed canvas (the pipeline analogue of Shiny's dynamic
+#' resize). ~0.22 in/term, clamped to a sane range.
+#' @noRd
+.enrich_bar_height_in <- function(n) {
+    max(4, min(80, 0.22 * max(as.integer(n), 1L) + 1.6))
+}
+
+#' ORA enrichment bar plot (§23 B) — horizontal bars, the canonical summary.
+#' X = gene Count, fill = display-only -log10(FDR), bar annotation
+#' "<count>/<term size> · FE <fold>". SELECTION is the top-N terms by adjusted
+#' p-value (most significant); the SELECTED terms are then DISPLAYED ordered by
+#' Count DESCENDING (highest Count at the top) — selection and display order are
+#' intentionally different. Operates on a `process_enrichment_table()` output
+#' (columns Description, Count, p.adjust, BgRatio/in_term, Fold_enrichment).
+#' Mirrors Shiny `plot_ora_enrichment_bar`.
+#' @noRd
+plot_ora_enrichment_bar <- function(df, max_terms = ENRICH_BAR_TOP_N) {
+    # (1) SELECT top-N by FDR ascending
+    d <- df[order(suppressWarnings(as.numeric(df$p.adjust))), , drop = FALSE]
+    d <- utils::head(d, max_terms)
+    d$.count <- suppressWarnings(as.numeric(d$Count))
+    # (2) DISPLAY order = Count descending (tie-break FDR asc, then Description)
+    d <- d[order(-d$.count, suppressWarnings(as.numeric(d$p.adjust)),
+                 as.character(d$Description)), , drop = FALSE]
+    d$.nlp   <- .enrich_bar_nlp(d$p.adjust)
+    # term size = BgRatio numerator ("29/9087" -> 29), fallback to in_term
+    tsz <- if (!is.null(d$BgRatio)) {
+        n <- suppressWarnings(as.integer(sub("/.*$", "", as.character(d$BgRatio))))
+        if (any(!is.na(n))) n else suppressWarnings(as.integer(d$in_term))
+    } else suppressWarnings(as.integer(d$in_term))
+    fe <- suppressWarnings(as.numeric(
+        if (!is.null(d$FoldEnrichment)) d$FoldEnrichment else d$Fold_enrichment))
+    d$.ann <- ifelse(
+        is.na(tsz),
+        ifelse(is.na(fe), format(d$.count),
+               sprintf("%s · FE %.1f", format(d$.count), fe)),
+        ifelse(is.na(fe), sprintf("%s/%s", format(d$.count), tsz),
+               sprintf("%s/%s · FE %.1f", format(d$.count), tsz, fe)))
+    d$.lab <- .enrich_bar_term_labels(d$Description)
+    d$.lab <- factor(d$.lab, levels = rev(d$.lab))   # most significant on top
+    lim <- .enrich_bar_nlp_limits(d$.nlp)
+    ggplot2::ggplot(d, ggplot2::aes(x = .data$.count, y = .data$.lab,
+                                    fill = .data$.nlp)) +
+        ggplot2::geom_col(width = 0.72) +
+        ggplot2::geom_text(ggplot2::aes(label = .data$.ann), hjust = -0.06,
+                           size = ENRICH_BAR_ANNOT_SIZE, colour = "grey25") +
+        ggplot2::scale_fill_viridis_c(name = "-log10(adj p)", option = "D",
+                                      limits = lim, oob = scales::squish) +
+        ggplot2::scale_x_continuous(
+            expand = ggplot2::expansion(mult = c(0, ENRICH_BAR_EXPAND))) +
+        ggplot2::labs(x = "Gene count", y = NULL) +
+        .enrich_bar_theme()
+}
+
+#' GSEA enrichment bar plot (§18 D18.1) — same bar-plot language as ORA. X =
+#' SIGNED NES (positive/negative enrichment stay distinguishable) with a zero
+#' reference line; fill = display-only -log10(FDR) on its OWN limits; annotation
+#' "<set size> genes · LE <n>". Operates on a GSEA result data.frame (columns
+#' Description/pathway, NES, setSize, p.adjust/padj, core_enrichment). Mirrors
+#' Shiny `plot_gsea_enrichment_bar`; leading-edge count read from the stored
+#' `core_enrichment` string (never recomputed).
+#' @noRd
+plot_gsea_enrichment_bar <- function(df, max_terms = ENRICH_BAR_TOP_N) {
+    padj <- if (!is.null(df$p.adjust)) df$p.adjust else df$padj
+    nes  <- suppressWarnings(as.numeric(df$NES))
+    # (1) SELECT top-N by FDR ascending (tie-break |NES| desc) — selection unchanged.
+    o <- order(suppressWarnings(as.numeric(padj)), -abs(nes))
+    d <- df[o, , drop = FALSE]
+    d <- utils::head(d, max_terms)
+    # (2) DISPLAY order = SIGNED NES descending (§D25.1) — the bar X axis is signed
+    # NES, so ordering the SELECTED pathways by signed NES gives the most natural,
+    # interpretable arrangement (highest +NES at top → lowest −NES at bottom).
+    # Selection and display order are intentionally different; selection stays FDR.
+    # NOT setSize/gene count. Tie-break: FDR asc, then Description.
+    .nesd <- suppressWarnings(as.numeric(d$NES))
+    d <- d[order(-.nesd, suppressWarnings(as.numeric(
+        if (!is.null(d$p.adjust)) d$p.adjust else d$padj)),
+        as.character(if (!is.null(d$Description)) d$Description else d$pathway)),
+        , drop = FALSE]
+    d$.nes <- suppressWarnings(as.numeric(d$NES))
+    d$.nlp <- .enrich_bar_nlp(if (!is.null(d$p.adjust)) d$p.adjust else d$padj)
+    le <- if (!is.null(d$core_enrichment)) {
+        vapply(strsplit(as.character(d$core_enrichment), "/", fixed = TRUE),
+               function(x) sum(!is.na(x) & nzchar(x)), integer(1))
+    } else rep(NA_integer_, nrow(d))
+    d$.ann <- ifelse(is.na(le) | le == 0L, sprintf("%s genes", d$setSize),
+                     sprintf("%s genes · LE %d", d$setSize, le))
+    lab_src <- if (!is.null(d$Description)) d$Description else d$pathway
+    d$.lab <- .enrich_bar_term_labels(lab_src)
+    d$.lab <- factor(d$.lab, levels = rev(d$.lab))   # highest signed NES on top
+    lim <- .enrich_bar_nlp_limits(d$.nlp)
+    ggplot2::ggplot(d, ggplot2::aes(x = .data$.nes, y = .data$.lab,
+                                    fill = .data$.nlp)) +
+        ggplot2::geom_col(width = 0.72) +
+        ggplot2::geom_vline(xintercept = 0, colour = "grey35", linewidth = 0.4) +
+        ggplot2::geom_text(ggplot2::aes(label = .data$.ann,
+                                        hjust = ifelse(.data$.nes >= 0, -0.06, 1.06)),
+                           size = ENRICH_BAR_ANNOT_SIZE, colour = "grey25") +
+        ggplot2::scale_fill_viridis_c(name = "-log10(adj p)", option = "D",
+                                      limits = lim, oob = scales::squish) +
+        ggplot2::scale_x_continuous(expand = ggplot2::expansion(
+            mult = c(ENRICH_BAR_EXPAND, ENRICH_BAR_EXPAND))) +
+        ggplot2::labs(x = "NES", y = NULL) +
+        .enrich_bar_theme()
+}
+
+#' Write the Top-20 + Full pair of enrichment bar plots for a unit (§18 D18.1).
+#' `builder` is plot_ora_enrichment_bar or plot_gsea_enrichment_bar; `df` is the
+#' already-significant table for the unit. Fail-soft: a plotting error for one
+#' file never aborts the pipeline. Writes `enrichment_bar_top20.pdf` (top 20 by
+#' adj p) and `enrichment_bar_full.pdf` (all rows in `df`). No-op on empty df.
+#' @noRd
+write_enrichment_bar_pair <- function(df, unit_dir, builder, prefix = "enrichment_bar") {
+    if (is.null(df) || nrow(df) == 0 || is.null(unit_dir)) return(invisible(NULL))
+    dir.create(unit_dir, recursive = TRUE, showWarnings = FALSE)
+    n_full <- nrow(df)
+    specs <- list(
+        list(file = paste0(prefix, "_top20.pdf"),
+             n = min(ENRICH_BAR_TOP_N, n_full)),
+        list(file = paste0(prefix, "_full.pdf"), n = n_full))
+    for (s in specs) {
+        tryCatch({
+            p <- builder(df, max_terms = s$n)
+            ggplot2::ggsave(
+                filename = file.path(unit_dir, s$file), plot = p,
+                device = "pdf", width = 11,
+                height = .enrich_bar_height_in(s$n), limitsize = FALSE)
+        }, error = function(e) {
+            message("    Enrichment bar (", s$file, ") failed: ", e$message)
+        })
+    }
+    invisible(NULL)
+}
+
 #' Write cluster ORA outputs to disk (serial, deterministic — never in a worker)
 #'
 #' The I/O half of run_cluster_ora(): writes the enrichment table, the optional
-#' simplify table, and the dotplot into the ORA unit directory, plus (optionally)
-#' the shared-gene heatmaps under `unit_dir/shared_genes/`. Split out so it can
-#' run in the serial assembly step while compute is parallelized. Filenames are
-#' short and fixed — the analysis context (db / collection / round) is in the
-#' unit directory path (see ora_unit_dir()).
+#' simplify table, and the enrichment summary bar plots into the ORA unit
+#' directory, plus (optionally) the shared-gene heatmaps under
+#' `unit_dir/shared_genes/`. Split out so it can run in the serial assembly step
+#' while compute is parallelized. Filenames are short and fixed — the analysis
+#' context (db / collection / round) is in the unit directory path (see
+#' ora_unit_dir()).
 #'
 #' @param ora_result The 4-element list returned by run_cluster_ora_compute().
 #' @param unit_dir The ORA unit directory (from ora_unit_dir()).
 #' @param type "KEGG" or "GO".
-#' @param maxCategory Max categories to show in dotplot (default 1000).
-#' @param dotplot Logical; when TRUE write the ORA dotplot PDF (the config
-#'   `plots.dotplot` toggle — controls ORA and GSEA dotplots alike). Default TRUE.
+#' @param maxCategory Legacy dotplot category cap; retained for signature
+#'   compatibility (the canonical summary is now the bar plot; §18 D18.1).
+#' @param dotplot Logical; when TRUE write the ORA enrichment bar plots
+#'   (`enrichment_bar_top20.pdf` + `enrichment_bar_full.pdf`) — the config
+#'   `plots.dotplot` toggle (controls the static enrichment summary figures for
+#'   ORA and GSEA alike). Default TRUE.
 #' @param shared_genes Logical; when TRUE also emit the legacy ORA shared-gene
 #'   heatmaps (gene<->term / term<->term) via plot_ora_shared_genes(). Additive
 #'   and fail-soft; default FALSE (callers pass the config toggle).
@@ -2989,30 +3959,33 @@ write_cluster_ora_outputs <- function(ora_result, unit_dir,
                   quote = FALSE, row.names = TRUE)
     }
 
-    # Dotplot (config-gated: plots.dotplot). ORA and GSEA share this toggle.
-    if (isTRUE(dotplot) && !is.null(allRes) && nrow(allRes@compareClusterResult) > 0) {
-        # Legacy font size heuristic
-        font.size <- if (nrow(allRes@compareClusterResult) > 50) 4 else 9
-
-        dot_plot_file <- file.path(unit_dir, "dotplot.pdf")
-        tryCatch({
-            if (requireNamespace("enrichplot", quietly = TRUE)) {
-                p <- enrichplot::dotplot(allRes, showCategory = maxCategory,
-                                         font.size = font.size)
-                ggplot2::ggsave(filename = dot_plot_file, plot = p,
-                                dpi = 600, device = "pdf",
-                                width = 20, height = 20)
-            }
-        }, error = function(e) {
-            message("    Dotplot generation failed: ", e$message)
-        })
+    # Enrichment summary bar plots (config-gated: plots.dotplot toggle). §23 B:
+    # canonical ORA summary = horizontal bar (X = Count, fill = -log10(FDR)); Top-N
+    # SELECTION by FDR, DISPLAY order by Count desc. Two static versions: Top 20 and
+    # Full. §23 A: when GO simplification produced a table, the SIMPLIFIED view gets
+    # its OWN bar pair too, computed from the simplified term set.
+    if (isTRUE(dotplot)) {
+        write_enrichment_bar_pair(enrichment_table, unit_dir,
+                                  plot_ora_enrichment_bar)
+        if (!is.null(enrichment_table_simplify) && nrow(enrichment_table_simplify) > 0)
+            write_enrichment_bar_pair(enrichment_table_simplify, unit_dir,
+                                      plot_ora_enrichment_bar,
+                                      prefix = "enrichment_bar_simplified")
     }
 
-    # Legacy ORA shared-gene heatmaps (additive, config-gated, fail-soft) →
-    # unit_dir/shared_genes/cluster_<label>_{genes_to_terms,terms_to_terms}.{csv,pdf}
+    # ORA Shared Genes (Term × Gene matrix) + Shared Terms (Dice) — §23 C/E. The
+    # FULL result set writes to `shared_genes/`; §23 A: the SIMPLIFIED term set (GO
+    # only) writes a parallel `shared_genes_simplified/` from the simplified result,
+    # so each result view has its own Shared Genes / Shared Terms.
     if (isTRUE(shared_genes) && !is.null(allRes)) {
         plot_ora_shared_genes(allRes@compareClusterResult,
                               file.path(unit_dir, "shared_genes"))
+        allRes_simplify <- if (length(ora_result) >= 2) ora_result[[2]] else NULL
+        if (!is.null(allRes_simplify) &&
+            !is.null(allRes_simplify@compareClusterResult) &&
+            nrow(allRes_simplify@compareClusterResult) > 0)
+            plot_ora_shared_genes(allRes_simplify@compareClusterResult,
+                                  file.path(unit_dir, "shared_genes_simplified"))
     }
 
     invisible(NULL)
@@ -3024,11 +3997,14 @@ write_cluster_ora_outputs <- function(ora_result, unit_dir,
 #' For each cluster in a compareClusterResult table, produces two views:
 #'   - gene<->term: a binary term x gene membership matrix (which genes drive
 #'     which enriched terms);
-#'   - term<->term: a term x term Jaccard overlap matrix (percent shared genes,
-#'     `100 * 2|A∩B| / (|A|+|B|)`).
+#'   - term<->term: a term x term Sørensen–Dice overlap matrix (percent shared
+#'     genes, `100 * 2|A∩B| / (|A|+|B|)` — Dice, NOT Jaccard; §18 D18.3).
 #' Each is rendered with `pheatmap` (PDF) and written as a CSV, reordered by the
-#' heatmap's row/column clustering. Large clusters (legacy gates: >20 terms, or
-#' >200 genes for the gene<->term view) skip the PDF and write the CSV only.
+#' heatmap's row/column clustering. The term<->term view ALWAYS renders a PDF,
+#' dynamically sized to the term count so large sets stay legible (§18 D18.3 — no
+#' silent skip). The gene<->term binary view keeps the legacy gate (>20 terms or
+#' >200 genes → CSV only), since a wide binary membership matrix has no readable
+#' static form (§18 D18.2 keeps it as a data artifact).
 #'
 #' Pure plotting — no enrichment computation, no RNG (deterministic). Call only
 #' in the serial output stage (never in a worker). Fail-soft: missing deps, too
@@ -3048,6 +4024,43 @@ write_cluster_ora_outputs <- function(ora_result, unit_dir,
 #'   — the analysis context is already in the parent path, so it is not repeated.
 #' @return Invisibly a character vector of files written (may be empty).
 #' @noRd
+#' §3: gene–gene JACCARD distance over a binary Term × Gene matrix `m` (rows =
+#' Terms, columns = Genes). Jaccard = |Terms(A) ∩ Terms(B)| / |Terms(A) ∪ Terms(B)|
+#' (shared absences ignored), distance = 1 − Jaccard. The pipeline twin of the
+#' Shiny `.enrich_gene_jaccard_dist`, identical semantics.
+#' @noRd
+.enrich_gene_jaccard_dist <- function(m) {
+    x <- (m > 0) * 1L
+    inter <- crossprod(x)
+    cs <- colSums(x)
+    uni <- outer(cs, cs, "+") - inter
+    jac <- ifelse(uni == 0, 1, inter / uni)
+    stats::as.dist(1 - jac)
+}
+#' §3/§7: DISPLAY column order of the genes in a binary Term × Gene matrix by
+#' Term-membership similarity — the pipeline twin of the Shiny
+#' `.enrich_membership_gene_order`, with IDENTICAL semantics: Jaccard distance (§3)
+#' + hierarchical clustering with COMPLETE linkage (§4). Deterministic (§10):
+#' identical-membership genes form one exact-distance-0 group, clustered as ONE
+#' representative and expanded back IN INPUT (selection) ORDER, so ties never
+#' reorder between runs. Uses ONLY the Terms present in `m`. Changes column order
+#' only — never the membership values; never drops a gene. Degenerate cases
+#' (< 3 genes, or a single membership pattern) keep the input order.
+#' @noRd
+.enrich_membership_gene_order <- function(m) {
+    genes <- colnames(m)
+    if (is.null(genes) || length(genes) < 3L) return(genes)
+    keys <- apply(m, 2, function(col) paste0(as.integer(col > 0), collapse = ""))
+    uniq <- unique(keys)
+    if (length(uniq) < 2L) return(genes)
+    rep_ix <- vapply(uniq, function(k) which(keys == k)[1], integer(1))
+    M <- m[, rep_ix, drop = FALSE]
+    D <- .enrich_gene_jaccard_dist(M)
+    ord <- tryCatch(stats::hclust(D, method = "complete")$order,
+                    error = function(e) seq_along(uniq))
+    unlist(lapply(uniq[ord], function(k) genes[keys == k]), use.names = FALSE)
+}
+
 plot_ora_shared_genes <- function(ora_df, out_dir) {
     if (is.null(ora_df) || !is.data.frame(ora_df) || nrow(ora_df) == 0 ||
         is.null(out_dir)) {
@@ -3065,13 +4078,17 @@ plot_ora_shared_genes <- function(ora_df, out_dir) {
 
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-    # Render one matrix view: heatmap PDF (small case only) + a CSV reordered by
-    # the heatmap's clustering. Always writes the CSV (falls back to the matrix's
-    # original order if the heatmap can't be drawn, e.g. a constant/degenerate
-    # matrix), so the data is preserved even when the plot is skipped. `big`
-    # suppresses the PDF (legacy behavior for large clusters). Returns the paths
-    # written. Fail-soft.
-    render_view <- function(mat, view, cl, big, small_args) {
+    # Render one matrix view: heatmap PDF + a CSV reordered by the heatmap's
+    # clustering. Always writes the CSV (falls back to the matrix's original order
+    # if the heatmap can't be drawn, e.g. a constant/degenerate matrix), so the
+    # data is preserved even when the plot is skipped. Three modes:
+    #   dynamic = TRUE  → ALWAYS render a PDF, sized to the term count so large
+    #                     matrices stay legible (§18 D18.3, term<->term view);
+    #   big     = TRUE  → suppress the PDF, CSV only (legacy large-cluster gate,
+    #                     used for the wide gene<->term binary view);
+    #   otherwise       → fixed 5x5 in PDF (small clusters).
+    # Returns the paths written. Fail-soft.
+    render_view <- function(mat, view, cl, big, small_args, dynamic = FALSE) {
         base  <- paste0("cluster_", cl, "_", view)
         pdf_f <- file.path(out_dir, paste0(base, ".pdf"))
         csv_f <- file.path(out_dir, paste0(base, ".csv"))
@@ -3080,7 +4097,26 @@ plot_ora_shared_genes <- function(ora_df, out_dir) {
         hm <- NULL
         if (!constant) {
             hm <- tryCatch({
-                if (big) {
+                if (dynamic) {
+                    # §18 D18.3: scale the canvas + cells + fonts to n terms so a
+                    # 50-term matrix is as readable as a 10-term one (no silent
+                    # skip). Geometry overrides any fixed sizing passed in
+                    # small_args; colour/breaks/legend are kept.
+                    n    <- nrow(mat)
+                    cell <- max(6, min(20, round(1000 / n)))          # pt per cell
+                    fs   <- max(3, min(8, round(cell * 0.55)))         # axis font
+                    din  <- max(5, min(60, (cell * n) / 72 + 2.5))     # inches (sq)
+                    keep <- small_args[setdiff(names(small_args),
+                        c("fontsize_row", "fontsize_col", "cellwidth", "cellheight"))]
+                    do.call(pheatmap::pheatmap, c(list(
+                        mat = mat, cluster_rows = TRUE, cluster_cols = TRUE,
+                        treeheight_col = 0, treeheight_row = 0,
+                        cellwidth = cell, cellheight = cell,
+                        fontsize_row = fs, fontsize_col = fs,
+                        width = din, height = din, border_color = NA,
+                        main = paste("Cluster", cl), filename = pdf_f, silent = TRUE
+                    ), keep))
+                } else if (big) {
                     pheatmap::pheatmap(mat, cluster_rows = TRUE, cluster_cols = TRUE,
                                        silent = TRUE, legend = isTRUE(small_args$legend))
                 } else {
@@ -3102,7 +4138,36 @@ plot_ora_shared_genes <- function(ora_df, out_dir) {
         utils::write.csv(mat[ord_r, ord_c, drop = FALSE], quote = TRUE,
                          row.names = TRUE, file = csv_f)
 
-        if (!big && !is.null(hm) && file.exists(pdf_f)) c(pdf_f, csv_f) else csv_f
+        if ((dynamic || !big) && !is.null(hm) && file.exists(pdf_f)) c(pdf_f, csv_f) else csv_f
+    }
+
+    # §23 C4: readable Term × Gene binary heatmap over a Top-N GENE subset. ALWAYS
+    # renders (no n_terms>20 / n_genes>200 suppression) with dynamic dimensions; the
+    # COMPLETE matrix is written separately to CSV. Fail-soft; returns the pdf path.
+    render_g2t_topn <- function(mat, out_pdf, cl, cluster_cols = FALSE) {
+        if (is.null(mat) || nrow(mat) < 1 || ncol(mat) < 1) return(NULL)
+        constant <- length(unique(as.vector(mat))) <= 1
+        nr <- nrow(mat); nc <- ncol(mat)
+        cellw <- max(5, min(20, round(900 / nc)))
+        cellh <- max(6, min(18, round(700 / nr)))
+        col   <- grDevices::colorRampPalette(c("white", "steelblue"))(2)
+        # §3/§7: gene COLUMNS are pre-ordered by Term-membership similarity (Jaccard)
+        # by the caller, so pheatmap must NOT re-cluster them here (cluster_cols =
+        # FALSE). Term ROWS keep their existing clustering (§12 — unchanged).
+        tryCatch(pheatmap::pheatmap(
+            mat, cluster_rows = (nr > 2 && !constant),
+            cluster_cols = isTRUE(cluster_cols) && (nc > 2 && !constant),
+            treeheight_row = 0, treeheight_col = 0, color = col, legend = FALSE,
+            border_color = NA, cellwidth = cellw, cellheight = cellh,
+            fontsize_row = max(3, min(8, round(cellh * 0.6))),
+            fontsize_col = max(3, min(7, round(cellw * 0.55))),
+            width = max(5, min(60, (cellw * nc) / 72 + 3)),
+            height = max(4, min(60, (cellh * nr) / 72 + 2.5)),
+            main = paste("Cluster", cl, "— Shared genes (top", nc, "genes)"),
+            filename = out_pdf, silent = TRUE),
+            error = function(e) message("      shared-genes top-N heatmap failed (cluster ",
+                                        cl, "): ", e$message))
+        if (file.exists(out_pdf)) out_pdf else NULL
     }
 
     written <- character(0)
@@ -3126,23 +4191,48 @@ plot_ora_shared_genes <- function(ora_df, out_dir) {
             if (n_terms <= 1 || length(all_genes) <= 1) {
                 character(0)
             } else {
-                # ---- gene <-> term: binary membership (rows = terms, cols = genes) ----
+                # ---- Shared Genes: binary Term × Gene membership (§23 C) ----
+                # rows = terms, cols = genes. The COMPLETE matrix is always written
+                # to CSV (never truncated); readable Top-20 / Top-50 GENE heatmaps
+                # are rendered with dynamic sizing (no suppression rule).
                 g2t <- matrix(0L, nrow = n_terms, ncol = length(all_genes),
-                              dimnames = list(TEMP$Description, all_genes))
+                              dimnames = list(make.unique(as.character(TEMP$Description)),
+                                              all_genes))
                 for (i in seq_len(n_terms)) g2t[i, term_genes[[i]]] <- 1L
-                g2t_color <- if (length(unique(as.vector(g2t))) == 2) {
-                    grDevices::colorRampPalette(c("white", "pink"))(2)
-                } else {
-                    grDevices::colorRampPalette(c("pink"))(2)
+                # Complete matrix CSV — the source of truth, all genes, all terms.
+                g2t_csv <- file.path(out_dir, paste0("cluster_", cl, "_genes_to_terms.csv"))
+                utils::write.csv(g2t, file = g2t_csv, quote = TRUE, row.names = TRUE)
+                # §23 C2 gene ranking: recurrence (#terms containing the gene) desc,
+                # tie-break best (min) FDR among those terms asc, then Gene ID.
+                padj_vec  <- if (is.null(TEMP$p.adjust)) rep(NA_real_, n_terms)
+                             else suppressWarnings(as.numeric(TEMP$p.adjust))
+                recurrence <- colSums(g2t)
+                best_padj  <- vapply(seq_len(ncol(g2t)), function(j) {
+                    rows <- which(g2t[, j] == 1L)
+                    vals <- padj_vec[rows]; vals <- vals[!is.na(vals)]
+                    if (!length(vals)) NA_real_ else min(vals)
+                }, numeric(1))
+                gord <- order(-recurrence, best_padj, colnames(g2t))
+                genes_ranked <- colnames(g2t)[gord]
+                f_g2t <- g2t_csv
+                for (topn in c(20L, 50L)) {
+                    # SELECTION (which genes) = recurrence/best-FDR/Gene-ID — unchanged.
+                    sel <- genes_ranked[seq_len(min(topn, length(genes_ranked)))]
+                    # §3/§7 DISPLAY order = Term-membership similarity (Jaccard) over
+                    # the SHOWN Term × Gene submatrix. Columns are pre-ordered, so
+                    # render_g2t_topn keeps cluster_cols = FALSE (no membership
+                    # re-clustering by pheatmap). Matrix VALUES are unchanged.
+                    sub_mat <- g2t[, sel, drop = FALSE]
+                    sub_mat <- sub_mat[, .enrich_membership_gene_order(sub_mat), drop = FALSE]
+                    pdf_topn <- file.path(out_dir,
+                        paste0("cluster_", cl, "_shared_genes_top", topn, ".pdf"))
+                    fp <- render_g2t_topn(sub_mat, pdf_topn, cl)
+                    if (!is.null(fp)) f_g2t <- c(f_g2t, fp)
                 }
-                f_g2t <- render_view(
-                    g2t, "genes_to_terms", cl,
-                    big = n_terms > 20 || length(all_genes) > 200,
-                    small_args = list(color = g2t_color, legend = FALSE,
-                                      cellheight = 10, fontsize_row = 5, fontsize_col = 1)
-                )
 
-                # ---- term <-> term: Jaccard overlap percent (0-100) ----
+                # ---- term <-> term: Sørensen–Dice overlap percent (0-100) ----
+                # Dice = 100 * 2|A∩B| / (|A|+|B|) (NOT Jaccard). Standardized as
+                # the single shared-terms metric everywhere (§18 D18.3).
                 t2t <- matrix(0, nrow = n_terms, ncol = n_terms,
                               dimnames = list(TEMP$Description, TEMP$Description))
                 for (i in seq_len(n_terms)) for (j in seq_len(n_terms)) {
@@ -3151,12 +4241,14 @@ plot_ora_shared_genes <- function(ora_df, out_dir) {
                 }
                 t2t_color <- grDevices::colorRampPalette(
                     rev(RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")))(100)
+                # §18 D18.3: term<->term always renders a PDF, dynamically sized to
+                # n_terms (no silent skip for large clusters like the 54-term unit).
                 f_t2t <- render_view(
                     t2t, "terms_to_terms", cl,
-                    big = n_terms > 20,
+                    big = FALSE, dynamic = TRUE,
                     small_args = list(color = t2t_color,
                                       breaks = seq(0, 100, length.out = 101),  # corrected range (see @note)
-                                      legend = TRUE, fontsize_row = 5, fontsize_col = 5)
+                                      legend = TRUE)
                 )
 
                 c(f_g2t, f_t2t)

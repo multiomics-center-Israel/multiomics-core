@@ -160,6 +160,23 @@ test_that("the mummichog-2 native model shape is read too", {
   expect_identical(m$format, "mummichog2")
   expect_setequal(m$pathways[["Glycolysis"]], c("C00031", "C00095"))
   expect_identical(unname(m$compound_names[["C00031"]]), "D-Glucose")
+  expect_identical(m$pathway_ids, c(Glycolysis = "x1"))
+})
+
+test_that("the model keeps each pathway's id, keyed by its name", {
+  dir <- withr::local_tempdir()
+  m   <- read_mummichog_model_pathways(write_model_json(dir))
+  expect_identical(m$pathway_ids,
+                   c("Purine metabolism" = "p1", "Fatty acid degradation" = "p2",
+                     "Glycolysis" = "p3"))
+})
+
+test_that("a pathway name shared by several ids maps to no id", {
+  ids <- .mmc_pathway_id_index(
+    c("Glycolysis", "TCA", "Glycolysis", "Urea"),
+    list(list(id = "m1"), list(id = "m2"), list(id = "m3"), list()))
+  expect_identical(ids, c(Glycolysis = NA_character_, TCA = "m2",
+                          Urea = NA_character_))
 })
 
 test_that("a malformed model fails loudly rather than degrading silently", {
