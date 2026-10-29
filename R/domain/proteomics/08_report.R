@@ -409,12 +409,23 @@ methods_p_value_label <- function(method, p_adjust_none, across_proteins = TRUE)
 #'
 #' @param de_cfg The \code{de} config block.
 #' @param method The method \code{mod_proteomics_de()} reported.
+#' @param batch_col The batch column modelled as a covariate, or NULL when batch
+#'   is not in the design. Only the pooled limma fit can carry it; validation
+#'   refuses the other methods.
 #' @return A character scalar.
-methods_de_phrase <- function(de_cfg, method) {
+methods_de_phrase <- function(de_cfg, method, batch_col = NULL) {
     m <- tolower(as.character(method))
     if (identical(m, "limma")) {
         s <- paste0("Moderated t-tests were fitted with the *limma* package, using empirical ",
                     "Bayes shrinkage of the per-protein variance estimates.")
+        # run_limma_proteomics() stops rather than dropping the term, so a
+        # configured covariate is one that was fitted.
+        if (!is.null(batch_col) && nzchar(batch_col)) {
+            s <- paste0(s, sprintf(paste0(
+                " The design included %s as an additive batch covariate and was fitted on ",
+                "uncorrected values, so contrasts between conditions were estimated ",
+                "adjusting for batch."), batch_col))
+        }
         bc <- de_cfg$block_col
         if (!is.null(bc) && nzchar(bc)) {
             # run_limma_proteomics() refits without blocking when the consensus is
@@ -452,6 +463,147 @@ methods_de_phrase <- function(de_cfg, method) {
     sprintf("Differential abundance was assessed using the %s method.", method)
 }
 
+#' What the written pooled-ranking tables record about their run
+#'
+#' Read from the first pooled_ranking_<contrast>.csv, so the report and the
+#' Methods describe the run that wrote the files rather than the current config.
+#'
+#' @param pooled_dir Directory written by run_proteomics_pooled_enrichment(), or NULL.
+#' @return list(m, collapsed): \code{m} the number of draws and \code{collapsed}
+#'   TRUE/FALSE for the protein-to-gene collapse, each NA when the table does
+#'   not record it; NULL when no pooled ranking was written.
+pooled_ranking_run_info <- function(pooled_dir) {
+    if (is.null(pooled_dir) || !dir.exists(pooled_dir)) return(NULL)
+    rank_files <- list.files(pooled_dir, pattern = "^pooled_ranking_.*\\.csv$", full.names = TRUE)
+    if (length(rank_files) == 0) return(NULL)
+    row <- tryCatch(utils::read.csv(rank_files[1], nrows = 1), error = function(e) NULL)
+    m <- suppressWarnings(as.numeric(row$m))
+    collapsed <- as.logical(row$collapsed_to_gene)
+    list(m         = if (length(m) == 1 && is.finite(m)) m else NA_real_,
+         collapsed = if (length(collapsed) == 1) collapsed else NA)
+}
+
+#' Sentence on the protein-to-gene collapse of the pooled ranking
+#'
+#' @param collapsed TRUE, FALSE or NA (not recorded) from pooled_ranking_run_info().
+#' @return A sentence, or "" when the tables do not record it.
+pooled_ranking_collapse_text <- function(collapsed) {
+    if (isTRUE(collapsed)) {
+        paste0("Proteins were collapsed to one per gene, preferring proteins with a finite ",
+               "z-score, then the most observed values, then the highest average expression.")
+    } else if (isFALSE(collapsed)) {
+        paste0("Proteins were not collapsed to genes (no gene annotation was used), so the ",
+               "ranking has one row per protein.")
+    } else ""
+}
+
+#' Methods sentences for the pooled-ranking enrichment
+#'
+#' Gated on the artefacts as well as \code{pathway.pooled_ranking.enabled}
+#' (checked by the caller): the module skips itself (pathway disabled, a DE
+#' method other than limma) and then removes any earlier output, so only the
+#' files show it ran. The number of draws, the collapse and the cameraPR
+#' correlation are read from the written tables for the same reason.
+#'
+#' @param pooled_dir Directory written by run_proteomics_pooled_enrichment(), or NULL.
+#' @param imp_cfg The \code{imputation} config block.
+#' @return A character scalar, or NULL when no pooled ranking was written.
+methods_pooled_ranking_text <- function(pooled_dir, imp_cfg) {
+    info <- pooled_ranking_run_info(pooled_dir)
+    if (is.null(info)) return(NULL)
+    m <- info$m
+    m_known <- !is.na(m)
+    collapse_txt <- pooled_ranking_collapse_text(info$collapsed)
+    if (m_known && m == 1) {
+        txt <- paste0(
+            "As a separate analysis, proteins were ranked by the z-score of the limma ",
+            "moderated t-statistic from the single imputation draw. With one draw there is ",
+            "no between-draw variance to combine.")
+        txt <- trimws(paste(txt, collapse_txt))
+        return(methods_pooled_enrichment_sentences(pooled_dir, txt))
+    }
+    m_txt <- if (m_known) sprintf("each of the %d", as.integer(m)) else "each"
+
+    txt <- sprintf(paste0(
+        "As a separate analysis, limma was fitted to %s imputation draws; per protein, ",
+        "the coefficients were averaged and the variances combined with Rubin's rules ",
+        "(within-draw moderated variance plus (1 + 1/m) times the between-draw variance), ",
+        "with Barnard-Rubin degrees of freedom (Rubin 1987; Barnard and Rubin 1999), ",
+        "following the approach of Baker et al. (2024). The complete-data degrees of ",
+        "freedom were the mean of the per-draw moderated degrees of freedom. The pooled ",
+        "t-statistics were converted to z-scores."), m_txt)
+    txt <- trimws(paste(txt, collapse_txt))
+    txt <- paste(txt, if (methods_imputation_is_deterministic(imp_cfg)) {
+        paste0("The imputation is deterministic, so the draws are identical and the ",
+               "statistic reduces to the single-fit moderated t-statistic.")
+    } else {
+        paste0("The between-draw term reflects variability of the random imputation draws ",
+               "only; it does not account for uncertainty in the imputation model.")
+    })
+
+    methods_pooled_enrichment_sentences(pooled_dir, txt)
+}
+
+#' Whether the pooled cameraPR tables were written by the rank-based test
+#'
+#' Read from the written tables (the \code{use_ranks} column), like the
+#' inter-gene correlation, so the text describes the run that wrote them.
+#'
+#' @param pooled_dir Directory of the pooled-ranking enrichment.
+#' @return TRUE, FALSE, or NA when no table records it.
+pooled_camerapr_use_ranks <- function(pooled_dir) {
+    cam_files <- list.files(pooled_dir, pattern = "^pathway_.*_camerapr\\.csv$", full.names = TRUE)
+    if (length(cam_files) == 0) return(NA)
+    v <- tryCatch(as.logical(utils::read.csv(cam_files[1], nrows = 1)$use_ranks),
+                  error = function(e) NULL)
+    if (length(v) == 1 && !is.na(v)) v else NA
+}
+
+#' Reader-facing sentence on what cameraPR compares
+#'
+#' @param use_ranks TRUE, FALSE or NA, from pooled_camerapr_use_ranks().
+#' @return One sentence.
+camerapr_test_description <- function(use_ranks) {
+    if (isTRUE(use_ranks)) {
+        paste0("cameraPR, in its rank-based version (use.ranks = TRUE), compares the ranks of ",
+               "a set's members in the ranking with those of the other genes, with a test whose ",
+               "variance allows for an assumed inter-gene correlation.")
+    } else if (isFALSE(use_ranks)) {
+        paste0("cameraPR compares the mean ranking statistic of a set's members with that of ",
+               "the other genes, with a two-sample test whose variance allows for an assumed ",
+               "inter-gene correlation.")
+    } else {
+        paste0("cameraPR compares a set's members with the other genes in the ranking, with a ",
+               "test whose variance allows for an assumed inter-gene correlation; the tables do ",
+               "not record whether its rank-based version was used.")
+    }
+}
+
+#' Append the fgsea and cameraPR sentences for the pooled ranking
+#'
+#' @param pooled_dir Directory of the pooled-ranking enrichment.
+#' @param txt Text describing the ranking.
+#' @return \code{txt} with one sentence per method whose tables exist.
+methods_pooled_enrichment_sentences <- function(pooled_dir, txt) {
+    has_fgsea <- length(list.files(pooled_dir, pattern = "^pathway_.*_fgsea\\.csv$")) > 0
+    cam_files <- list.files(pooled_dir, pattern = "^pathway_.*_camerapr\\.csv$", full.names = TRUE)
+    if (has_fgsea) {
+        txt <- paste(txt, "Gene-set enrichment analysis (fgsea) was run on this ranking.")
+    }
+    if (length(cam_files) > 0) {
+        rho <- tryCatch(utils::read.csv(cam_files[1], nrows = 1)$inter_gene_cor,
+                        error = function(e) NULL)
+        use_ranks <- pooled_camerapr_use_ranks(pooled_dir)
+        txt <- paste(txt, sprintf(paste0(
+            "The cameraPR test from limma was run%s on the same ranking and the same filtered gene sets%s."),
+            if (isTRUE(use_ranks)) " in its rank-based version (use.ranks = TRUE)" else "",
+            if (length(rho) == 1 && is.finite(rho)) {
+                sprintf(", with an assumed inter-gene correlation of %s", format(rho))
+            } else ""))
+    }
+    txt
+}
+
 #' Reader-facing Methods blocks for the proteomics report
 #'
 #' Builds every Methods paragraph from the configuration and from the DE mode
@@ -473,6 +625,9 @@ methods_de_phrase <- function(de_cfg, method) {
 #' @param hier_file Path to the hierarchical clustering heatmap, or NULL. The
 #'   clustering sentence needs this as well as the enable flags, for the same
 #'   reason.
+#' @param pooled_dir Directory of the pooled-ranking enrichment
+#'   (proteomics_pooled_enrichment_dir()), or NULL. Its sentences are emitted
+#'   only when its tables exist.
 #' @return Named list of character scalars: \code{data_processing},
 #'   \code{missing_values}, \code{differential}, \code{consensus},
 #'   \code{quality_control}, \code{downstream}, \code{software},
@@ -480,7 +635,8 @@ methods_de_phrase <- function(de_cfg, method) {
 #'   apply are NULL.
 build_proteomics_methods_text <- function(config, de_method = "limma",
                                           n_included = NA_integer_, run_dir = NULL,
-                                          pca_cc_file = NULL, hier_file = NULL) {
+                                          pca_cc_file = NULL, hier_file = NULL,
+                                          pooled_dir = NULL) {
     cfg <- config$modes$proteomics %||% list()
     de_cfg <- cfg$de %||% list()
     imp_cfg <- cfg$imputation %||% list()
@@ -538,30 +694,59 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
         "No between-sample normalization was applied."
     })
 
-    bc_m <- tolower(as.character(cfg$batch_correction$method %||% "none"))
-    # get_proteomics_batch_config() resolves enabled as bc$enabled, defaulting to
-    # method != "none". An explicit enabled: false with a method set therefore
-    # runs no correction at all, so the method alone cannot gate this sentence.
-    bc_default_on <- !identical(bc_m, "none")
-    bc_on <- isTRUE(cfg$batch_correction$enabled %||% bc_default_on)
-    if (bc_on && !identical(bc_m, "none")) {
+    # Read through the same resolver as correct_batch_proteomics() and
+    # mod_proteomics_de(). It resolves enabled as bc$enabled, defaulting to
+    # method != "none", so an explicit enabled: false with a method set runs no
+    # correction and the method alone cannot gate this sentence.
+    bc <- get_proteomics_batch_config(cfg)
+    bc_m <- tolower(as.character(bc$method))
+    # mod_proteomics_de() returns precomputed tables before any model or
+    # imputation, so no DE-side batch handling may be described there.
+    batch_in_model <- identical(bc$de_mode, "covariate") && !is_precomputed
+    # make_imputations_proteomics() returns the matrix with its NAs when the
+    # method is "none", so "re-imputed" is true only for the other methods.
+    reimputed <- if (identical(imp_method, "none")) "" else ", re-imputed"
+    if (bc$corrects) {
         bc_name <- if (identical(bc_m, "combat")) "ComBat" else
                    if (identical(bc_m, "probatch")) "proBatch" else bc_m
+        # resolve_batch_variable() stops without a batch column, so a correction
+        # that ran always had one; the guard only keeps partial configs readable.
+        bc_col <- if (!is.null(bc$batch_col) && nzchar(bc$batch_col)) {
+            sprintf(" for the batch column %s", bc$batch_col)
+        } else ""
         dp <- paste(dp, sprintf(paste0(
-            "Batch effects were corrected with %s. The correction was estimated and applied on ",
-            "the single-imputed complete matrix."), bc_name))
-        # mod_proteomics_de() returns the loaded tables before
-        # make_imputations_proteomics() is reached, so in precomputed mode
-        # nothing is re-imputed for the model -- and saying otherwise would
-        # contradict the missing-values paragraph below.
-        dp <- paste(dp, if (is_precomputed) {
-            paste("The original missingness pattern was then restored to the filtered matrix.",
-                  "Quality control and clustering use the corrected complete matrix.")
-        } else {
-            paste("The original missingness pattern was then restored to the filtered matrix,",
-                  "which is re-imputed for differential analysis, while quality-control and",
-                  "clustering use the corrected complete matrix.")
-        })
+            "Batch effects were corrected with %s%s. The correction was estimated and applied on ",
+            "the single-imputed complete matrix, and quality control and clustering use the ",
+            "corrected values; measured values are not altered."), bc_name, bc_col))
+        if (identical(bc_m, "probatch")) {
+            dp <- paste(dp, paste0(
+                "proBatch median-centering does not model the biological condition, so ",
+                "where conditions are unevenly spread over batches it also removes part of ",
+                "the condition effect from the corrected values."))
+        }
+        # The exports take their model-input columns from de_res$imputations
+        # (05_mod_exports.R), so they follow the DE input, not the QC matrix.
+        if (!is_precomputed) {
+            dp <- paste(dp, switch(bc$de_mode,
+                covariate = paste0(
+                    "The differential-abundance model was not fitted on the corrected ",
+                    "values: it used the uncorrected filtered matrix", reimputed,
+                    ", with batch as a covariate."),
+                none = paste0(
+                    "The differential-abundance model used the uncorrected filtered matrix",
+                    reimputed, ", without a batch term."),
+                legacy_corrected = paste0(
+                    "In legacy mode the differential-abundance model was fitted on the ",
+                    "corrected values with the measured missingness restored", reimputed,
+                    ". This treats the variation removed by the correction as if it cost no ",
+                    "degrees of freedom, so p-values may be anti-conservative.")))
+        }
+    } else if (batch_in_model) {
+        # Batch modelled without a QC correction: say so, rather than leave the
+        # reader to infer it from silence.
+        dp <- paste(dp, paste0(
+            "No batch correction was applied to the expression values; batch was ",
+            "accounted for in the differential-abundance model only."))
     }
 
     # ---- Missing values -----------------------------------------------------
@@ -594,7 +779,8 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                            "least %s."), p_cut, fc_cut))
     } else {
         m <- tolower(as.character(de_method))
-        de_txt <- methods_de_phrase(de_cfg, de_method)
+        de_txt <- methods_de_phrase(de_cfg, de_method,
+                                    batch_col = if (batch_in_model) bc$batch_col)
         # fdrtool is implemented in run_limma_proteomics() and
         # run_limma_percontrast_proteomics() only; the flag being TRUE does not
         # mean a t-test or ANOVA run applied it.
@@ -760,6 +946,9 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                                 paste(cfg$pathway$databases %||% c("GO", "KEGG", "Reactome"),
                                       collapse = ", ")))
     }
+    pooled_on <- isTRUE(((cfg$pathway %||% list())$pooled_ranking %||% list())$enabled)
+    pooled_txt <- if (pooled_on) methods_pooled_ranking_text(pooled_dir, imp_cfg)
+    if (!is.null(pooled_txt)) down <- c(down, pooled_txt)
     if (isTRUE(cfg$ppi$enabled)) {
         down <- c(down, paste0("Protein-protein interaction networks were constructed using ",
                                "the STRING database."))

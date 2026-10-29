@@ -11,9 +11,13 @@
 #'   pipeline call sites; the config snapshot is serialized from \code{config}
 #'   rather than copied from this path, so that it matches what the
 #'   \code{execution_info_files} target writes.
+#' @param pre_info The \code{info} list of \code{preprocess_rna()}'s result,
+#'   passed to the template as \code{params$rna_info} so the report describes
+#'   the gene filter that ran rather than the one the config asked for. NULL
+#'   renders the filtering text as not recorded.
 #' @return Path to the rendered HTML file (character, format = "file")
 #' @export
-render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
+render_rnaseq_report <- function(run_dir, config, config_file = NULL, pre_info = NULL) {
 
     # Locate the canonical Rmd template shipped with multiomics-core.
     template_path <- system.file("report_template.Rmd",
@@ -76,6 +80,7 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
             output_file = out_html,
             output_dir  = parent_dir,
             quiet       = TRUE,
+            params      = list(rna_info = pre_info),
             envir       = new.env(parent = globalenv())
         )
     }, error = function(e) {
@@ -89,6 +94,7 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
         output_file = out_html,
         output_dir  = run_dir,
         quiet       = TRUE,
+        params      = list(rna_info = pre_info),
         envir       = new.env(parent = globalenv())
     )
 

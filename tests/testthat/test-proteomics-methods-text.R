@@ -111,17 +111,21 @@ test_that("per-group thresholds are called configured, not applied", {
 
 test_that("batch correction describes the real matrix contract", {
     # 04b_batch_correction.R estimates and applies the correction on the
-    # single-imputed complete matrix, restores the missingness mask to
-    # expr_filt (which DE then re-imputes), and leaves QC/clustering on the
-    # corrected complete matrix. "Batch correction after imputation" alone
-    # would collapse all of that into something inaccurate.
-    txt <- blocks_for(batch_correction = list(method = "combat"))$data_processing
+    # single-imputed complete matrix and writes it to the QC matrices only;
+    # expr_filt, the DE input, stays measured. With a correction configured the
+    # DE mode defaults to "covariate".
+    txt <- blocks_for(batch_correction = list(method = "combat",
+                                              batch_col = "Plate"))$data_processing
     expect_match(txt, "ComBat", fixed = TRUE)
-    expect_match(txt, "single-imputed complete matrix", fixed = TRUE)
-    expect_match(txt, "original missingness pattern was then restored", fixed = TRUE)
-    expect_match(txt, "re-imputed for differential analysis", fixed = TRUE)
-    expect_match(txt, "quality-control and clustering use the corrected complete matrix",
+    expect_match(txt, "Batch effects were corrected with ComBat for the batch column Plate.",
                  fixed = TRUE)
+    expect_match(txt, "single-imputed complete matrix", fixed = TRUE)
+    expect_match(txt, "quality control and clustering use the corrected values", fixed = TRUE)
+    expect_match(txt, "measured values are not altered", fixed = TRUE)
+    expect_match(txt, "it used the uncorrected filtered matrix, re-imputed, with batch as a covariate",
+                 fixed = TRUE)
+    # The retired contract: nothing is restored into expr_filt any more.
+    expect_false(grepl("restored", txt, fixed = TRUE))
 
     expect_false(grepl("Batch effects", blocks_for()$data_processing, fixed = TRUE))
 })
@@ -161,18 +165,19 @@ test_that("the legacy log flag is honoured only on the preprocessed path", {
                  "transformed to the log2 scale", fixed = TRUE)
 })
 
-test_that("batch correction does not claim DE re-imputation in precomputed mode", {
+test_that("batch correction describes no DE input in precomputed mode", {
     # mod_proteomics_de() returns the loaded tables before
-    # make_imputations_proteomics() is reached, so nothing is re-imputed for the
-    # model -- and the missing-values paragraph says exactly that.
+    # make_imputations_proteomics() is reached, so nothing is re-imputed or
+    # fitted -- and the missing-values paragraph says exactly that.
     bc <- list(method = "combat")
     internal <- blocks_for(batch_correction = bc)$data_processing
-    expect_match(internal, "re-imputed for differential analysis", fixed = TRUE)
+    expect_match(internal, "re-imputed", fixed = TRUE)
 
     pre <- blocks_for(batch_correction = bc, de_method = "precomputed")$data_processing
     expect_match(pre, "Batch effects were corrected with ComBat", fixed = TRUE)
-    expect_match(pre, "restored to the filtered matrix", fixed = TRUE)
-    expect_false(grepl("re-imputed for differential analysis", pre, fixed = TRUE))
+    expect_match(pre, "measured values are not altered", fixed = TRUE)
+    expect_false(grepl("re-imputed", pre, fixed = TRUE))
+    expect_false(grepl("differential-abundance model", pre, fixed = TRUE))
 })
 
 test_that("batch correction needs the resolved enabled state, not just a method", {
@@ -189,6 +194,79 @@ test_that("batch correction needs the resolved enabled state, not just a method"
         "corrected with proBatch", fixed = TRUE)
     expect_false(grepl("Batch effects", blocks_for(batch_correction = list(
         method = "none", enabled = TRUE))$data_processing, fixed = TRUE))
+})
+
+test_that("covariate mode says the model saw uncorrected data with batch in it", {
+    # mod_proteomics_de() hands limma expr_filt (never corrected) in this mode,
+    # and run_limma_proteomics() adds batch to the design or stops.
+    bc <- list(method = "combat", batch_col = "Plate", de_mode = "covariate")
+    b <- blocks_for(batch_correction = bc)
+    expect_match(b$data_processing, "Batch effects were corrected with ComBat", fixed = TRUE)
+    expect_match(b$data_processing, "was not fitted on the corrected values", fixed = TRUE)
+    # The exports' model-input columns follow the DE input, not the QC matrix,
+    # so "exported" must not be claimed for the corrected values.
+    expect_false(grepl("exported", b$data_processing, fixed = TRUE))
+    expect_match(b$differential, "included Plate as an additive batch covariate", fixed = TRUE)
+
+    # The default with a correction configured is the same mode.
+    dflt <- blocks_for(batch_correction = list(method = "combat", batch_col = "Plate"))
+    expect_identical(dflt$data_processing, b$data_processing)
+    expect_identical(dflt$differential, b$differential)
+
+    # Batch can be modelled without producing a corrected matrix at all.
+    none <- blocks_for(batch_correction = list(method = "none", batch_col = "Plate",
+                                               de_mode = "covariate"))
+    expect_false(grepl("Batch effects", none$data_processing, fixed = TRUE))
+    expect_match(none$data_processing,
+                 "No batch correction was applied to the expression values", fixed = TRUE)
+    expect_match(none$differential,
+                 "included Plate as an additive batch covariate and was fitted on uncorrected values",
+                 fixed = TRUE)
+    # Nothing about batch at all when neither decision involves it.
+    expect_false(grepl("batch", blocks_for()$data_processing, ignore.case = TRUE))
+
+    # make_imputations_proteomics() leaves NAs in place under method "none", so
+    # no mode may claim the model input was re-imputed.
+    no_imp <- list(method = "none")
+    for (m in c("covariate", "none", "legacy_corrected")) {
+        txt <- blocks_for(batch_correction = list(method = "combat", de_mode = m),
+                          imputation = no_imp)$data_processing
+        expect_false(grepl("re-imputed", txt, fixed = TRUE), info = m)
+    }
+    expect_match(blocks_for(batch_correction = bc, imputation = no_imp)$data_processing,
+                 "uncorrected filtered matrix, with batch as a covariate", fixed = TRUE)
+
+    # Without a batch term in the model, no covariate is mentioned...
+    expect_false(grepl("covariate", blocks_for(
+        batch_correction = list(method = "combat", batch_col = "Plate",
+                                de_mode = "none"))$differential, fixed = TRUE))
+    # ...nor in precomputed mode, where no model is fitted.
+    expect_false(grepl("covariate", blocks_for(batch_correction = bc,
+                                               de_method = "precomputed")$differential,
+                       fixed = TRUE))
+})
+
+test_that("de_mode none and legacy_corrected say what the model was fitted on", {
+    none <- blocks_for(batch_correction = list(method = "combat",
+                                               de_mode = "none"))$data_processing
+    expect_match(none, "used the uncorrected filtered matrix, re-imputed, without a batch term",
+                 fixed = TRUE)
+
+    legacy <- blocks_for(batch_correction = list(method = "combat",
+                                                 de_mode = "legacy_corrected"))$data_processing
+    expect_match(legacy, "In legacy mode the differential-abundance model was fitted on the corrected values",
+                 fixed = TRUE)
+    expect_match(legacy, "p-values may be anti-conservative", fixed = TRUE)
+    expect_false(grepl("was not fitted on the corrected values", legacy, fixed = TRUE))
+})
+
+test_that("proBatch is described as not modelling the condition", {
+    pb <- blocks_for(batch_correction = list(method = "probatch"))$data_processing
+    expect_match(pb, "proBatch median-centering does not model the biological condition",
+                 fixed = TRUE)
+    expect_false(grepl("does not model the biological condition",
+                       blocks_for(batch_correction = list(method = "combat"))$data_processing,
+                       fixed = TRUE))
 })
 
 
@@ -1106,4 +1184,178 @@ test_that("the complete-case claim needs the PCA section, not just the file", {
     expect_match(chunk, "PCA_robust.png", fixed = TRUE)
     # show_pca_section is defined well before this chunk, so the reference resolves.
     expect_lt(grep("^show_pca_section <-", lines)[1], start)
+})
+
+
+# =============================================================================
+# Pooled-ranking enrichment
+# =============================================================================
+
+# A pooled_ranking directory as run_proteomics_pooled_enrichment() leaves it,
+# with only the files named. Values are synthetic.
+# collapsed = NULL writes a table without the collapsed_to_gene column, as
+# tables written before that column existed.
+# use_ranks = NULL writes a cameraPR table without the use_ranks column.
+pooled_dir_with <- function(dir, m = 5, fgsea = TRUE, camerapr = TRUE, collapsed = TRUE,
+                            use_ranks = FALSE) {
+    d <- file.path(dir, "Enrichment", "pooled_ranking")
+    dir.create(d, recursive = TRUE)
+    tbl <- data.frame(FeatureID = "G1", m = m, z_pooled = 1.2)
+    if (!is.null(collapsed)) tbl$collapsed_to_gene <- collapsed
+    utils::write.csv(tbl, file.path(d, "pooled_ranking_A_vs_B.csv"), row.names = FALSE)
+    if (fgsea) utils::write.csv(data.frame(pathway = "S1", NES = 1.1),
+                                file.path(d, "pathway_A_vs_B_DB_fgsea.csv"), row.names = FALSE)
+    if (camerapr) {
+        cam <- data.frame(pathway = "S1", PValue = 0.2, inter_gene_cor = 0.01)
+        if (!is.null(use_ranks)) cam$use_ranks <- use_ranks
+        utils::write.csv(cam, file.path(d, "pathway_A_vs_B_DB_camerapr.csv"), row.names = FALSE)
+    }
+    d
+}
+
+pooled_downstream <- function(pooled_dir, ..., enabled = TRUE) {
+    cfg <- cfg_for(...)
+    cfg$modes$proteomics$pathway$pooled_ranking$enabled <- enabled
+    build_proteomics_methods_text(cfg, de_method = "limma",
+                                  pooled_dir = pooled_dir)$downstream
+}
+
+test_that("the pooled-ranking sentences need both its files and the flag", {
+    tmp <- withr::local_tempdir()
+    # Flag on, nothing written: no claim.
+    txt <- pooled_downstream(file.path(tmp, "absent"))
+    expect_false(grepl("Rubin", txt %||% "", fixed = TRUE))
+
+    d <- pooled_dir_with(tmp)
+    # Files from an earlier run, flag now off: no claim.
+    off <- pooled_downstream(d, enabled = FALSE)
+    expect_false(grepl("Rubin", off %||% "", fixed = TRUE))
+
+    txt <- pooled_downstream(d)
+    expect_match(txt, "Rubin's rules", fixed = TRUE)
+    expect_match(txt, "Barnard-Rubin degrees of freedom", fixed = TRUE)
+    expect_match(txt, "each of the 5 imputation draws", fixed = TRUE)
+    expect_match(txt, "(fgsea)", fixed = TRUE)
+    expect_match(txt, "inter-gene correlation of 0.01", fixed = TRUE)
+})
+
+test_that("the cameraPR text follows the use_ranks the tables record", {
+    by_rank <- pooled_dir_with(withr::local_tempdir(), use_ranks = TRUE)
+    txt <- pooled_downstream(by_rank)
+    expect_match(txt, "rank-based version (use.ranks = TRUE)", fixed = TRUE)
+    expect_equal(pooled_camerapr_use_ranks(by_rank), TRUE)
+    expect_match(camerapr_test_description(TRUE), "compares the ranks", fixed = TRUE)
+    expect_false(grepl("mean ranking statistic", camerapr_test_description(TRUE), fixed = TRUE))
+
+    by_value <- pooled_dir_with(withr::local_tempdir(), use_ranks = FALSE)
+    txt <- pooled_downstream(by_value)
+    expect_false(grepl("rank-based", txt, fixed = TRUE))
+    expect_match(camerapr_test_description(FALSE), "mean ranking statistic", fixed = TRUE)
+
+    unknown <- pooled_dir_with(withr::local_tempdir(), use_ranks = NULL)
+    expect_true(is.na(pooled_camerapr_use_ranks(unknown)))
+    expect_false(grepl("rank-based version \\(", pooled_downstream(unknown)))
+    expect_match(camerapr_test_description(NA), "do not record", fixed = TRUE)
+})
+
+test_that("each method is named only when its tables exist", {
+    tmp <- withr::local_tempdir()
+    txt <- pooled_downstream(pooled_dir_with(tmp, fgsea = FALSE, camerapr = FALSE))
+    expect_match(txt, "Rubin's rules", fixed = TRUE)
+    expect_false(grepl("fgsea", txt, fixed = TRUE))
+    expect_false(grepl("cameraPR", txt, fixed = TRUE))
+})
+
+test_that("the pooled-ranking text makes no inference or comparability claim", {
+    tmp <- withr::local_tempdir()
+    txt <- pooled_downstream(pooled_dir_with(tmp))
+    expect_false(grepl("multiple[- ]imputation inference", txt, ignore.case = TRUE))
+    expect_false(grepl("accounts? for imputation uncertainty", txt, ignore.case = TRUE))
+    expect_match(txt, "does not account for uncertainty in the imputation model", fixed = TRUE)
+    expect_false(grepl("comparab", txt, ignore.case = TRUE))
+})
+
+test_that("a deterministic imputation or one draw is described as such", {
+    tmp <- withr::local_tempdir()
+    d <- pooled_dir_with(tmp)
+    det <- pooled_downstream(d, imputation = list(method = "minval"))
+    expect_match(det, "draws are identical", fixed = TRUE)
+    expect_false(grepl("between-draw term reflects", det, fixed = TRUE))
+
+    tmp1 <- withr::local_tempdir()
+    one <- pooled_downstream(pooled_dir_with(tmp1, m = 1))
+    expect_match(one, "single imputation draw", fixed = TRUE)
+    expect_false(grepl("Barnard-Rubin", one, fixed = TRUE))
+    expect_false(grepl("Rubin's rules", one, fixed = TRUE))
+    expect_match(one, "collapsed to one per gene", fixed = TRUE)
+})
+
+test_that("the collapse is described only when the tables record it", {
+    yes <- pooled_downstream(pooled_dir_with(withr::local_tempdir(), collapsed = TRUE))
+    expect_match(yes, "collapsed to one per gene", fixed = TRUE)
+    expect_match(yes, "finite z-score", fixed = TRUE)
+
+    no <- pooled_downstream(pooled_dir_with(withr::local_tempdir(), collapsed = FALSE))
+    expect_match(no, "not collapsed to genes", fixed = TRUE)
+    expect_false(grepl("collapsed to one per gene", no, fixed = TRUE))
+
+    one_no <- pooled_downstream(pooled_dir_with(withr::local_tempdir(), m = 1, collapsed = FALSE))
+    expect_match(one_no, "not collapsed to genes", fixed = TRUE)
+
+    # Older tables without the column: no claim either way.
+    old <- pooled_downstream(pooled_dir_with(withr::local_tempdir(), collapsed = NULL))
+    expect_false(grepl("collapsed", old, fixed = TRUE))
+    expect_match(old, "Rubin's rules", fixed = TRUE)
+})
+
+test_that("the report's pooled section keeps to the agreed wording", {
+    rmd <- readLines(file.path(root_dir, "R", "domain", "proteomics",
+                               "report_template_proteomics.Rmd"), warn = FALSE)
+    start <- grep("^# Enrichment on a Pooled Ranking", rmd)
+    end <- grep("^# PPI Network Analysis", rmd)
+    expect_length(start, 1L)
+    expect_true(end > start)
+    sec <- paste(rmd[start:end], collapse = "\n")
+    expect_false(grepl("multiple[- ]imputation inference", sec, ignore.case = TRUE))
+    expect_match(sec, "combined across imputation draws with Rubin's rules", fixed = TRUE)
+    expect_match(sec, "are not comparable", fixed = TRUE)
+    expect_match(sec, "proteomics_pooled_enrichment_dir(prot_dir)", fixed = TRUE)
+    # Draws, collapse and the flag come from the run, not fixed prose.
+    expect_match(sec, "pooled_info$m == 1", fixed = TRUE)
+    expect_match(sec, "pooled_ranking_collapse_text(pooled_info$collapsed)", fixed = TRUE)
+    expect_match(sec, "$pooled_ranking %||% list())$enabled", fixed = TRUE)
+    expect_false(grepl("Proteins were collapsed to \"", sec, fixed = TRUE))
+    # Sub-headings are printed by the gated chunks, so none shows when the
+    # section did not run.
+    expect_false(any(grepl("^## ", rmd[start:(end - 1)])))
+    # No bold emphasis inside this section's prose.
+    expect_false(grepl("\\*\\*", sec))
+})
+
+test_that("the report's method note describes only the methods that wrote tables", {
+    rmd <- readLines(file.path(root_dir, "R", "domain", "proteomics",
+                               "report_template_proteomics.Rmd"), warn = FALSE)
+    start <- grep("^```\\{r pooled-method-note", rmd)
+    expect_length(start, 1L)
+    end <- start + which(grepl("^```\\s*$", rmd[-seq_len(start)]))[1]
+    body <- parse(text = rmd[(start + 1L):(end - 1L)])
+    note <- function(fgsea, cam) {
+        env <- new.env()
+        env$pooled_fgsea_files <- if (fgsea) "pathway_A_vs_B_KEGG_fgsea.csv" else character(0)
+        env$pooled_cam_files <- if (cam) "pathway_A_vs_B_KEGG_camerapr.csv" else character(0)
+        env$pooled_dir <- withr::local_tempdir()
+        paste(utils::capture.output(eval(body, env)), collapse = "\n")
+    }
+
+    expect_identical(note(FALSE, FALSE), "")
+    fg <- note(TRUE, FALSE)
+    expect_match(fg, "fgsea asks", fixed = TRUE)
+    expect_false(grepl("cameraPR", fg, fixed = TRUE))
+    cam <- note(FALSE, TRUE)
+    expect_match(cam, "cameraPR", fixed = TRUE)
+    expect_false(grepl("fgsea", cam, fixed = TRUE))
+    expect_false(grepl("two methods", cam, fixed = TRUE))
+    both <- note(TRUE, TRUE)
+    expect_match(both, "fgsea asks", fixed = TRUE)
+    expect_match(both, "The two methods test different null hypotheses", fixed = TRUE)
 })
