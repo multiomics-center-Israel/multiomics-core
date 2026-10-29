@@ -164,7 +164,6 @@ modes:
         # harmonization: false           # "Data Harmonization" section, heading included
         # sample_concordance: false      # "Sample Concordance Across Omics" section
         # mechanistic: false             # "Mechanistic & Causal Inference" section
-        # diablo_variable_plot: false    # DIABLO variable (correlation-circle) loadings plot
 
     # --- Feature selection for integration ---
     feature_selection:
