@@ -429,7 +429,10 @@ test_that("F6 missing values in the normalised matrix do not silently drop the s
                                  inputs = list(contrasts = fixture_contrasts()))
     pc <- s[s$claim == "variance explained by PC1 and PC2", ]
 
+    # Missing values are treated as missing, as the QC PCA and correlation
+    # heatmap treat them, so neither row is dropped or reads "NA".
     expect_equal(nrow(pc), 1)                  # prcomp() would have aborted
-    expect_match(pc$source_file, "3 of 4 genes")
+    expect_match(pc$source_file, "rna_norm_TMMlogCPM.tsv (recomputed)", fixed = TRUE)
+    expect_false(grepl("NA", pc$value))
     expect_false(any(grepl("NA", s$value[s$claim == "pearson correlation between libraries"])))
 })

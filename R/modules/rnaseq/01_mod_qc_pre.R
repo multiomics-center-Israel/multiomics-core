@@ -18,8 +18,14 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     plots <- list()
     files <- character(0)
 
-    # Use working expression matrix (normalized log-counts) for QC
+    # expr_work (the analysis matrix) is shown only by the distribution plots;
+    # every sample-structure plot (PCA, sample and expression heatmaps) uses the
+    # QC matrix, which for TMMlogCPM is log2(TMM CPM + qc$cpm_pseudocount).
     mat <- pre$expr_work
+    qc_mat <- rna_qc_expr(pre, cfg$qc)
+    qc_transform <- resolve_rna_qc_transform(pre$info, cfg$qc)
+    message(sprintf("  QC plots use %s; the analysis matrix (expr_work) is %s",
+                    qc_transform$label, pre$info$expr_work_method %||% "of unknown method"))
     meta <- pre$meta
 
     # --- Validate color/shape configuration ---
@@ -75,7 +81,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
             f_pca12 <- file.path(out_qc, sprintf("PCA_PC1.vs.PC2_by_%s.png", safe_name))
         }
 
-        p12 <- qc_pca_scatter(mat, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca12)
+        p12 <- qc_pca_scatter(qc_mat, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca12)
         files <- c(files, f_pca12)
 
         # Store first plot for object extraction later
@@ -100,7 +106,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
             f_pca13 <- file.path(out_qc, sprintf("PCA_PC1.vs.PC3_by_%s.png", safe_name))
         }
 
-        p13 <- qc_pca_scatter(mat, meta, cfg_temp, pcs = c(1, 3), out_file = f_pca13)
+        p13 <- qc_pca_scatter(qc_mat, meta, cfg_temp, pcs = c(1, 3), out_file = f_pca13)
         files <- c(files, f_pca13)
 
         if (i == 1) {
@@ -116,7 +122,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         f_pca3d <- file.path(out_qc, "PCA_3D.html")
         cfg_temp <- cfg
         cfg_temp$effects$color <- primary_color
-        p_3d <- qc_pca_3d(mat, meta, cfg_temp, out_file = f_pca3d)
+        p_3d <- qc_pca_3d(qc_mat, meta, cfg_temp, out_file = f_pca3d)
         files <- c(files, f_pca3d)
         if (!is.null(p_3d)) plots$pca_3d <- p_3d
     } else if (isTRUE(adaptive_enabled)) {
@@ -126,26 +132,32 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
 
     # ---------- PCA with top variable genes (for report dropdown) ----------
     n_top_values <- c(500, 1000, 2000, 5000)
-    n_features <- nrow(mat)
     cfg_temp <- cfg
     cfg_temp$effects$color <- primary_color
+    gene_vars <- apply(qc_mat, 1, var, na.rm = TRUE)
+    ranked <- order(gene_vars, decreasing = TRUE)
 
     for (n_top in n_top_values) {
-        if (n_top <= n_features) {
-            # Select top N most variable genes
-            gene_vars <- apply(mat, 1, var, na.rm = TRUE)
-            top_idx <- order(gene_vars, decreasing = TRUE)[1:n_top]
-            mat_top <- mat[top_idx, , drop = FALSE]
-
-            f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
-            tryCatch({
-                p_top <- qc_pca_scatter(mat_top, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top)
-                files <- c(files, f_pca_top)
-                plots[[sprintf("pca_top%d", n_top)]] <- p_top
-                message(sprintf("  Generated PCA with top %d variable genes", n_top))
-            }, error = function(e) {
-                message(sprintf("  Could not generate PCA with top %d genes: %s", n_top, e$message))
-            })
+        f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
+        p_top <- NULL
+        if (n_top <= length(ranked)) {
+            p_top <- tryCatch(
+                qc_pca_scatter(qc_mat[ranked[seq_len(n_top)], , drop = FALSE], meta, cfg_temp,
+                               pcs = c(1, 2), out_file = f_pca_top),
+                error = function(e) {
+                    warning(sprintf("[rnaseq QC] PCA with top %d variable genes was not generated: %s",
+                                    n_top, conditionMessage(e)), call. = FALSE)
+                    NULL
+                }
+            )
+        }
+        if (is.null(p_top)) {
+            # A plot left by an earlier run would otherwise be shown as this run's.
+            if (file.exists(f_pca_top)) file.remove(f_pca_top)
+        } else {
+            files <- c(files, f_pca_top)
+            plots[[sprintf("pca_top%d", n_top)]] <- p_top
+            message(sprintf("  Generated PCA with top %d variable genes", n_top))
         }
     }
 
@@ -156,7 +168,8 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     p_dens <- qc_omic_density(
         mat, meta, cfg_temp,
         out_file = f_hist,
-        title = "Density plot of normalized counts"
+        title = sprintf("Density of normalized expression (analysis matrix, %s)",
+                        pre$info$expr_work_method %||% "normalized")
     )
     files <- c(files, f_hist)
     plots$density <- p_dens
@@ -173,7 +186,8 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     # Normalized boxplot
     f_box <- file.path(out_qc, "norm_boxplot.png")
     p_bp <- norm_boxplot(mat, meta, cfg_temp, out_file = f_box,
-                         title = "Normalized Expression (TMMlogCPM)")
+                         title = sprintf("Normalized expression (analysis matrix, %s)",
+                                         pre$info$expr_work_method %||% "normalized"))
     files <- c(files, f_box)
     plots$boxplot <- p_bp
 
@@ -198,7 +212,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         cfg_temp <- cfg
         cfg_temp$effects$color <- primary_color
         ph_dist <- qc_sample_distance_heatmap(
-            mat, meta, cfg_temp,
+            qc_mat, meta, cfg_temp,
             annot_cols = annot_cols,
             out_file = f_dist,
             show_labels = show_labels,
@@ -219,7 +233,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         cfg_temp <- cfg
         cfg_temp$effects$color <- primary_color
         p_cor <- qc_sample_correlation_heatmap(
-            mat, meta, cfg_temp,
+            qc_mat, meta, cfg_temp,
             annot_cols = annot_cols,
             out_file = f_cor,
             show_labels = show_labels,
@@ -254,7 +268,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         # Use primary color for heatmap
         cfg_temp <- cfg
         cfg_temp$effects$color <- primary_color
-        hm_clusters <- wrap_qc_heatmap(mat, meta, cfg_temp, stage = stage, out_file = f_hm,
+        hm_clusters <- wrap_qc_heatmap(qc_mat, meta, cfg_temp, stage = stage, out_file = f_hm,
                                        annot_cols = annot_cols)
         files <- c(files, f_hm)
         plots$heatmap_clusters <- hm_clusters
@@ -262,7 +276,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         # Heatmap without column clustering
         f_hm_nocol <- file.path(out_qc, "samples_rna_heatmap_wo_col.png")
         p_hm_nocol <- plot_heatmap_core(
-            expr_mat = mat,
+            expr_mat = qc_mat,
             annotation_col = annot,
             title = "QC: Sample RNA Expression",
             max_rows = 2000,
@@ -276,7 +290,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         # Fully unclustered heatmap (rows + cols both in original order)
         f_hm_uncl <- file.path(out_qc, "samples_rna_heatmap_unclustered.png")
         p_hm_uncl <- plot_heatmap_core(
-            expr_mat = mat,
+            expr_mat = qc_mat,
             annotation_col = annot,
             title = "QC: Sample RNA Expression",
             max_rows = 2000,

@@ -194,8 +194,12 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
         pathway = list(total = n_pathways_total, up = n_pathways_up,
                        down = n_pathways_down),
         methods = list(
-            normalization = rna_cfg$normalization$method %||% "TMM",
+            # What produced expr_work: a failed VST falls back to TMMlogCPM.
+            normalization = if (isTRUE(pre$info$expr_work_method %in% c("TMMlogCPM", "VST"))) {
+                pre$info$expr_work_method
+            } else rna_cfg$normalization$method %||% "TMM",
             prior_count   = rna_cfg$normalization$prior.count %||% 1,
+            qc_transform  = resolve_rna_qc_transform(pre$info, rna_cfg$qc),
             filtering = describe_rna_filtering(pre$info, rna_cfg$filtering),
             de_method = rna_cfg$de$method %||% "deseq2",
             de_mode   = rna_cfg$de$deseq_mode %||% "default",
@@ -638,6 +642,13 @@ generate_summary_body_r <- function(stats) {
         sprintf("Normalization via %s.", nm))
     norm_tags <- if (nm == "TMMlogCPM") c("TMM scaling", "log2 CPM", sprintf("prior.count = %s", stats$methods$prior_count))
                  else if (nm == "VST") c("VST", "DESeq2") else nm
+    qc_tr <- stats$methods$qc_transform
+    if (isTRUE(qc_tr$applied)) {
+        norm_desc <- paste(norm_desc, sprintf(
+            "QC plots only (PCA, sample and expression heatmaps) use %s; clustering and the exported normalized table use the values above.",
+            qc_tr$label))
+        norm_tags <- c(norm_tags, sprintf("QC plots: %s", qc_tr$label))
+    }
     step6 <- build_step_html(6, "\u2696", "Normalization", "phase-norm", "downstream", norm_desc, norm_tags)
 
     # DE

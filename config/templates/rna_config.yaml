@@ -212,6 +212,17 @@ modes:
         max_samples_for_heatmaps: 120     # Skip distance/corr heatmaps above this
         max_samples_for_expr_heatmap: 60  # Skip expression heatmap above this
 
+      # Expression used by the QC plots: PCA (PC1 vs PC2, PC1 vs PC3, 3D, top-variable),
+      # the sample distance/correlation heatmaps and the pre-DE expression heatmaps.
+      # With TMMlogCPM they use log2(TMM CPM + cpm_pseudocount), an offset in CPM units;
+      # normalization.prior.count is in reads and, at typical depths, a much smaller
+      # offset, so genes with a handful of reads would dominate sample-level QC.
+      # QC plots only: expr_work and everything that reads it (clustering, post-DE
+      # heatmaps, the exported normalized table) keep normalization.prior.count, and DE
+      # runs on the counts. Ignored for VST and preprocessed input.
+      # Must be above 0; 1 is the usual value (default 1, also when absent).
+      cpm_pseudocount: 1
+
       # Sample correlation/distance heatmap visualization (all optional)
       # These settings improve readability for large sample sets
       heatmap_viz:

@@ -171,7 +171,10 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
     # ==================================================================
     # SLIDE 2: Study Design
     # ==================================================================
-    norm_method <- norm_cfg$method %||% "TMMlogCPM"
+    # What produced expr_work: a failed VST falls back to TMMlogCPM.
+    norm_method <- if (isTRUE(pre$info$expr_work_method %in% c("TMMlogCPM", "VST"))) {
+        pre$info$expr_work_method
+    } else norm_cfg$method %||% "TMMlogCPM"
 
     design_context <- sprintf(
         "Study design. Organism: %s. %d samples, %s genes. Groups: %s. "
@@ -203,19 +206,20 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
     # ==================================================================
     # SLIDE 3: PCA PC1 vs PC2
     # ==================================================================
+    # The PCA and sample heatmaps are drawn on the QC matrix, not expr_work.
+    qc_label <- resolve_rna_qc_transform(pre$info, rna_cfg$qc)$label
     pca_png <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
     if (file.exists(pca_png)) {
         pca_context <- sprintf(
-            "PCA plot (PC1 vs PC2) of RNA-seq normalized expression. %d samples, groups: %s.",
-            n_samples, groups_str)
+            "PCA plot (PC1 vs PC2) of RNA-seq expression as %s. %d samples, groups: %s.",
+            qc_label, n_samples, groups_str)
         pca_bl <- generate_slide_bottom_line(pca_context, image_path = pca_png,
                                               config = config, mode = "rna")
         pptx <- pptx_add_figure_slide(
             pptx     = pptx,
             title    = "PCA: PC1 vs PC2",
             img      = pca_png,
-            subtitle = sprintf("%d samples | %s | %s normalization",
-                               n_samples, groups_str, norm_method),
+            subtitle = sprintf("%d samples | %s | %s", n_samples, groups_str, qc_label),
             bl       = pca_bl,
             footer   = footer_txt
         )
@@ -226,7 +230,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
     # ==================================================================
     cor_png <- file.path(diag_dir, "sample_correlation_heatmap.png")
     if (file.exists(cor_png)) {
-        cor_context <- "Sample-to-sample Pearson correlation heatmap after normalization."
+        cor_context <- sprintf("Sample-to-sample Pearson correlation heatmap of %s.", qc_label)
         cor_bl <- generate_slide_bottom_line(cor_context, image_path = cor_png,
                                               config = config, mode = "rna")
         pptx <- pptx_add_figure_slide(

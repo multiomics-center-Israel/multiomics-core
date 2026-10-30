@@ -124,6 +124,84 @@ compute_cpm <- function(counts) {
     sweep(counts, 2, lib, "/") * 1e6
 }
 
+#' Linear TMM-normalized CPM
+#'
+#' The linear counterpart of the TMMlogCPM branch of \code{normalize_counts()}:
+#' the same \code{DGEList} and TMM factors, so the same effective library sizes,
+#' but no log and no prior count. Unlike \code{compute_cpm()}, library sizes
+#' are TMM-scaled.
+#'
+#' @param counts Raw count matrix (genes x samples), the same matrix that
+#'   \code{normalize_counts()} received.
+#' @return Numeric matrix of CPM values with the dimnames of \code{counts}.
+#' @examples
+#' counts <- matrix(c(10, 0, 5, 20, 3, 8), nrow = 3,
+#'                  dimnames = list(c("G1", "G2", "G3"), c("S1", "S2")))
+#' compute_tmm_cpm(counts)
+compute_tmm_cpm <- function(counts) {
+    dge <- edgeR::DGEList(counts = as.matrix(counts))
+    dge <- edgeR::calcNormFactors(dge, method = "TMM")
+    edgeR::cpm(dge, log = FALSE)
+}
+
+#' Resolve the transformation used for RNA-seq QC plots
+#'
+#' The one reading of \code{qc$cpm_pseudocount}, shared by the QC module, the
+#' fact sheet, the report and the pipeline summary. It is decided by the method
+#' that actually produced \code{expr_work} (\code{pre$info$expr_work_method},
+#' which is "TMMlogCPM" also when VST fell back to it), not by the configured
+#' method. Only TMMlogCPM has linear TMM CPM behind it; VST and preprocessed
+#' input are plotted as they are.
+#'
+#' @param info The \code{info} list returned by \code{preprocess_rna()}.
+#' @param qc_cfg The \code{modes$rna$qc} config list (may be NULL).
+#' @return A list with \code{applied} (logical), \code{pseudocount} (numeric,
+#'   NA when not applied) and \code{label} (reader-facing description).
+#' @examples
+#' resolve_rna_qc_transform(list(expr_work_method = "TMMlogCPM"), list(cpm_pseudocount = 1))
+resolve_rna_qc_transform <- function(info, qc_cfg = NULL) {
+    method <- info$expr_work_method %||% NA_character_
+    if (identical(method, "TMMlogCPM")) {
+        pseudocount <- as.numeric(qc_cfg$cpm_pseudocount %||% 1)
+        return(list(applied = TRUE, pseudocount = pseudocount,
+                    label = sprintf("log2(TMM CPM + %s)", format(pseudocount))))
+    }
+    label <- if (identical(method, "VST")) {
+        "the VST values of the analysis matrix"
+    } else if (identical(method, "preprocessed")) {
+        "the preprocessed input values"
+    } else {
+        "the analysis matrix"
+    }
+    list(applied = FALSE, pseudocount = NA_real_, label = label)
+}
+
+#' Expression matrix for RNA-seq QC plots
+#'
+#' \code{log2(TMM CPM + qc$cpm_pseudocount)} when \code{expr_work} is
+#' TMMlogCPM, otherwise \code{expr_work} itself. edgeR's \code{prior.count} is
+#' in reads and, at typical depths, a far smaller offset than 1 CPM, so genes
+#' with a handful of reads dominate the variance of \code{expr_work}; a CPM
+#' offset damps them for sample-level QC without changing the matrix that
+#' clustering, the post-DE heatmaps and the exported normalized table use.
+#'
+#' @param pre The list returned by \code{preprocess_rna()}.
+#' @param qc_cfg The \code{modes$rna$qc} config list (may be NULL).
+#' @return Numeric matrix with the dimnames of \code{pre$expr_work}.
+rna_qc_expr <- function(pre, qc_cfg = NULL) {
+    tr <- resolve_rna_qc_transform(pre$info, qc_cfg)
+    if (!tr$applied) return(pre$expr_work)
+    # expr_filt is the count matrix normalize_counts() turned into expr_work,
+    # so the same genes, samples and TMM factors are used.
+    if (!identical(rownames(pre$expr_filt), rownames(pre$expr_work)) ||
+        !identical(colnames(pre$expr_filt), colnames(pre$expr_work))) {
+        stop("[rnaseq QC] expr_filt and expr_work have different genes or samples, ",
+             "so the QC matrix cannot be built from the counts behind expr_work. ",
+             "preprocess_rna() should return them aligned.", call. = FALSE)
+    }
+    log2(compute_tmm_cpm(pre$expr_filt) + tr$pseudocount)
+}
+
 # compute TPM if gene_length exist
 compute_tpm <- function(counts, gene_lengths_bp) {
     stopifnot(!is.null(rownames(counts)))
