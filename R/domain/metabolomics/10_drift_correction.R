@@ -165,6 +165,12 @@ correct_drift_loess <- function(mat, meta, sample_col,
 #' calls \code{check_drift_preconditions()}, then either applies
 #' \code{correct_drift_loess()} or returns \code{mat} unchanged with a message.
 #'
+#' Drift correction is opt-in: it runs only when
+#' \code{drift_correction.enabled} is explicitly \code{TRUE}. A missing or empty
+#' \code{drift_correction} block disables it. Before this was made opt-in, a
+#' missing \code{enabled} key meant "on", so rerunning a project that never set
+#' it can give different results whenever its metadata met the preconditions.
+#'
 #' @param mat Numeric matrix (features x samples).
 #' @param meta data.frame of sample metadata aligned to \code{colnames(mat)}.
 #' @param cfg Mode config: \code{config$modes$metabolomics}.
@@ -179,10 +185,11 @@ correct_drift_loess <- function(mat, meta, sample_col,
 apply_drift_correction <- function(mat, meta, cfg) {
   mat  <- as.matrix(mat)
   dc   <- cfg$preprocessing$drift_correction %||% list()
-  enabled <- isTRUE(dc$enabled %||% TRUE)
+  enabled <- isTRUE(dc$enabled)
 
   if (!enabled) {
-    message("apply_drift_correction: disabled in config; skipping.")
+    message("apply_drift_correction: not enabled (opt in with ",
+            "preprocessing.drift_correction.enabled: true); skipping.")
     return(list(mat = mat, applied = FALSE,
                 info = list(reason = "disabled in config")))
   }

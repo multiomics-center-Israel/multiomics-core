@@ -39,7 +39,13 @@ metab_inputs ─► met_raw ─► met_filtered ─► met_log ─────�
 `met_missingness_stats` records missingness on the filtered matrix, and
 `met_norm_comparison` writes a side-by-side of the normalizations.
 `metab_pre` is the adapter that the downstream steps read, directly or through `metab_de_res`; its working
-matrix is `expr_work`.
+matrix is `expr_work`, which carries the optional feature `scaling`. Differential
+abundance and the QEA/ssGSEA enrichment test `expr_unscaled` instead: the same
+normalized, transformed matrix without feature scaling, chosen by
+`resolve_metab_de_matrix()`. Changing `scaling` therefore changes the
+multivariate views (PCA, sample distance and correlation heatmaps, Shiny
+`expr_norm`) but not the DE statistics.
+`expr_log` is the transform alone, with no sample normalization.
 
 ## Normalization: `preprocessing` and `chosen_norm`
 
@@ -51,7 +57,7 @@ There is no separate `normalization:` block.
 | `chosen_norm` | `none`, `tss`, `median`, `pqn`, `eigenms`, `eigenms_forced`, `bio_factor`, or `null` |
 | `transform`, `pseudocount` | `transform` sets the log transform of `met_log`, so it affects only `median` and `none`. `tss`, `pqn`, `eigenms`, `eigenms_forced` and `bio_factor` always use `log2(x + pseudocount)` |
 | `scaling` | Optional feature scaling |
-| `drift_correction` | Optional LOESS signal-drift correction (QC samples + injection order) |
+| `drift_correction` | Optional LOESS signal-drift correction (QC samples + injection order). Opt-in: runs only with `enabled: true` |
 
 -   **`chosen_norm: null` is QC-review mode.** The pipeline builds the normalizations,
     a QC suite for the log matrix and for `tss`, `median`, `pqn`, `eigenms` and
@@ -64,6 +70,15 @@ There is no separate `normalization:` block.
 -   **`chosen_norm: none`** skips sample normalization, for tables normalized upstream.
     `transform` and `scaling` still apply, so set `transform: "none"` as well if the
     table is also already log-scaled.
+-   **LOESS drift correction is opt-in.** It runs only when
+    `drift_correction.enabled` is explicitly `true` and the metadata has the
+    injection-order and QC columns with at least 4 QC samples. A missing or empty
+    `drift_correction` block means off. Until this change a missing `enabled` meant
+    on, so **rerunning a project that never set it can give different results**
+    when its metadata met those conditions. To keep the old behaviour, set
+    `enabled: true` explicitly. **LOESS cannot be combined with feature scaling:**
+    with `scaling` other than `"none"` the run stops, because the correction is
+    not valid on centered or scaled features (see #362).
 
 ## Main targets after `metab_pre`
 

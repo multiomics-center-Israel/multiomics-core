@@ -101,30 +101,41 @@
 
 # ---- .metab_de_matrix_condition() (pure R, always runs) ---------------------
 
-test_that(".metab_de_matrix_condition selects expr_work vs expr_log by scaling", {
-    work <- matrix(1:12, nrow = 3, dimnames = list(c("f1","f2","f3"),
-                                                    c("s1","s2","s3","s4")))
-    logm <- work * 10  # distinct so we can tell which was chosen
+# This replaces a test that pinned the #287 defect: it asserted that
+# auto/pareto/range selected expr_log, which in metabolomics carries the
+# transform but no sample normalization.
+test_that(".metab_de_matrix_condition uses the unscaled matrix under every scaling", {
+    unscaled <- matrix(1:12, nrow = 3, dimnames = list(c("f1","f2","f3"),
+                                                       c("s1","s2","s3","s4")))
+    # Distinct values so a test can tell which matrix was chosen.
+    work <- unscaled * 100
+    logm <- unscaled * 10
     meta <- data.frame(sample_id = c("s1","s2","s3","s4"),
                        sample_type = c("A","A","B","B"),
                        stringsAsFactors = FALSE)
-    mk <- function(scaling) list(
-        expr_work = work, expr_log = logm, meta = meta,
-        info = list(normalization = list(scaling = scaling))
-    )
+    mk <- function(scaling, with_unscaled = TRUE) {
+        pre <- list(expr_work = work, expr_log = logm, meta = meta,
+                    info = list(normalization = list(scaling = scaling)))
+        if (with_unscaled) pre$expr_unscaled <- unscaled
+        pre
+    }
     config <- list(modes = list(metabolomics = list(
         de = list(condition_column = "sample_type"),
         effects = list(samples = "sample_id", color = "sample_type")
     )))
 
-    # NOTE: the expected branch set mirrors run_metabolomics_de() in
-    # 03_differential.R (the parity contract). Keep both in sync.
-    for (sc in c("auto", "pareto", "range")) {
-        expect_equal(.metab_de_matrix_condition(mk(sc), config)$mat, logm, info = sc)
+    for (sc in c("none", "center", "auto", "pareto", "range")) {
+        expect_equal(.metab_de_matrix_condition(mk(sc), config)$mat, unscaled, info = sc)
     }
-    for (sc in c("none", "center")) {
-        expect_equal(.metab_de_matrix_condition(mk(sc), config)$mat, work, info = sc)
+
+    # An object without expr_unscaled: only an unscaled working matrix may stand
+    # in. Anything centered or scaled must stop, never fall back silently.
+    expect_equal(.metab_de_matrix_condition(mk("none", FALSE), config)$mat, work)
+    for (sc in c("center", "auto", "pareto", "range")) {
+        expect_error(.metab_de_matrix_condition(mk(sc, FALSE), config),
+                     "no 'expr_unscaled'", info = sc)
     }
+
     out <- .metab_de_matrix_condition(mk("none"), config)
     expect_s3_class(out$condition, "factor")
     expect_equal(as.character(out$condition), meta$sample_type)
