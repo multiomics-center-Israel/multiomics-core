@@ -344,16 +344,22 @@ test_that("validate_rna_config errors on invalid normalization method", {
     expect_error(validate_rna_config(cfg))
 })
 
-test_that("validate_rna_config checks qc$top_variable_pca$min_mean_cpm", {
+test_that("validate_rna_config accepts a positive qc$cpm_pseudocount only", {
     cfg <- create_mock_rna_config()
-    for (ok in c(0, 1, 2.5)) {
-        cfg$qc <- list(top_variable_pca = list(min_mean_cpm = ok))
+    for (ok in c(1, 0.5, 4)) {
+        cfg$qc <- list(cpm_pseudocount = ok)
         expect_true(validate_rna_config(cfg))
     }
-    cfg$qc <- list(top_variable_pca = list(min_mean_cpm = -1))
-    expect_error(validate_rna_config(cfg), "min_mean_cpm")
-    cfg$qc <- list(top_variable_pca = list(min_mean_cpm = "1"))
-    expect_error(validate_rna_config(cfg), "min_mean_cpm")
+    cfg$qc <- list(cpm_pseudocount = NULL)
+    expect_true(validate_rna_config(cfg))
+    for (bad in list(0, -1, Inf, "1", c(1, 2))) {
+        cfg$qc <- list(cpm_pseudocount = bad)
+        expect_error(validate_rna_config(cfg), "cpm_pseudocount")
+    }
+    # It is a QC-only offset, so it may sit alongside normalization$prior.count.
+    cfg$qc <- list(cpm_pseudocount = 1)
+    cfg$normalization$prior.count <- 1
+    expect_true(validate_rna_config(cfg))
 })
 
 # --- Enrichment block validation (the `enrichment` section) ---

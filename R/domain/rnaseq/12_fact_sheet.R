@@ -3,7 +3,10 @@
 #' Collects the headline numbers of a run and pairs each with the artifact it
 #' can be checked against. Every value is read or derived from the files already
 #' written to \code{out_dir}, so the sheet describes the results as they exist
-#' on disk rather than as they existed in memory.
+#' on disk rather than as they existed in memory. The exception is the sample
+#' structure rows, which describe the QC plots: their matrix (the QC-only
+#' transformation) is never written as a file, so they are derived from
+#' \code{pre} and \code{qc_pre_obj}, and the source names the transformation.
 #'
 #' Sections, in order: cohort and filtering, differential expression, sample
 #' structure, gene-set enrichment, run provenance. Any section whose inputs are
@@ -15,9 +18,11 @@
 #'   counts, which cannot be recovered from the matrices alone.
 #' @param inputs Optional loaded inputs; used for the contrast names.
 #' @param run_dir Optional run root, for the execution_info provenance rows.
+#' @param qc_pre_obj Optional result of \code{mod_rnaseq_qc_pre()}; its PCA
+#'   variance is reused so the sheet quotes the plotted numbers.
 #' @return A data.frame with columns claim, value, source_file.
 build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
-                                    run_dir = NULL) {
+                                    run_dir = NULL, qc_pre_obj = NULL) {
     dirs <- create_legacy_output_dirs(out_dir, create = FALSE)
     de_cfg <- config$modes$rna$de %||% list()
     # Exactly the resolution the DE code uses (R/domain/rnaseq/04_de_summary.R:100,148).
@@ -40,7 +45,7 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
     bind_facts(
         .facts_rnaseq_cohort(counts, final, pre, inputs, config, p_cut, fc_cut),
         .facts_rnaseq_de(final, de_counts, de_cfg),
-        .facts_rnaseq_structure(norm, norm_path, pre, config),
+        .facts_rnaseq_structure(norm, norm_path, pre, config, qc_pre_obj),
         .facts_rnaseq_enrichment(dirs$enrichment, p_cut, contrast_names, gsea_cut),
         .facts_run_provenance(run_dir)
     )
@@ -210,41 +215,48 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
 }
 
 #' Sample-structure rows: PCA variance and between-library correlation
+#'
+#' The numbers describe the QC plots: the matrix is \code{rna_qc_expr()} (for
+#' TMMlogCPM, \code{log2(TMM CPM + qc$cpm_pseudocount)}, not \code{expr_work}),
+#' the PC1/PC2 shares are the QC PCA's own \code{var_expl} when
+#' \code{qc_pre_obj} carries it and otherwise come from the same
+#' \code{compute_pca_scores()} call the QC PCA makes, and the correlations use
+#' the correlation heatmap's \code{cor()} settings. Without preprocessing
+#' results the exported analysis matrix is used, and the source says so.
 #' @keywords internal
-.facts_rnaseq_structure <- function(norm, norm_path, pre, config) {
-    if (is.null(norm) || ncol(norm) < 3) return(NULL)
-    m <- as.matrix(norm[, -1, drop = FALSE])
-    if (!is.numeric(m) || nrow(m) < 2) return(NULL)
-    src <- if (is.na(norm_path)) "normalised matrix" else file.path("Datasets", basename(norm_path))
-
-    # The preprocessed-input path keeps every numeric feature and can carry NA
-    # or non-finite values into the normalised TSV, where QC's own PCA removes
-    # them before plotting. Without the same step prcomp() aborts -- dropping
-    # the PCA row with no explanation -- and cor() returns NA, which reaches the
-    # sheet as a literal "NA and NA" claim.
-    n_genes_all <- nrow(m)
-    m <- m[is.finite(rowSums(m)), , drop = FALSE]
-    if (nrow(m) < 2) return(NULL)
-    # These values are computed here, not read from the file, so the source must
-    # say so either way; a bare file name would claim the file states them.
-    src <- if (nrow(m) == n_genes_all) {
-        paste0(src, " (recomputed)")
+.facts_rnaseq_structure <- function(norm, norm_path, pre, config, qc_pre_obj = NULL) {
+    qc_cfg <- config$modes$rna$qc
+    from_pre <- !is.null(pre$expr_work) && !is.null(pre$info)
+    if (from_pre) {
+        m <- as.matrix(rna_qc_expr(pre, qc_cfg))
+        src <- sprintf("QC matrix, %s", resolve_rna_qc_transform(pre$info, qc_cfg)$label)
     } else {
-        sprintf("%s (recomputed on the %d of %d genes with no missing values)",
-                src, nrow(m), n_genes_all)
+        if (is.null(norm) || ncol(norm) < 3) return(NULL)
+        m <- as.matrix(norm[, -1, drop = FALSE])
+        src <- if (is.na(norm_path)) "normalised matrix" else file.path("Datasets", basename(norm_path))
     }
+    if (!is.numeric(m) || nrow(m) < 2) return(NULL)
+    # Preprocessed input can carry NA or non-finite values; the QC PCA and the
+    # correlation heatmap treat them as missing, and so does this sheet.
+    m[!is.finite(m)] <- NA
 
-    pc <- tryCatch(stats::prcomp(t(m), center = TRUE, scale. = FALSE), error = function(e) NULL)
+    var_expl <- if (from_pre) qc_pre_obj$objects$var_expl else NULL
+    pc_src <- if (!is.null(var_expl)) {
+        sprintf("Diagnostic_plots/PCA_PC1.vs.PC2.png (%s)", src)
+    } else {
+        var_expl <- tryCatch(compute_pca_scores(m, pcs = c(1, 2))$var_expl, error = function(e) NULL)
+        # Computed here, not read from a file, so the source must say so.
+        paste0(src, " (recomputed)")
+    }
     pc_row <- NULL
-    if (!is.null(pc)) {
-        v <- pc$sdev^2
-        v <- 100 * v / sum(v)
+    if (length(var_expl) >= 2) {
         pc_row <- fact("variance explained by PC1 and PC2",
-                       sprintf("%.2f%% and %.2f%%", v[1], v[2]),
-                       src)
+                       sprintf("%.2f%% and %.2f%%", 100 * var_expl[1], 100 * var_expl[2]),
+                       pc_src)
     }
+    src <- paste0(src, " (recomputed)")
 
-    cm <- stats::cor(m, method = "pearson")
+    cm <- stats::cor(m, use = "pairwise.complete.obs", method = "pearson")
     off <- cm[upper.tri(cm)]
 
     grp_row <- NULL

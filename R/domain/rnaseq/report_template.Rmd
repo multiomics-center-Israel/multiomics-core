@@ -189,6 +189,23 @@ rna_cfg <- cfg$modes$rna
 # filtering config keys.
 rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
 
+# The transformation behind the QC plots, from the same resolver the QC module
+# used, read against what ran (params$rna_info), not the configured method.
+rna_qc_tr <- if (is.null(params$rna_info)) NULL else resolve_rna_qc_transform(params$rna_info, rna_cfg$qc)
+rna_qc_sentence <- if (is.null(rna_qc_tr)) {
+    "The transformation used for these plots is not recorded for this report."
+} else if (isTRUE(rna_qc_tr$applied)) {
+    sprintf(paste0("These plots use a QC-only transformation, %s, so that genes with a handful of ",
+                   "reads do not dominate the sample-level structure. Clustering, the post-DE heatmaps ",
+                   "and the exported normalized table use the analysis matrix instead: edgeR log2 CPM ",
+                   "with prior.count = %s (in reads, scaled by library size). Differential expression ",
+                   "is tested on the counts."),
+            rna_qc_tr$label, format(rna_cfg$normalization$prior.count %||% 1))
+} else {
+    sprintf(paste0("These plots use %s, the same matrix used for clustering and the ",
+                   "exported normalized table."), rna_qc_tr$label)
+}
+
 # Section visibility flags (default-off for MA + p-value distribution after
 # Apr 2026 reviewer feedback; toggle on via report_sections in config).
 .rna_rs        <- rna_cfg$report_sections %||% list()
@@ -335,6 +352,11 @@ cat(sprintf(
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
 ))
+if (isTRUE(rna_qc_tr$applied)) {
+    cat(sprintf(paste0(" For quality-control plots only (PCA and the sample and expression heatmaps ",
+                       "before differential expression), expression was transformed as %s; all other ",
+                       "analyses used the normalized values above."), rna_qc_tr$label))
+}
 if (!is.null(rna_filt$de_note)) cat(" ", rna_filt$de_note, sep = "")
 
 if (pathway_enabled) {
@@ -806,13 +828,13 @@ render_commentary("raw_boxplot")
 
 ### After Normalization
 
-```{r boxplot, fig.cap="Per-sample normalized expression boxplot (TMMlogCPM)"}
+```{r boxplot, fig.cap="Per-sample normalized expression boxplot (analysis matrix)"}
 bp <- file.path(diag_dir, "norm_boxplot.png")
 if (file.exists(bp)) knitr::include_graphics(bp)
 ```
 
 ```{r legend-norm-boxplot, results='asis', echo=FALSE}
-figure_legend("Per-sample distribution of TMMlogCPM-normalized expression values. Alignment of median lines and box heights indicates successful normalization for library size and composition differences.")
+figure_legend("Per-sample distribution of the analysis matrix: the normalized values used for clustering, the post-DE heatmaps and the exported normalized table (not the QC-only transformation used by the PCA and heatmaps). Alignment of median lines and box heights indicates successful normalization for library size and composition differences.")
 ```
 
 ```{r commentary-boxplot, results='asis'}
@@ -827,7 +849,7 @@ if (file.exists(hp)) knitr::include_graphics(hp)
 ```
 
 ```{r legend-density, results='asis', echo=FALSE}
-figure_legend("Kernel density estimates of per-sample expression distributions. Overlapping curves indicate consistent expression profiles across samples after normalization. Deviating samples may warrant further investigation.")
+figure_legend("Kernel density estimates of per-sample distributions of the analysis matrix (the normalized values used for clustering and the exported normalized table). Overlapping curves indicate consistent expression profiles across samples after normalization. Deviating samples may warrant further investigation.")
 ```
 
 ```{r commentary-density, results='asis'}
@@ -836,48 +858,10 @@ render_commentary("density_plot")
 
 ## Principal Component Analysis (PCA) {.tabset}
 
-PCA was performed on normalized log-CPM values to assess overall sample
-grouping and detect potential outliers or batch effects.
+PCA was performed to assess overall sample grouping and detect potential
+outliers or batch effects. `r rna_qc_sentence`
 
 ### By Top Variable Genes
-
-```{r pca-var-genes-rule, echo=FALSE, results='asis'}
-# Written by mod_rnaseq_qc_pre(); absent for runs made before it existed.
-pca_sel_file <- file.path(diag_dir, "PCA_top_variable_selection.csv")
-pca_sel <- NULL   # also read by the dropdown below
-if (file.exists(pca_sel_file)) {
-    pca_sel <- utils::read.csv(pca_sel_file)
-    # One row per requested size; the threshold and candidate count repeat.
-    min_cpm <- pca_sel$min_mean_cpm[1]
-    n_cand <- format(pca_sel$n_candidates[1], big.mark = ",")
-    cat(if (is.na(min_cpm)) {
-        sprintf("Genes were ranked by variance among all %s genes; no mean-CPM restriction was applied because the normalized values are not TMM log-CPM.", n_cand)
-    } else if (min_cpm == 0) {
-        sprintf("Genes were ranked by variance among all %s genes (mean-CPM restriction disabled).", n_cand)
-    } else {
-        sprintf("Genes were ranked by variance of log-CPM among the %s genes with a mean TMM-normalized CPM of at least %s; a top-N plot is shown only when at least N genes qualify. The PC1 vs PC2 tab uses all genes kept after filtering.",
-                n_cand, format(min_cpm))
-    }, "\n\n")
-    failed_n <- pca_sel$n_top[pca_sel$status %in% "failed"]
-    if (length(failed_n) > 0) {
-        cat(sprintf("Top-N plots that could not be generated (see the pipeline log): N = %s.\n\n",
-                    paste(formatC(failed_n, format = "d", big.mark = ","), collapse = ", ")))
-    }
-    if (any(pca_sel$n_genes_used < pca_sel$n_top, na.rm = TRUE)) {
-        cat("Where a plot used fewer genes than selected, the remainder had no variance or missing values, which PCA cannot use.\n\n")
-    }
-    # Below, the selector falls back to the all-genes plot when no top-N plot exists.
-    if (length(list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$")) == 0) {
-        # Files written before the status column existed only skip for too few genes.
-        too_few <- is.null(pca_sel$status) || all(pca_sel$status == "skipped_insufficient_genes")
-        cat(if (too_few) {
-            "Too few genes qualified for any top-N plot; the plot below uses all genes.\n\n"
-        } else {
-            "No top-N plot was generated; the plot below uses all genes.\n\n"
-        })
-    }
-}
-```
 
 Select the number of top variable genes used for PCA calculation:
 
@@ -926,13 +910,7 @@ if (length(available_n_top) > 0) {
 if (length(available_n_top) > 0 && available_n_top[1] != 0) {
     for (n_val in available_n_top) {
         selected <- if (n_val == default_n_top) " selected" else ""
-        # The PCA drops genes it cannot use; say so when it dropped any.
-        n_used <- pca_sel$n_genes_used[match(n_val, pca_sel$n_top)]
-        used_txt <- if (length(n_used) == 1 && !is.na(n_used) && n_used != n_val) {
-            sprintf(" (%s used)", format(n_used, big.mark = ","))
-        } else ""
-        cat(sprintf('<option value="%d"%s>%s genes%s</option>\n', n_val, selected,
-                    format(n_val, big.mark = ","), used_txt))
+        cat(sprintf('<option value="%d"%s>%s genes</option>\n', n_val, selected, format(n_val, big.mark = ",")))
     }
 } else if (!is.null(default_img_uri)) {
     cat('<option value="0" selected>All genes (default)</option>\n')
@@ -1041,7 +1019,7 @@ if (file.exists(pca3d_file)) {
 
 ## Sample Similarity
 
-Pairwise sample distance assesses overall reproducibility within and between experimental groups. Clear between-group separation indicates a detectable biological signal.
+Pairwise sample distance assesses overall reproducibility within and between experimental groups. Clear between-group separation indicates a detectable biological signal. `r rna_qc_sentence`
 
 ```{r corr-heatmap-config, include=FALSE}
 # Correlation heatmap dropped from report after Apr 2026 reviewer feedback
@@ -1089,7 +1067,7 @@ render_commentary("sample_distance")
 
 ## Expression Heatmaps {.tabset}
 
-Expression heatmaps display the relative abundance of features across samples. The tabs below show the same matrix with progressively more clustering applied — comparing them reveals whether clustering meaningfully reorganises the structure.
+Expression heatmaps display the relative abundance of features across samples. The tabs below show the same matrix with progressively more clustering applied — comparing them reveals whether clustering meaningfully reorganises the structure. `r rna_qc_sentence`
 
 ### Without Clustering
 

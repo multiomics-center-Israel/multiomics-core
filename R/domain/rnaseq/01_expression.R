@@ -144,39 +144,62 @@ compute_tmm_cpm <- function(counts) {
     edgeR::cpm(dge, log = FALSE)
 }
 
-#' Rank genes for the top-variable PCA
+#' Resolve the transformation used for RNA-seq QC plots
 #'
-#' Orders genes by decreasing variance of \code{mat}, as the top-variable PCA
-#' always has, after dropping genes whose mean CPM is below
-#' \code{min_mean_cpm}. On log-CPM with a small prior count, genes near zero
-#' counts can reach a large variance from counting noise alone; the gate keeps
-#' them out of the candidates without changing the matrix. With
-#' \code{mean_cpm = NULL}, or \code{min_mean_cpm = 0} and no missing mean CPM,
-#' every gene is a candidate and the order is the one
-#' \code{order(var, decreasing = TRUE)} gives.
+#' The one reading of \code{qc$cpm_pseudocount}, shared by the QC module, the
+#' fact sheet, the report and the pipeline summary. It is decided by the method
+#' that actually produced \code{expr_work} (\code{pre$info$expr_work_method},
+#' which is "TMMlogCPM" also when VST fell back to it), not by the configured
+#' method. Only TMMlogCPM has linear TMM CPM behind it; VST and preprocessed
+#' input are plotted as they are.
 #'
-#' @param mat Expression matrix (genes x samples) whose variance is ranked.
-#' @param mean_cpm Mean linear CPM per gene, in the row order of \code{mat}, or
-#'   NULL when the input has no linear CPM (the gate is then not applied).
-#' @param min_mean_cpm Smallest mean CPM a gene needs to be a candidate.
-#' @return Integer row indices of \code{mat}, candidates only, most variable first.
+#' @param info The \code{info} list returned by \code{preprocess_rna()}.
+#' @param qc_cfg The \code{modes$rna$qc} config list (may be NULL).
+#' @return A list with \code{applied} (logical), \code{pseudocount} (numeric,
+#'   NA when not applied) and \code{label} (reader-facing description).
 #' @examples
-#' mat <- matrix(c(1, 9, 2, 2, 5, 1), nrow = 3,
-#'               dimnames = list(c("G1", "G2", "G3"), c("S1", "S2")))
-#' rank_top_variable_genes(mat, mean_cpm = c(0.5, 4, 2), min_mean_cpm = 1)
-rank_top_variable_genes <- function(mat, mean_cpm = NULL, min_mean_cpm = 0) {
-    gene_vars <- apply(mat, 1, var, na.rm = TRUE)
-    if (is.null(mean_cpm)) {
-        return(order(gene_vars, decreasing = TRUE))
+#' resolve_rna_qc_transform(list(expr_work_method = "TMMlogCPM"), list(cpm_pseudocount = 1))
+resolve_rna_qc_transform <- function(info, qc_cfg = NULL) {
+    method <- info$expr_work_method %||% NA_character_
+    if (identical(method, "TMMlogCPM")) {
+        pseudocount <- as.numeric(qc_cfg$cpm_pseudocount %||% 1)
+        return(list(applied = TRUE, pseudocount = pseudocount,
+                    label = sprintf("log2(TMM CPM + %s)", format(pseudocount))))
     }
-    if (length(mean_cpm) != nrow(mat)) {
-        stop(sprintf(
-            "rank_top_variable_genes(): mean_cpm has %d values but mat has %d genes; pass one per row of mat.",
-            length(mean_cpm), nrow(mat)
-        ), call. = FALSE)
+    label <- if (identical(method, "VST")) {
+        "the VST values of the analysis matrix"
+    } else if (identical(method, "preprocessed")) {
+        "the preprocessed input values"
+    } else {
+        "the analysis matrix"
     }
-    eligible <- which(unname(!is.na(mean_cpm) & mean_cpm >= min_mean_cpm))
-    eligible[order(gene_vars[eligible], decreasing = TRUE)]
+    list(applied = FALSE, pseudocount = NA_real_, label = label)
+}
+
+#' Expression matrix for RNA-seq QC plots
+#'
+#' \code{log2(TMM CPM + qc$cpm_pseudocount)} when \code{expr_work} is
+#' TMMlogCPM, otherwise \code{expr_work} itself. edgeR's \code{prior.count} is
+#' in reads and, at typical depths, a far smaller offset than 1 CPM, so genes
+#' with a handful of reads dominate the variance of \code{expr_work}; a CPM
+#' offset damps them for sample-level QC without changing the matrix that
+#' clustering, the post-DE heatmaps and the exported normalized table use.
+#'
+#' @param pre The list returned by \code{preprocess_rna()}.
+#' @param qc_cfg The \code{modes$rna$qc} config list (may be NULL).
+#' @return Numeric matrix with the dimnames of \code{pre$expr_work}.
+rna_qc_expr <- function(pre, qc_cfg = NULL) {
+    tr <- resolve_rna_qc_transform(pre$info, qc_cfg)
+    if (!tr$applied) return(pre$expr_work)
+    # expr_filt is the count matrix normalize_counts() turned into expr_work,
+    # so the same genes, samples and TMM factors are used.
+    if (!identical(rownames(pre$expr_filt), rownames(pre$expr_work)) ||
+        !identical(colnames(pre$expr_filt), colnames(pre$expr_work))) {
+        stop("[rnaseq QC] expr_filt and expr_work have different genes or samples, ",
+             "so the QC matrix cannot be built from the counts behind expr_work. ",
+             "preprocess_rna() should return them aligned.", call. = FALSE)
+    }
+    log2(compute_tmm_cpm(pre$expr_filt) + tr$pseudocount)
 }
 
 # compute TPM if gene_length exist

@@ -59,9 +59,14 @@ validate_rna_config <- function(cfg) {
         assert_scalar_num(f$threshold, "filtering$threshold", allow_null = TRUE, min_val = 0)
     }
 
-    # 4b. QC: candidate gate for the top-variable PCA (0 disables it)
-    assert_scalar_num(cfg$qc$top_variable_pca$min_mean_cpm, "qc$top_variable_pca$min_mean_cpm",
-                      allow_null = TRUE, min_val = 0)
+    # 4b. QC: CPM offset of the QC-only matrix log2(TMM CPM + x)
+    assert_scalar_num(cfg$qc$cpm_pseudocount, "qc$cpm_pseudocount", allow_null = TRUE)
+    if (!is.null(cfg$qc$cpm_pseudocount) &&
+        (!is.finite(cfg$qc$cpm_pseudocount) || cfg$qc$cpm_pseudocount <= 0)) {
+        stop("[config] qc$cpm_pseudocount must be a finite number above 0 ",
+             "(QC plots use log2(TMM CPM + qc$cpm_pseudocount); at 0, genes with no reads ",
+             "become -Inf). The usual value is 1.", call. = FALSE)
+    }
 
     # 5. DE
     if (!is.null(cfg$de)) {
