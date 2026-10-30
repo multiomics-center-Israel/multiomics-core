@@ -73,6 +73,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     pw_cfg  <- rna_cfg$pathway
     enr_cfg <- rna_cfg$enrichment %||% list()
 
+    # Before any early return: a run that skips or loses a collection must not
+    # leave an earlier run's pathway files for the report to show as current.
+    clear_pathway_outputs(file.path(out_dir, "Enrichment"))
+
     # The report reads this manifest as the record that offline enrichment ran;
     # one left by an earlier run must not outlive a run that disables, skips or
     # reroutes enrichment. Only .run_local_enrichment() writes it again.

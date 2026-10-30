@@ -1196,6 +1196,45 @@ run_pathway_analysis <- function(de_tables,
     pathway_results
 }
 
+#' Remove the pathway files an earlier run left in an Enrichment directory
+#'
+#' save_pathway_results() and generate_pathway_plots() write only the
+#' collections that have results and never delete anything. A collection that
+#' fails this run (a KEGG download error, say) or comes back empty would keep
+#' the previous run's CSV and dotplot, and the report, which lists the
+#' directory, would present them as this run's results. Call this before
+#' writing, so the directory holds only what the current run produced.
+#'
+#' Only the files those two writers (and the RNA module's pathway-volcano
+#' tables) produce are removed; subdirectories such as the offline route's
+#' \code{ORA/} and \code{GSEA/} trees are left alone. \code{gene_annotation.csv}
+#' is left too: the report takes gene symbols from it and the offline route does
+#' not write one yet, so removing it would turn offline reports to raw IDs. It
+#' is retired together with its replacement (#338).
+#'
+#' @param enrich_dir The Enrichment directory, e.g. \code{<out_dir>/Enrichment}.
+#' @return The removed paths, invisibly (empty when there was nothing to remove).
+#' @examples
+#' d <- file.path(tempdir(), "Enrichment")
+#' dir.create(d, showWarnings = FALSE)
+#' file.create(file.path(d, "pathway_A_vs_B_KEGG_fgsea.csv"))
+#' clear_pathway_outputs(d)
+#' @export
+clear_pathway_outputs <- function(enrich_dir) {
+    if (!dir.exists(enrich_dir)) return(invisible(character()))
+    old <- c(
+        list.files(enrich_dir, pattern = "^pathway_.*\\.csv$", full.names = TRUE),
+        list.files(file.path(enrich_dir, "plots"), pattern = "^pathway_.*\\.png$",
+                   full.names = TRUE)
+    )
+    old <- old[file.exists(old)]
+    if (length(old) > 0) {
+        unlink(old)
+        message("Removed ", length(old), " pathway file(s) left by an earlier run in ", enrich_dir)
+    }
+    invisible(old)
+}
+
 #' Save pathway results to CSV files
 #'
 #' @param pathway_results Output of run_pathway_analysis()
