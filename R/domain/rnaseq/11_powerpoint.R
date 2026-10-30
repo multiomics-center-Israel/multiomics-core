@@ -171,7 +171,10 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
     # ==================================================================
     # SLIDE 2: Study Design
     # ==================================================================
-    norm_method <- norm_cfg$method %||% "TMMlogCPM"
+    # What produced expr_work: a failed VST falls back to TMMlogCPM.
+    norm_method <- if (isTRUE(pre$info$expr_work_method %in% c("TMMlogCPM", "VST"))) {
+        pre$info$expr_work_method
+    } else norm_cfg$method %||% "TMMlogCPM"
 
     design_context <- sprintf(
         "Study design. Organism: %s. %d samples, %s genes. Groups: %s. "

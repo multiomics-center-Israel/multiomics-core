@@ -194,7 +194,10 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
         pathway = list(total = n_pathways_total, up = n_pathways_up,
                        down = n_pathways_down),
         methods = list(
-            normalization = rna_cfg$normalization$method %||% "TMM",
+            # What produced expr_work: a failed VST falls back to TMMlogCPM.
+            normalization = if (isTRUE(pre$info$expr_work_method %in% c("TMMlogCPM", "VST"))) {
+                pre$info$expr_work_method
+            } else rna_cfg$normalization$method %||% "TMM",
             prior_count   = rna_cfg$normalization$prior.count %||% 1,
             qc_transform  = resolve_rna_qc_transform(pre$info, rna_cfg$qc),
             filtering = describe_rna_filtering(pre$info, rna_cfg$filtering),

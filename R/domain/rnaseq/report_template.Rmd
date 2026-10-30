@@ -189,6 +189,13 @@ rna_cfg <- cfg$modes$rna
 # filtering config keys.
 rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
 
+# The normalization that produced expr_work, as recorded at runtime: a VST that
+# fails falls back to TMMlogCPM, so the configured method can be wrong. Other
+# recorded values (preprocessed input, or no record) keep the configured wording.
+rna_norm_ran <- params$rna_info$expr_work_method
+rna_norm_cfg <- rna_cfg$normalization$method %||% "TMMlogCPM"
+rna_norm_method <- if (isTRUE(rna_norm_ran %in% c("TMMlogCPM", "VST"))) rna_norm_ran else rna_norm_cfg
+
 # The transformation behind the QC plots, from the same resolver the QC module
 # used, read against what ran (params$rna_info), not the configured method.
 rna_qc_tr <- if (is.null(params$rna_info)) NULL else resolve_rna_qc_transform(params$rna_info, rna_cfg$qc)
@@ -317,7 +324,7 @@ if (!is.null(tech)) {
 # --- Downstream Analysis (always rendered from pipeline config) ---
 cat("## Downstream Analysis (multiomics-core)\n\n")
 
-norm_method <- rna_cfg$normalization$method %||% "TMM"
+norm_method <- rna_norm_method
 prior_ct <- rna_cfg$normalization$prior.count %||% 1
 de_method <- rna_cfg$de$method %||% "deseq2"
 deseq_mode <- rna_cfg$de$deseq_mode %||% "default"
@@ -331,8 +338,8 @@ pathway_enabled <- isTRUE(rna_cfg$pathway$enabled)
 pathway_method <- rna_cfg$pathway$method %||% "fgsea"
 pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
 
-# normalize_counts() runs VST only for method "VST"; everything else is edgeR log-CPM,
-# whose prior.count is in reads (scaled by library size), not an offset in CPM units.
+# Anything but VST is edgeR log-CPM, whose prior.count is in reads (scaled by
+# library size), not an offset in CPM units.
 norm_desc <- if (identical(norm_method, "VST")) {
     "the DESeq2 variance-stabilizing transformation (VST, blind to the design)"
 } else {
@@ -450,8 +457,10 @@ settings <- data.frame(
     "Clustering Enabled"
   ),
   Value = c(
-    rna_cfg$normalization$method %||% "N/A",
-    if (identical(rna_cfg$normalization$method, "VST")) "not used (VST)" else prior_count,
+    if (!identical(rna_norm_method, rna_norm_cfg)) {
+        sprintf("%s (%s was configured and failed)", rna_norm_method, rna_norm_cfg)
+    } else rna_cfg$normalization$method %||% "N/A",
+    if (identical(rna_norm_method, "VST")) "not used (VST)" else prior_count,
     rna_filt$short,
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",

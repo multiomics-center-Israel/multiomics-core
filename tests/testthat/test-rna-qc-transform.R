@@ -333,8 +333,31 @@ test_that("the pipeline summary's normalization step names the QC transform", {
     expect_match(body, "QC plots only (PCA, sample and expression heatmaps) use log2(TMM CPM + 1)", fixed = TRUE)
     expect_match(body, "prior count = 1", fixed = TRUE)
 
+    # VST configured but fell back to TMMlogCPM: describe what ran.
     config$modes$rna$normalization$method <- "VST"
+    body <- generate_summary_body_r(collect_pipeline_stats(config, pre, de_res = list()))
+    expect_match(body, "log2 CPM (prior count = 1)", fixed = TRUE)
+    expect_no_match(body, "Variance Stabilizing", fixed = TRUE)
+    expect_match(body, "QC plots only", fixed = TRUE)
+
     pre$info$expr_work_method <- "VST"
     body <- generate_summary_body_r(collect_pipeline_stats(config, pre, de_res = list()))
     expect_no_match(body, "QC plots only", fixed = TRUE)
+})
+
+test_that("the report describes the normalization that ran, not a failed VST", {
+    src <- readLines(rna_report_template(), warn = FALSE)
+    lines <- src[grep("^rna_norm_ran <- ", src):grep("^rna_norm_method <- ", src)]
+    method_for <- function(configured, ran) {
+        env <- new.env(parent = globalenv())
+        env$params <- list(rna_info = if (is.null(ran)) NULL else list(expr_work_method = ran))
+        env$rna_cfg <- list(normalization = list(method = configured))
+        eval(parse(text = lines), envir = env)
+        env$rna_norm_method
+    }
+    expect_identical(method_for("VST", "TMMlogCPM"), "TMMlogCPM")
+    expect_identical(method_for("VST", "VST"), "VST")
+    expect_identical(method_for("TMMlogCPM", "preprocessed"), "TMMlogCPM")
+    expect_identical(method_for("VST", NULL), "VST")
+    expect_identical(method_for(NULL, NULL), "TMMlogCPM")
 })
