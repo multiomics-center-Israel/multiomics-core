@@ -26,6 +26,9 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
     # fact sheet must not make.
     p_cut <- de_cfg$p_cutoff %||% de_cfg$padj_cutoff %||% 0.05
     fc_cut <- de_cfg$linear_fc_cutoff %||% 1.5
+    # GSEA tables hold every tested set, so they are counted at the cutoff the
+    # enrichment module calls a set significant at, not the DE cutoff.
+    gsea_cut <- resolve_rna_gsea_settings(config)$sig_cutoff
 
     counts <- read_artifact_or_null(file.path(dirs$datasets, "rna_counts_filtered.tsv"))
     final <- read_artifact_or_null(file.path(dirs$datasets, "final_results.tsv"))
@@ -38,7 +41,7 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
         .facts_rnaseq_cohort(counts, final, pre, inputs, config, p_cut, fc_cut),
         .facts_rnaseq_de(final, de_counts, de_cfg),
         .facts_rnaseq_structure(norm, norm_path, pre, config),
-        .facts_rnaseq_enrichment(dirs$enrichment, p_cut, contrast_names),
+        .facts_rnaseq_enrichment(dirs$enrichment, p_cut, contrast_names, gsea_cut),
         .facts_run_provenance(run_dir)
     )
 }
@@ -280,11 +283,12 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
 #' matching nest under \code{ORA/}. Looking only for the flat names dropped the
 #' whole enrichment section from local runs that had in fact produced results.
 #' @keywords internal
-.facts_rnaseq_enrichment <- function(enrich_dir, p_cut, contrast_names = character(0)) {
+.facts_rnaseq_enrichment <- function(enrich_dir, p_cut, contrast_names = character(0),
+                                     gsea_cut = p_cut) {
     if (is.null(enrich_dir) || !dir.exists(enrich_dir)) return(NULL)
     rows <- c(
         .facts_enrichment_flat(enrich_dir, p_cut, contrast_names),
-        .facts_enrichment_nested(enrich_dir, p_cut)
+        .facts_enrichment_nested(enrich_dir, p_cut, gsea_cut)
     )
     if (length(rows) == 0) return(NULL)
     rows
@@ -351,10 +355,12 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
 #' Enrichment rows from the nested local-annotation layout
 #'
 #' One row per result unit, labelled by the directories that identify it, so a
-#' database/ranking/contrast combination is never merged with another.
+#' database/ranking/contrast combination is never merged with another. GSEA
+#' units are counted at \code{gsea_cut}, ORA units at \code{p_cut}.
 #' @keywords internal
-.facts_enrichment_nested <- function(enrich_dir, p_cut) {
+.facts_enrichment_nested <- function(enrich_dir, p_cut, gsea_cut = p_cut) {
     unlist(lapply(c("GSEA", "ORA"), function(analysis) {
+        cut <- if (identical(analysis, "GSEA")) gsea_cut else p_cut
         root <- file.path(enrich_dir, analysis)
         if (!dir.exists(root)) return(list())
         files <- list.files(root, pattern = "^results\\.csv$",
@@ -370,9 +376,9 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
             rel <- substring(f, nchar(root) + 2L)
             unit <- gsub("/", ", ", dirname(rel), fixed = TRUE)
             fact(sprintf("gene sets tested and hit at adjusted p <= %s (%s: %s)",
-                         p_cut, analysis, unit),
+                         cut, analysis, unit),
                  sprintf("%d tested; %d significant", nrow(tab),
-                         sum(!is.na(padj) & padj <= p_cut)),
+                         sum(!is.na(padj) & padj <= cut)),
                  file.path("Enrichment", analysis, rel))
         })
     }), recursive = FALSE, use.names = FALSE)

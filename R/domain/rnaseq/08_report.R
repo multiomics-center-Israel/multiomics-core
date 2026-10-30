@@ -11,9 +11,15 @@
 #'   pipeline call sites; the config snapshot is serialized from \code{config}
 #'   rather than copied from this path, so that it matches what the
 #'   \code{execution_info_files} target writes.
-#' @return Path to the rendered HTML file (character, format = "file")
+#' @param pre_info The \code{info} list of \code{preprocess_rna()}'s result,
+#'   passed to the template as \code{params$rna_info} so the report describes
+#'   the gene filter that ran rather than the one the config asked for. NULL
+#'   renders the filtering text as not recorded.
+#' @return Path to the HTML report (character, format = "file"). If rendering
+#'   fails, that file is a stub naming the failing chunk and error, the same
+#'   details go to \code{report_rnaseq_error.log}, and a warning is raised.
 #' @export
-render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
+render_rnaseq_report <- function(run_dir, config, config_file = NULL, pre_info = NULL) {
 
     # Locate the canonical Rmd template shipped with multiomics-core.
     template_path <- system.file("report_template.Rmd",
@@ -67,36 +73,204 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
     # been produced from these settings. It also makes the file.exists(out_html)
     # check below meaningful rather than satisfied by the leftover.
     if (file.exists(out_html)) try(file.remove(out_html), silent = TRUE)
+    # Likewise a previous failure's log, or a successful re-run would sit beside
+    # diagnostics saying it failed.
+    err_log <- file.path(parent_dir, "report_rnaseq_error.log")
+    if (file.exists(err_log)) try(file.remove(err_log), silent = TRUE)
 
     message("Rendering RNA-seq report to: ", out_html)
 
-    tryCatch({
-        rmarkdown::render(
-            input       = dest_rmd,
-            output_file = out_html,
-            output_dir  = parent_dir,
-            quiet       = TRUE,
-            envir       = new.env(parent = globalenv())
-        )
-    }, error = function(e) {
-        warning("RNA-seq report rendering failed: ", e$message,
-                "\nTemplate: ", dest_rmd,
-                "\nCheck the Rmd for errors.")
-    })
-
-    rmarkdown::render(
-        input       = dest_rmd,
-        output_file = out_html,
-        output_dir  = run_dir,
-        quiet       = TRUE,
-        envir       = new.env(parent = globalenv())
+    # knitr's own "Quitting from lines ..." note is lost with quiet = TRUE, so the
+    # failing chunk is recorded here while knitr is still inside it. By the time
+    # tryCatch's handler runs, the stack has unwound and the label is gone.
+    render_err   <- NULL
+    render_chunk <- NULL
+    tryCatch(
+        withCallingHandlers(
+            rmarkdown::render(
+                input       = dest_rmd,
+                output_file = out_html,
+                output_dir  = parent_dir,
+                quiet       = TRUE,
+                params      = list(rna_info = pre_info),
+                envir       = new.env(parent = globalenv())
+            ),
+            error = function(e) {
+                if (isTRUE(getOption("knitr.in.progress"))) {
+                    render_chunk <<- knitr::opts_current$get("label")
+                }
+            }
+        ),
+        error = function(e) render_err <<- conditionMessage(e)
     )
 
-    if (file.exists(out_html)) {
+    # rmarkdown can fail after pandoc has already written the HTML, so a file on
+    # disk is not proof of success on its own.
+    if (is.null(render_err) && file.exists(out_html)) {
         message("Report rendered successfully: ", out_html)
-    } else {
-        warning("Report rendering did not produce output file.")
+        return(out_html)
     }
 
+    # The report failed, but every analysis output it would have shown is already
+    # on disk. Leave the cause where the user will look for the report, plus a
+    # stub so the file target still resolves and the run is not marked failed.
+    where <- if (!is.null(render_chunk)) {
+        lines <- find_rmd_chunk_lines(dest_rmd, render_chunk)
+        if (is.null(lines)) sprintf("chunk '%s'", render_chunk)
+        else sprintf("chunk '%s' (lines %d-%d)", render_chunk, lines[1], lines[2])
+    } else {
+        "outside any chunk (setup or pandoc step)"
+    }
+    cause <- render_err %||% "no error was raised, but no HTML was written"
+    writeLines(c(paste("Template:", dest_rmd),
+                 paste("Failed in:", where),
+                 paste("Error:", cause)),
+               err_log)
+
+    writeLines(paste0(
+        "<!doctype html><html><head><meta charset='utf-8'>",
+        "<title>RNA-seq Report (not rendered)</title>",
+        "<style>body{font-family:system-ui,sans-serif;max-width:780px;margin:40px auto;padding:0 20px;color:#222}",
+        "h1{color:#b91c1c}pre{background:#f3f4f6;padding:14px;border-radius:6px;white-space:pre-wrap}</style>",
+        "</head><body><h1>RNA-seq report did not render</h1>",
+        "<p>The analysis finished; its tables and plots are in this results folder. ",
+        "Only the HTML report failed.</p>",
+        "<p><strong>Failed in:</strong> ", htmltools::htmlEscape(where), "</p>",
+        "<pre>", htmltools::htmlEscape(cause), "</pre>",
+        "<p>The same details are in <code>report_rnaseq_error.log</code>.</p>",
+        "</body></html>"),
+        out_html)
+    message("Wrote fallback stub report: ", out_html)
+
+    # Raised last: under options(warn = 2) or an exiting warning handler it ends
+    # the call, and the stub must already be on disk by then.
+    warning("RNA-seq report rendering failed in ", where, ": ", cause,
+            "\nTemplate: ", dest_rmd,
+            "\nDetails: ", err_log)
+
     out_html
+}
+
+#' DE gene sets per contrast, for the report's overlap plots
+#'
+#' Applies the report's DE rule (padj at or below the cutoff and |log2FC| at
+#' or above the cutoff) to every contrast in the final results table. Kept out
+#' of the template so the All / Up / Down tabs share one rule.
+#'
+#' @param de_data Final results table (one row per gene, columns
+#'   \code{padj.<contrast>} and \code{log2FoldChange.<contrast>} or
+#'   \code{linearFC.<contrast>}).
+#' @param contrast_names Contrast names, in display order.
+#' @param padj_cut Adjusted p-value cutoff.
+#' @param lfc_cut Absolute log2 fold-change cutoff.
+#' @param direction \code{"all"}, \code{"up"} or \code{"down"}.
+#' @return Named list of gene vectors, one per contrast with both columns
+#'   present; names have underscores replaced by spaces.
+collect_de_gene_sets <- function(de_data, contrast_names, padj_cut, lfc_cut,
+                                 direction = c("all", "up", "down")) {
+    direction <- match.arg(direction)
+    gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
+    sets <- list()
+    for (cn in contrast_names) {
+        padj_col <- grep(paste0("^padj\\.", cn, "$"), names(de_data), value = TRUE)[1]
+        lfc_col <- grep(paste0("^(log2FoldChange|linearFC)\\.", cn, "$"), names(de_data), value = TRUE)[1]
+        if (is.na(padj_col) || is.na(lfc_col)) next
+        padj_vals <- as.numeric(de_data[[padj_col]])
+        lfc_vals <- as.numeric(de_data[[lfc_col]])
+        if (grepl("^linearFC", lfc_col)) lfc_vals <- log2(abs(lfc_vals)) * sign(lfc_vals)
+        passes_fc <- switch(direction,
+            all  = abs(lfc_vals) >= lfc_cut,
+            up   = lfc_vals >= lfc_cut,
+            down = lfc_vals <= -lfc_cut)
+        is_de <- !is.na(padj_vals) & padj_vals <= padj_cut & !is.na(passes_fc) & passes_fc
+        sets[[gsub("_", " ", cn)]] <- de_data[[gene_col]][is_de]
+    }
+    sets
+}
+
+#' Draw the overlap of DE gene sets: a Venn diagram or an UpSet plot
+#'
+#' A Venn diagram stays readable up to three sets. Beyond that most of its
+#' regions are tiny or empty, so an UpSet plot is drawn instead: one bar per
+#' combination of contrasts that actually shares genes, largest first.
+#'
+#' @param gene_sets Named list of gene vectors, from
+#'   \code{collect_de_gene_sets()}.
+#' @param title Plot title.
+#' @param fill_high Fill colour for the Venn regions and UpSet bars.
+#' @param max_venn Largest number of sets drawn as a Venn diagram.
+#' @param max_combinations Most combinations shown in the UpSet plot.
+#' @param use_venn Whether ggVennDiagram is available.
+#' @return Invisibly, \code{"venn"}, \code{"upset"} or \code{"none"}: what was drawn.
+draw_de_overlap <- function(gene_sets, title, fill_high = "steelblue", max_venn = 3,
+                            max_combinations = 25, use_venn = TRUE) {
+    total <- length(unique(unlist(gene_sets)))
+    if (length(gene_sets) < 2 || total == 0) {
+        cat("No DE genes to compare across contrasts.\n")
+        return(invisible("none"))
+    }
+
+    if (length(gene_sets) <= max_venn && isTRUE(use_venn)) {
+        names(gene_sets) <- gsub(" vs ", "\nvs ", names(gene_sets))
+        p <- ggVennDiagram::ggVennDiagram(gene_sets, label_alpha = 0, label = "both",
+                                          label_percent_digit = 1, set_size = 3.5) +
+            ggplot2::scale_fill_gradient(low = "white", high = fill_high) +
+            ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = 0.25)) +
+            ggplot2::labs(title = title, subtitle = paste0("Total unique genes: ", total)) +
+            ggplot2::theme(legend.position = "none",
+                           plot.title = ggplot2::element_text(hjust = 0),
+                           plot.subtitle = ggplot2::element_text(hjust = 0),
+                           plot.margin = ggplot2::margin(10, 40, 10, 40))
+        print(p)
+        return(invisible("venn"))
+    }
+
+    m <- ComplexHeatmap::make_comb_mat(gene_sets)
+    m <- m[ComplexHeatmap::comb_size(m) > 0]
+    n_comb <- length(ComplexHeatmap::comb_size(m))
+    keep <- utils::head(order(ComplexHeatmap::comb_size(m), decreasing = TRUE), max_combinations)
+    m <- m[keep]
+    ht <- ComplexHeatmap::UpSet(
+        m,
+        set_order = seq_along(gene_sets),
+        comb_order = order(ComplexHeatmap::comb_size(m), decreasing = TRUE),
+        comb_col = fill_high,
+        top_annotation = ComplexHeatmap::upset_top_annotation(m, add_numbers = TRUE,
+                                                              gp = grid::gpar(fill = fill_high)),
+        right_annotation = ComplexHeatmap::upset_right_annotation(m, add_numbers = TRUE,
+                                                                  gp = grid::gpar(fill = fill_high)),
+        row_names_max_width = ComplexHeatmap::max_text_width(names(gene_sets)),
+        column_title = sprintf("%s (total unique genes: %d; %s)", title, total,
+                               if (n_comb <= max_combinations) "all combinations shown"
+                               else sprintf("largest %d combinations shown", max_combinations))
+    )
+    # Left padding so long contrast names are not clipped at the device edge.
+    ComplexHeatmap::draw(ht, padding = grid::unit(c(2, 8, 2, 2), "mm"))
+    invisible("upset")
+}
+
+#' Locate a knitr chunk in an Rmd file
+#'
+#' Turns the chunk label knitr reports into the line range a person can open,
+#' since a rendering error from a 3,000-line template is not much use without it.
+#'
+#' @param rmd Path to the Rmd file.
+#' @param label Chunk label, as \code{knitr::opts_current$get("label")} gives it.
+#' @return Integer vector \code{c(start, end)}: the lines of the chunk's opening
+#'   and closing fences. \code{NULL} if no chunk carries that label, which is
+#'   the case for unlabelled chunks (knitr names them \code{unnamed-chunk-N}).
+#' @examples
+#' rmd <- tempfile(fileext = ".Rmd")
+#' writeLines(c("# Title", "```{r setup, include=FALSE}", "x <- 1", "```"), rmd)
+#' find_rmd_chunk_lines(rmd, "setup")  # c(2, 4)
+find_rmd_chunk_lines <- function(rmd, label) {
+    src <- readLines(rmd, warn = FALSE)
+    headers <- grep("^\\s*```\\{r[ ,]", src)
+    labels <- sub("^\\s*```\\{r[ ,]+([^ ,}]*).*$", "\\1", src[headers])
+    start <- headers[labels == label][1]
+    if (is.na(start)) return(NULL)
+    fences <- grep("^\\s*```\\s*$", src)
+    end <- fences[fences > start][1]
+    if (is.na(end)) end <- length(src)
+    c(start, end)
 }

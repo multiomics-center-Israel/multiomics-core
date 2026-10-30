@@ -625,8 +625,23 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
 #' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
 #'   row_data, info). Scores are computed on the DE analysis matrix.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
-#' @return list(table, scores, method) or NULL if disabled/unavailable.
-run_metabolomics_ssgsea <- function(pre, config) {
+#' @param contrast_groups Optional `c(numerator, denominator)` for the contrast
+#'   being run, as `.resolve_contrast_groups()` returns it. It fixes the sign of
+#'   `score_diff` to numerator-minus-denominator. Omit it for the dataset-wide
+#'   run, where the order falls back to alphabetical and the sign therefore
+#'   carries no contrast direction. Supplying groups that are not both present
+#'   in the scored samples is an error, not a fallback, as is supplying a
+#'   `pre` that still holds a third group or a sample with no group label.
+#' @param contrast_column The metadata column those groups live in, as
+#'   `.resolve_contrast_groups()$group_col` returns it — the contrast's own
+#'   `Factor` when it has one. It overrides the configured
+#'   `enrichment.condition_column` cascade, because the samples were subset by
+#'   this column and labelling them by another would describe a different
+#'   comparison. `NULL` keeps the cascade.
+#' @return list(table, scores, method, direction) or NULL if disabled or
+#'   unavailable. `direction` names the subtraction `score_diff` reports.
+run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL,
+                                    contrast_column = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
 
@@ -647,8 +662,12 @@ run_metabolomics_ssgsea <- function(pre, config) {
         return(NULL)
     }
 
-    # Resolve condition and sample columns (same cascade as QEA)
-    condition_col <- enr_cfg$condition_column %||%
+    # Resolve condition and sample columns (same cascade as QEA). A contrast
+    # carrying its own Factor overrides the cascade: the stage subset the
+    # samples by THAT column, so reading the configured one here would label
+    # them by an unrelated variable.
+    condition_col <- contrast_column %||%
+                     enr_cfg$condition_column %||%
                      cfg$de$condition_column %||%
                      cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
@@ -731,16 +750,21 @@ run_metabolomics_ssgsea <- function(pre, config) {
     # ---- Wilcoxon test per pathway ----
     # Align condition labels to score matrix columns via sample IDs
     meta <- pre$meta
-    conditions <- factor(meta[[condition_col]][
-        match(colnames(scores), meta[[sample_col]])
-    ])
+    # The column is handed over as it is, NOT coerced to character: without a
+    # contrast the helper reproduces factor()'s own ordering, and that ordering
+    # depends on the column's type.
+    conditions <- .metab_ssgsea_conditions(
+        meta[[condition_col]][match(colnames(scores), meta[[sample_col]])],
+        contrast_groups)
     cond_levels <- levels(conditions)
 
     # Wilcoxon rank-sum requires exactly two groups; return raw scores otherwise
     if (length(cond_levels) != 2) {
         message("ssGSEA: Wilcoxon test requires exactly 2 conditions, found ",
                 length(cond_levels))
-        return(list(table = NULL, scores = scores, method = "ssgsea"))
+        # No test, so no subtraction to name.
+        return(list(table = NULL, scores = scores, method = "ssgsea",
+                    direction = NA_character_))
     }
 
     # Split sample indices by condition for the two-group comparison
@@ -781,8 +805,120 @@ run_metabolomics_ssgsea <- function(pre, config) {
     list(
         table  = results_df,
         scores = scores,
-        method = "ssgsea_wilcoxon"
+        method = "ssgsea_wilcoxon",
+        # What score_diff's sign actually means, carried beside the numbers so a
+        # reader never has to infer it from the level order.
+        direction = paste(cond_levels[2], "-", cond_levels[1])
     )
+}
+
+
+#' Order the two ssGSEA condition levels by the contrast's own direction
+#'
+#' `score_diff` is `mean(level 2) - mean(level 1)`, so the level ORDER is the
+#' reported direction. Left to `factor()`'s default that order is alphabetical,
+#' which has nothing to do with the contrast being run: for a contrast whose
+#' numerator sorts first, the difference comes out denominator-minus-numerator —
+#' the opposite of what the plot title and the filename say, and silently
+#' correct whenever the alphabet happens to agree.
+#'
+#' The groups the stage already resolved from `inputs$contrasts`
+#' (`.resolve_contrast_groups()`, which returns `c(Numerator, Denominator)`)
+#' decide it instead, so one resolver owns contrast direction for every
+#' enrichment method.
+#'
+#' `NULL` means the dataset-wide run, which is not tied to a contrast: there the
+#' alphabetical order is kept, and `direction` reports the subtraction it
+#' produced. But once a caller names a contrast it is asserting a direction, and
+#' falling back to the alphabet there would put an arbitrary sign under that
+#' contrast's label in the plot title, the filename and the exported table —
+#' exactly the failure this function exists to prevent. So an unusable
+#' `contrast_groups` aborts instead.
+#'
+#' @param values          Per-sample condition values, passed through as the
+#'   metadata column holds them (factor, numeric or character). Do not coerce
+#'   before calling: the no-contrast path's ordering depends on the type.
+#' @param contrast_groups `c(numerator, denominator)`, or `NULL` for the
+#'   dataset-wide run that is not tied to a contrast.
+#' @return A factor over `values` whose SECOND level is the contrast's
+#'   numerator, so `mean2 - mean1` reads numerator minus denominator.
+.metab_ssgsea_conditions <- function(values, contrast_groups = NULL) {
+    # No contrast named: nothing is being asserted about direction, so hand the
+    # column to factor() untouched and inherit its ordering exactly. That
+    # ordering is type-dependent and the dataset-wide path has always relied on
+    # it: a factor column keeps its declared level order, and a numeric one
+    # sorts numerically (2 before 10). Coercing to character first would sort
+    # both lexicographically, which silently flips `score_diff` on this path.
+    if (is.null(contrast_groups)) return(factor(values))
+
+    # From here the groups are compared against `contrast_groups`, which are
+    # the character values inputs$contrasts carries.
+    values  <- as.character(values)
+    present <- sort(unique(values[!is.na(values)]))
+
+    bad <- length(contrast_groups) != 2L || any(is.na(contrast_groups)) ||
+           !all(nzchar(contrast_groups))
+    if (bad) {
+        stop("metabolomics ssGSEA: contrast_groups must be two non-empty ",
+             "group names, c(numerator, denominator), as ",
+             ".resolve_contrast_groups() returns them; got ",
+             length(contrast_groups), " value(s) of class ",
+             class(contrast_groups)[1], ".", call. = FALSE)
+    }
+    # A missing label is the third-group hazard made invisible. `present` is
+    # built from the non-NA values, so an unlabelled sample registers as
+    # neither missing nor surplus and slips through both checks below; factor()
+    # then leaves it NA and `which(conditions == ...)` drops it from the
+    # Wilcoxon alone — after GSVA has already normalised across it. Two ways in:
+    # the column genuinely holds NA, or a scored sample's id did not match the
+    # metadata's sample column, which makes the match() lookup return NA.
+    n_na <- sum(is.na(values))
+    if (n_na > 0) {
+        stop("metabolomics ssGSEA: ", n_na, " of ", length(values),
+             " scored sample(s) carry no value in the contrast's grouping ",
+             "column. Either the column holds NA for them, or their ids did ",
+             "not match the metadata's sample column. GSVA has already ",
+             "normalised across those samples, so excluding them from the ",
+             "Wilcoxon step alone would not be the same comparison: fix the ",
+             "metadata, or subset `pre` before scoring.", call. = FALSE)
+    }
+    # Missing first: it is the more specific diagnosis. A group the samples do
+    # not carry also makes every real group look "extra", so checking extras
+    # first would report a wrong grouping column as surplus data.
+    #
+    # Plain quotes throughout, not sQuote(): useFancyQuotes defaults to TRUE,
+    # which would make the messages - and anything matching on them -
+    # locale-dependent.
+    missing <- setdiff(contrast_groups, present)
+    if (length(missing) > 0) {
+        stop("metabolomics ssGSEA: contrast group(s) ",
+             paste0("'", missing, "'", collapse = " and "),
+             " are not among the condition values of the samples being scored (",
+             paste(present, collapse = ", "),
+             "). The samples were subset to this contrast's two groups before ",
+             "scoring, so this means the grouping column disagrees with ",
+             "inputs$contrasts. Refusing to score rather than report an ",
+             "alphabetical sign under this contrast's name.", call. = FALSE)
+    }
+    # Naming the levels explicitly turns any OTHER group's samples into NA, and
+    # the two-group guard downstream cannot see that: it counts levels, and
+    # there would be exactly two. Those samples were already scored by GSVA,
+    # whose normalisation depends on the sample set, so dropping them from the
+    # test afterwards is a different analysis from the module's true two-group
+    # run. The caller subsets first (.subset_pre_to_groups); refuse if it did not.
+    extra <- setdiff(present, contrast_groups)
+    if (length(extra) > 0) {
+        stop("metabolomics ssGSEA: the samples being scored also carry group(s) ",
+             paste0("'", extra, "'", collapse = ", "),
+             " beyond this contrast's ",
+             paste0("'", contrast_groups, "'", collapse = " and "),
+             ". Subset `pre` to the contrast's two groups before scoring: GSVA ",
+             "normalises across the samples it is given, so excluding them only ",
+             "from the Wilcoxon step would not be the same comparison.",
+             call. = FALSE)
+    }
+    # level 1 = denominator, level 2 = numerator -> score_diff = num - den
+    factor(values, levels = c(contrast_groups[2], contrast_groups[1]))
 }
 
 

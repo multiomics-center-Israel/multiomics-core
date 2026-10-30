@@ -135,6 +135,18 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
         )
       ),
       
+      # ---- Enrichment on the Rubin-pooled ranking (opt-in; not consumed
+      #      by multiomics, which reads prot_pathway_res) ----
+      tar_target(
+        prot_pathway_pooled_res,
+        mod_proteomics_pathway_pooled(
+          de_res  = prot_de_res,
+          pre     = prot_pre,
+          config  = config,
+          out_dir = prot_out_dir
+        )
+      ),
+
       # ---- PPI network analysis ----
       tar_target(
         prot_ppi_res,
@@ -202,6 +214,7 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
         prot_report,
         {
           force(prot_pathway_res)
+          force(prot_pathway_pooled_res)
           force(prot_ppi_res)
           force(prot_domain_res)
           force(prot_adv_stats)

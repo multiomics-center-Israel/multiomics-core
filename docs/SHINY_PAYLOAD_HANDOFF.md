@@ -153,6 +153,16 @@ The block is validated by `validate_enrichment_payload()`.
   `<sample>.norm` columns of `de_final_table` are different: they hold the
   imputation the DE model was fitted on (its first draw), and can differ from
   `expr_norm` for cells that were imputed.
+
+  **With batch correction enabled** (`modes.proteomics.batch_correction.method`
+  `combat` or `probatch`), `expr_norm` holds the **batch-corrected** single draw,
+  for plotting. `expr_raw` holds the **measured, uncorrected** filtered values
+  (with `NA`). This changed with `batch_correction.de_mode`: before it,
+  `expr_raw` also carried the corrected values. The DE statistics come from
+  limma on the uncorrected values with batch as a covariate (the default when a
+  correction is enabled), so in an unbalanced design a fold change can differ
+  from a difference of group means read off either matrix. Only the explicit
+  `de_mode: legacy_corrected` fits on the corrected values.
 - **Metabolomics:** the normalized working matrix (`pre$expr_work`) in which any
   `NA` left after preprocessing is filled with the median of that feature.
   **This fill is for display in the app only.** The differential analysis uses

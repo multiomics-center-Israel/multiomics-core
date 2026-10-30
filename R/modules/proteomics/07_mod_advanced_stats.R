@@ -30,6 +30,18 @@ mod_proteomics_advanced_stats <- function(de_res, pre, inputs, config, out_dir) 
         extract_de_table_for_pathway(summary_df, cn, config)
     })
 
+    # These analyses fit their own models on the QC matrix: one imputation draw,
+    # batch-corrected when a correction ran, with no batch term. That is not the
+    # batch-adjusted inference DE performs, and until they model batch
+    # themselves (tracked separately) the run says so instead of presenting
+    # them as equivalent. The report carries the same caveat.
+    if (isTRUE(pre$batch_corrected)) {
+        warning("Advanced stats are computed on the batch-corrected single-imputation ",
+                "matrix without a batch term. Their intervals and p-values are not ",
+                "batch-adjusted inference and can be overconfident; use the DE results ",
+                "for inference.", call. = FALSE)
+    }
+
     run_advanced_stats(
         da_results      = de_tables,
         normalized_data = pre$expr_imp_single,

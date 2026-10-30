@@ -57,13 +57,39 @@ test_that("get_proteomics_batch_config applies defaults", {
     expect_false(bc$enabled)
     expect_equal(bc$batch_col, "Plate")        # falls back to qc$batch_col
     expect_true(bc$preserve_condition)
+    # qc$batch_col alone only colours QC plots; it must not put batch in DE.
+    expect_false(bc$corrects)
+    expect_equal(bc$de_mode, "none")
+    expect_false(bc$de_mode_explicit)
+})
+
+test_that("get_proteomics_batch_config refuses an unknown de_mode", {
+    for (m in c("model", "corrected", "")) {   # "corrected" was a draft name
+        cfg <- list(batch_correction = list(method = "combat", de_mode = m))
+        expect_error(get_proteomics_batch_config(cfg), "de_mode")
+    }
 })
 
 test_that("get_proteomics_batch_config enables implicitly when method set", {
     cfg <- list(batch_correction = list(method = "combat", batch_col = "Batch"))
     bc <- get_proteomics_batch_config(cfg)
     expect_true(bc$enabled)
+    expect_true(bc$corrects)
     expect_equal(bc$method, "combat")
+    # A correction that runs puts batch in the limma model by default.
+    expect_equal(bc$de_mode, "covariate")
+})
+
+test_that("de_mode defaults follow whether a correction runs, and explicit values win", {
+    resolve <- function(...) get_proteomics_batch_config(list(batch_correction = list(...)))
+    expect_equal(resolve(method = "combat", enabled = FALSE)$de_mode, "none")
+    expect_equal(resolve(method = "none", enabled = TRUE)$de_mode, "none")
+    expect_equal(resolve(method = "none", de_mode = "covariate")$de_mode, "covariate")
+    lg <- resolve(method = "probatch", de_mode = "legacy_corrected")
+    expect_equal(lg$de_mode, "legacy_corrected")
+    expect_true(lg$de_mode_explicit)
+    # Pure: resolving never warns, whatever the mode (validation owns that).
+    expect_silent(resolve(method = "combat", de_mode = "legacy_corrected"))
 })
 
 # --- Pass-through / dispatch ---
@@ -111,14 +137,15 @@ test_that("ComBat reduces the injected batch effect and is reproducible", {
 
     expect_true(out1$batch_corrected)
     expect_equal(out1$batch_method, "combat")
-    expect_equal(dim(out1$expr_filt), dim(pre$expr_filt))
-    # work / imputed matrices are propagated identically
-    expect_identical(out1$expr_work, out1$expr_filt)
-    expect_identical(out1$expr_imp_single, out1$expr_filt)
+    expect_equal(dim(out1$expr_imp_single), dim(pre$expr_filt))
+    # The two QC matrices carry the correction identically ...
+    expect_identical(out1$expr_work, out1$expr_imp_single)
+    # ... and the measured matrix is untouched.
+    expect_identical(out1$expr_filt, pre$expr_filt)
     # seeded -> deterministic
-    expect_identical(out1$expr_filt, out2$expr_filt)
+    expect_identical(out1$expr_imp_single, out2$expr_imp_single)
 
-    diff_after <- mean(out1$expr_filt[, b2]) - mean(out1$expr_filt[, !b2])
+    diff_after <- mean(out1$expr_imp_single[, b2]) - mean(out1$expr_imp_single[, !b2])
     expect_lt(abs(diff_after), abs(diff_before))
 })
 
@@ -144,9 +171,10 @@ test_that("probatch centers per-batch medians when available", {
     out <- correct_batch_proteomics(pre, config)
     expect_true(out$batch_corrected)
     expect_equal(out$batch_method, "probatch")
-    expect_equal(dim(out$expr_filt), dim(pre$expr_filt))
+    expect_equal(dim(out$expr_imp_single), dim(pre$expr_filt))
+    expect_identical(out$expr_filt, pre$expr_filt)
 
-    diff_after <- mean(out$expr_filt[, b2]) - mean(out$expr_filt[, !b2])
+    diff_after <- mean(out$expr_imp_single[, b2]) - mean(out$expr_imp_single[, !b2])
     expect_lt(abs(diff_after), abs(diff_before))
 })
 
@@ -202,27 +230,77 @@ test_that("correct_batch_proteomics rejects non-finite intensities before correc
     expect_error(correct_batch_proteomics(pre, config), "finite")
 })
 
-# --- expr_filt keeps its unimputed contract after correction (P1/P2) ---
+# --- Matrix contract: correction touches the QC matrices only ----------------
 
-test_that("batch correction restores the NA pattern in expr_filt", {
+test_that("batch correction leaves the measured matrices untouched", {
     skip_if_not_installed("sva")
     pre <- make_synth_prot(batch_shift = 6)
     # A missing-value pattern in the (unimputed) filtered matrix; expr_imp_single
     # stays complete, exactly as preprocess_proteomics() guarantees.
     miss <- cbind(c(1L, 5L, 10L), c(2L, 3L, 7L))  # (row, col) positions
     pre$expr_filt[miss] <- NA
+    pre$expr_filt_pre_imp <- pre$expr_filt
     config <- make_config(method = "combat", batch_col = "Batch", group_col = "Condition")
 
     out <- correct_batch_proteomics(pre, config, seed = 1)
 
-    # expr_filt keeps NAs exactly where they were; work/imputed are complete
-    expect_true(anyNA(out$expr_filt))
-    expect_equal(which(is.na(out$expr_filt)), which(is.na(pre$expr_filt)))
-    expect_false(anyNA(out$expr_work))
+    # Measured values -- the DE input, exports, CV, Shiny expr_raw -- as given.
+    expect_identical(out$expr_filt, pre$expr_filt)
+    expect_identical(out$expr_filt_pre_imp, pre$expr_filt_pre_imp)
+    # QC matrices: complete and corrected.
     expect_false(anyNA(out$expr_imp_single))
-    # observed positions carry the corrected values; expr_filt_pre_imp mirrors expr_filt
-    obs <- !is.na(out$expr_filt)
-    expect_equal(out$expr_filt[obs], out$expr_work[obs])
-    expect_identical(out$expr_filt_pre_imp, out$expr_filt)
+    expect_identical(out$expr_work, out$expr_imp_single)
+    obs <- !is.na(pre$expr_filt)
+    expect_false(isTRUE(all.equal(out$expr_imp_single[obs], pre$expr_filt[obs])))
+    # No parallel copy: the old draft's expr_filt_uncorrected is gone.
+    expect_null(out$expr_filt_uncorrected)
+})
+
+# --- Shiny payload contract (the Shiny app itself is not touched) -------------
+
+shiny_cfg <- function() {
+    list(modes = list(proteomics = list(
+        effects       = list(color = "Condition", samples = "SampleID"),
+        id_columns    = list(protein_id = "Protein.Group", sample_col = "SampleID"),
+        de_table      = list(id_col = "FeatureID"),
+        normalization = list(method = "none"),
+        de            = list()
+    )))
+}
+
+payload_for <- function(pre) {
+    suppressMessages(suppressWarnings(build_shiny_payload_proteomics(
+        pre = pre, de_res = list(), inputs = list(contrasts = NULL),
+        config = shiny_cfg(), final_results = NULL)))
+}
+
+test_that("Shiny expr_raw carries measured values and expr_norm the QC matrix", {
+    # Package-free: a corrected QC matrix that differs from the measured one
+    # everywhere, as after any correction.
+    pre <- make_synth_prot()
+    pre$expr_filt[cbind(c(2L, 4L), c(1L, 6L))] <- NA
+    pre$expr_imp_single <- pre$expr_imp_single - 3
+    pre$expr_work <- pre$expr_imp_single
+
+    p <- payload_for(pre)
+    expect_identical(p$expr_raw, pre$expr_filt)          # NAs where unmeasured
+    expect_identical(p$expr_norm, pre$expr_imp_single)   # complete QC matrix
+})
+
+test_that("after a real correction the Shiny payload splits measured from corrected", {
+    skip_if_not_installed("sva")
+    pre <- make_synth_prot(batch_shift = 6)
+    pre$expr_filt[cbind(c(2L, 4L), c(1L, 6L))] <- NA
+    out <- correct_batch_proteomics(
+        pre, make_config(method = "combat", batch_col = "Batch", group_col = "Condition"),
+        seed = 1)
+
+    p <- payload_for(out)
+    # Semantic change from the pre-de_mode contract, where expr_raw held the
+    # corrected values: it now holds what was measured.
+    expect_identical(p$expr_raw, pre$expr_filt)
+    expect_identical(p$expr_norm, out$expr_imp_single)
+    obs <- !is.na(pre$expr_filt)
+    expect_false(isTRUE(all.equal(p$expr_raw[obs], p$expr_norm[obs])))
 })
 

@@ -236,7 +236,8 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           render_rnaseq_report(
             run_dir     = rna_out_dir,
             config      = config,
-            config_file = config_file
+            config_file = config_file,
+            pre_info    = rna_pre$info
           )
         },
         format = "file"

@@ -51,6 +51,9 @@ test_that("each whole-section switch is read and gates its heading", {
     expect_true(grepl('`r if (has_group_dist) "# Sample Concordance Across Omics"`',
                       src, fixed = TRUE))
     expect_true(grepl("has_group_dist <- show_sample_concordance &&", src, fixed = TRUE))
+    # The group-distance figures are opt-in, unlike the other switches.
+    expect_true(grepl('show_group_distance     <- isTRUE(section_cfg[["group_distance"]])',
+                      src, fixed = TRUE))
     setup_at <- as.integer(regexpr("```{r group-dist-setup", src, fixed = TRUE))
     heading_at <- as.integer(regexpr('"# Sample Concordance Across Omics"', src, fixed = TRUE))
     expect_gt(setup_at, 0)
@@ -613,10 +616,16 @@ test_that("the loadings legends stay within 100 words with their caveat", {
     expect_lte(n_words(paste(ora$text, caveat)), 100)
 })
 
-test_that("the DIABLO variable loadings plot stays in the report", {
+test_that("the DIABLO variable and interactive loadings plots are gone", {
     src <- paste(template_lines(), collapse = "\n")
-    expect_true(grepl("diablo_variable_plot.png", src, fixed = TRUE))
-    expect_true(grepl("```{r diablo-variable-legend", src, fixed = TRUE))
+    for (gone in c("diablo_variable_plot", "diablo-variable-plot", "diablo-variable-legend",
+                   "diablo_loadings_interactive", "diablo-loadings-interactive",
+                   "Interactive Loadings Plot")) {
+        expect_false(grepl(gone, src, fixed = TRUE), info = gone)
+    }
+    diablo <- readLines(file.path(root_dir, "R", "domain", "multiomics",
+                                  "04_integration_diablo.R"), warn = FALSE)
+    expect_false(any(grepl("plotVar|plot_diablo_loadings_interactive", diablo)))
 })
 
 # ---- figures dropped on request --------------------------------------------

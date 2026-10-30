@@ -371,3 +371,267 @@ test_that("run_metabolomics_ssgsea does not read pre$expr_raw anymore", {
     # now derives from expr_work, not expr_raw.
     expect_equal(r_noise$scores, r_clean$scores)
 })
+
+
+# ==============================================================================
+# ssGSEA contrast direction
+#
+# score_diff is mean(level 2) - mean(level 1), so the LEVEL ORDER is the
+# reported direction. factor() orders alphabetically, which is unrelated to the
+# contrast: it happens to agree whenever the numerator sorts second, and
+# silently reports the opposite subtraction when it does not. The groups the
+# stage already resolved (c(Numerator, Denominator)) decide it instead.
+#
+# The shared fixture has groups "A" and "B" with the MOVER pathway elevated in
+# B, so "B - A" is the alphabet-agrees case and "A - B" is the one that must
+# flip.
+# ==============================================================================
+
+test_that(".metab_ssgsea_conditions puts the numerator second", {
+    v <- rep(c("B", "A"), each = 3)
+
+    # Numerator B: alphabet already agrees, so the order is unchanged...
+    expect_identical(levels(.metab_ssgsea_conditions(v, c("B", "A"))),
+                     c("A", "B"))
+    # ...numerator A: the order must be reversed, which is the whole fix.
+    expect_identical(levels(.metab_ssgsea_conditions(v, c("A", "B"))),
+                     c("B", "A"))
+    # No contrast (the dataset-wide run): alphabetical, as before.
+    expect_identical(levels(.metab_ssgsea_conditions(v, NULL)), c("A", "B"))
+})
+
+test_that(".metab_ssgsea_conditions aborts on unusable groups rather than falling back", {
+    v <- rep(c("B", "A"), each = 3)
+
+    # Naming a contrast asserts a direction. A group the data does not carry
+    # cannot establish one, and falling back to the alphabet would put an
+    # arbitrary sign under that contrast's label in the title, the filename and
+    # the exported table. The error names the groups and what was actually seen.
+    expect_error(.metab_ssgsea_conditions(v, c("B", "MISSING")),
+                 "'MISSING'.*not among the condition values")
+    expect_error(.metab_ssgsea_conditions(v, c("MISSING", "ALSO_MISSING")),
+                 "'MISSING' and 'ALSO_MISSING'")
+
+    # Malformed input is a caller bug, reported as such rather than as missing data.
+    expect_error(.metab_ssgsea_conditions(v, c("B", NA)), "two non-empty")
+    expect_error(.metab_ssgsea_conditions(v, "B"), "two non-empty")
+    expect_error(.metab_ssgsea_conditions(v, c("B", "")), "two non-empty")
+    expect_error(.metab_ssgsea_conditions(v, c("A", "B", "C")), "two non-empty")
+
+    # NULL is the documented "no contrast" case, not a mistake: no error, no warning.
+    expect_silent(.metab_ssgsea_conditions(v, NULL))
+})
+
+test_that(".metab_ssgsea_conditions refuses a third group instead of nulling it", {
+    # Naming the levels would turn the third group's samples into NA, and the
+    # two-group guard downstream counts LEVELS, so it would see exactly two and
+    # let the run proceed — on a GSVA matrix that had already scored all three.
+    v <- c(rep(c("B", "A"), each = 3), "C", "C")
+
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")),
+                 "also carry group\\(s\\) 'C'")
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")), "Subset `pre`")
+
+    # Without a contrast the third level stays visible, which is what lets the
+    # caller's "requires exactly 2 conditions" guard fire.
+    expect_identical(levels(.metab_ssgsea_conditions(v, NULL)), c("A", "B", "C"))
+
+    # A group that is absent is reported as absent, not as surplus data: the
+    # missing check has to run first, or a wrong grouping column would be
+    # described as extra groups.
+    expect_error(.metab_ssgsea_conditions(v, c("B", "MISSING")),
+                 "not among the condition values")
+})
+
+test_that(".metab_ssgsea_conditions refuses samples with no group label", {
+    # The same hazard as a third group, but invisible to both checks: `present`
+    # is built from the non-NA values, so an unlabelled sample is neither
+    # missing nor surplus. factor() then leaves it NA and the Wilcoxon drops it
+    # alone, after GSVA has already normalised across it.
+    v <- c(rep(c("B", "A"), each = 3), NA)
+
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")),
+                 "carry no value in the contrast's grouping column")
+    # The message counts them, so a reader knows the scale of the mismatch.
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")), "1 of 7")
+    # Both routes in produce NA and so are both caught: a column holding NA,
+    # and a scored sample whose id did not match the metadata (match() -> NA).
+    expect_error(.metab_ssgsea_conditions(c("A", "B", NA, NA), c("B", "A")),
+                 "2 of 4")
+
+    # The two diagnoses stay distinct: an unlabelled sample is not reported as
+    # a surplus group, and vice versa.
+    expect_error(.metab_ssgsea_conditions(v, c("B", "A")), "no value", fixed = TRUE)
+    expect_error(.metab_ssgsea_conditions(c("A", "B", "C"), c("B", "A")),
+                 "also carry group\\(s\\)")
+})
+
+test_that("the global ssGSEA path still tolerates unlabelled samples", {
+    # No contrast is named, so nothing is being asserted about direction and
+    # this path must behave exactly as it did before: NA stays out of the
+    # levels, which is what lets the caller's two-group guard see the real
+    # number of groups.
+    v <- c(rep(c("B", "A"), each = 3), NA)
+
+    expect_silent(cond <- .metab_ssgsea_conditions(v, NULL))
+    expect_identical(levels(cond), c("A", "B"))
+    expect_true(is.na(cond[length(cond)]))
+    expect_length(cond, length(v))
+
+    # Three real groups plus an unlabelled sample still read as three levels,
+    # so the "requires exactly 2 conditions" guard fires as it always has.
+    expect_identical(levels(.metab_ssgsea_conditions(c("A", "B", "C", NA), NULL)),
+                     c("A", "B", "C"))
+})
+
+test_that("the global path inherits factor()'s ordering, not a character sort", {
+    # `score_diff` is mean(level 2) - mean(level 1), so the level ORDER is the
+    # reported sign on this path too. factor()'s ordering is type-dependent,
+    # and the dataset-wide run has always relied on it. Coercing to character
+    # before building the factor would reorder both cases below and flip the
+    # sign of a result nothing in this PR is meant to touch.
+
+    # A factor column keeps its DECLARED order, which need not be alphabetical.
+    f <- factor(c("B", "A", "B", "A"), levels = c("B", "A"))
+    expect_identical(levels(.metab_ssgsea_conditions(f, NULL)), c("B", "A"))
+
+    # A numeric column sorts NUMERICALLY: 2 before 10, not "10" before "2".
+    expect_identical(levels(.metab_ssgsea_conditions(c(2, 10, 2, 10), NULL)),
+                     c("2", "10"))
+
+    # Unused declared levels are dropped, exactly as factor() does, so the
+    # two-group guard still counts the groups that are actually present.
+    f3 <- factor(c("B", "A"), levels = c("B", "A", "C"))
+    expect_identical(levels(.metab_ssgsea_conditions(f3, NULL)), c("B", "A"))
+
+    # A character column is unaffected: it sorted alphabetically before too.
+    expect_identical(levels(.metab_ssgsea_conditions(c("B", "A"), NULL)),
+                     c("A", "B"))
+
+    # With a contrast the groups decide, whatever the column's type: the
+    # numerator is level 2 even when the declared order says otherwise.
+    expect_identical(levels(.metab_ssgsea_conditions(f, c("A", "B"))),
+                     c("B", "A"))
+    expect_identical(levels(.metab_ssgsea_conditions(c(2, 10), c("2", "10"))),
+                     c("10", "2"))
+})
+
+test_that("a contrast whose groups are absent yields no ssGSEA result, not a signed one", {
+    skip_if_not_installed("GSVA")
+    skip_if_not_installed("withr")
+
+    fx <- .make_enrichment_fixture()
+    on.exit(unlink(fx$gmt), add = TRUE)
+
+    # Establish that this environment CAN score, so the expectation below is
+    # about the groups and not about a missing prerequisite returning NULL.
+    ok <- run_metabolomics_ssgsea(fx$pre, fx$config, contrast_groups = c("B", "A"))
+    skip_if(is.null(ok) || is.null(ok$table), "ssGSEA produced no table")
+
+    # The stage subsets the samples to the contrast's two groups before scoring,
+    # so a mismatch here means the grouping column disagrees with
+    # inputs$contrasts. The contrast must drop out, not come back signed by the
+    # alphabet.
+    expect_error(
+        run_metabolomics_ssgsea(fx$pre, fx$config,
+                                contrast_groups = c("B", "NOT_A_GROUP")),
+        "not among the condition values")
+})
+
+test_that(".metab_ssgsea_conditions keeps a >2-group column intact", {
+    # The caller refuses to test more than two groups; the helper must not
+    # quietly drop the third level and make it look like two.
+    v <- c("A", "B", "QC")
+    expect_identical(levels(.metab_ssgsea_conditions(v, NULL)),
+                     c("A", "B", "QC"))
+})
+
+test_that("ssGSEA reports score_diff in the contrast's direction, not the alphabet's", {
+    skip_if_not_installed("GSVA")
+    skip_if_not_installed("withr")
+
+    fx <- .make_enrichment_fixture()
+    on.exit(unlink(fx$gmt), add = TRUE)
+
+    r_none <- run_metabolomics_ssgsea(fx$pre, fx$config)
+    r_ba   <- run_metabolomics_ssgsea(fx$pre, fx$config, contrast_groups = c("B", "A"))
+    r_ab   <- run_metabolomics_ssgsea(fx$pre, fx$config, contrast_groups = c("A", "B"))
+    skip_if(is.null(r_none$table) || is.null(r_ba$table) || is.null(r_ab$table),
+            "ssGSEA produced no table")
+
+    key <- function(r) r$table[order(r$table$pathway), , drop = FALSE]
+    t_none <- key(r_none); t_ba <- key(r_ba); t_ab <- key(r_ab)
+
+    # Numerator B: the alphabet already agreed, so NOTHING may move.
+    expect_identical(t_ba$score_diff, t_none$score_diff)
+    expect_identical(t_ba$p_value, t_none$p_value)
+    expect_identical(t_ba$FDR, t_none$FDR)
+
+    # Numerator A: the sign must flip, and ONLY the sign.
+    expect_equal(t_ab$score_diff, -t_ba$score_diff)
+    expect_identical(t_ab$p_value, t_ba$p_value)      # Wilcoxon is symmetric
+    expect_identical(t_ab$FDR, t_ba$FDR)
+    expect_identical(t_ab$significant, t_ba$significant)
+    expect_identical(t_ab$pathway, t_ba$pathway)
+
+    # The reported direction travels with the numbers.
+    expect_identical(r_ba$direction, "B - A")
+    expect_identical(r_ab$direction, "A - B")
+
+    # Per-group mean columns are named after their group, so they never flip.
+    expect_equal(t_ab$mean_A, t_ba$mean_A)
+    expect_equal(t_ab$mean_B, t_ba$mean_B)
+})
+
+test_that("the per-contrast ssGSEA wrapper forwards the resolved groups", {
+    # The direction has to survive the module layer: the wrapper knew the
+    # contrast all along and used it only for the filename and the plot title,
+    # which is exactly how the label and the number came to disagree.
+    expect_true("groups" %in% names(formals(.mod_metab_ssgsea_contrast)))
+    expect_true("contrast_groups" %in% names(formals(run_metabolomics_ssgsea)))
+
+    # The column travels with the groups. A contrast carrying its own Factor
+    # was subset by THAT column, so sending the groups without it would have
+    # ssGSEA look them up in the configured condition column and find nothing.
+    expect_true("group_col" %in% names(formals(.mod_metab_ssgsea_contrast)))
+    expect_true("contrast_column" %in% names(formals(run_metabolomics_ssgsea)))
+
+    body_txt <- paste(deparse(body(.mod_metab_ssgsea_contrast)), collapse = " ")
+    expect_match(body_txt, "contrast_groups\\s*=\\s*groups")
+    expect_match(body_txt, "contrast_column\\s*=\\s*group_col")
+
+    # ...and the caller supplies both from the same resolver.
+    caller <- paste(deparse(body(mod_metabolomics_enrichment)), collapse = " ")
+    expect_match(caller, "groups\\s*=\\s*grp\\$groups")
+    expect_match(caller, "group_col\\s*=\\s*grp\\$group_col")
+})
+
+test_that("ssGSEA groups by the contrast's own Factor column when given one", {
+    skip_if_not_installed("GSVA")
+    skip_if_not_installed("withr")
+
+    fx <- .make_enrichment_fixture()
+    on.exit(unlink(fx$gmt), add = TRUE)
+
+    # A second grouping variable whose labels do NOT appear in the configured
+    # condition column — the shape of a contrast that carries its own Factor.
+    # Labels chosen to look nothing like QC/blank so the biological filter
+    # cannot drop them.
+    fx$pre$meta$run_batch <- rep(c("RUN1", "RUN2"),
+                                 length.out = nrow(fx$pre$meta))
+
+    # Without the column, the groups are looked up in `sample_type` and are not
+    # there: the contrast is refused rather than scored by the wrong variable.
+    expect_error(
+        run_metabolomics_ssgsea(fx$pre, fx$config,
+                                contrast_groups = c("RUN2", "RUN1")),
+        "not among the condition values")
+
+    # With it, the same groups resolve and the direction follows them.
+    res <- run_metabolomics_ssgsea(fx$pre, fx$config,
+                                   contrast_groups = c("RUN2", "RUN1"),
+                                   contrast_column = "run_batch")
+    skip_if(is.null(res) || is.null(res$table), "ssGSEA produced no table")
+    expect_identical(res$direction, "RUN2 - RUN1")
+    expect_true(all(c("mean_RUN1", "mean_RUN2") %in% names(res$table)))
+})

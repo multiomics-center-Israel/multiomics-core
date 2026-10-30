@@ -38,8 +38,10 @@ make_pathway_res_3b <- function() {
             GO_BP_partition_k_ora_simplify = ora_go),
         c1 = list(KEGG_gsea_fc = gsea_kegg, GO_BP_gsea_fc = gsea_go))
 
-    row_m <- function(a, d, g, it, ev, st, n, hs, sk) data.frame(
-        analysis = a, database = d, group = g, item = it, evaluated = ev,
+    row_m <- function(a, d, g, it, ev, st, n, hs, sk,
+                      sg = NA_character_, gt = NA_character_, gl = NA_character_) data.frame(
+        analysis = a, database = d, group = g, item = it,
+        subgroup = sg, group_type = gt, group_label = gl, evaluated = ev,
         status = st, n_significant = n, has_simplify = hs, storage_key = sk,
         stringsAsFactors = FALSE)
     manifest <- rbind(
