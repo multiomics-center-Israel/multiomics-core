@@ -1494,13 +1494,82 @@ cluster_enrichment_terms <- function(enrichment_df,
     result
 }
 
+#' Dotplot of the top pathways for one contrast and one analysis
+#'
+#' cameraPR results (\code{PValue}, \code{Direction}) are drawn against
+#' -log10(p-value) and coloured by direction, since cameraPR has no enrichment
+#' score. GSEA results (with an NES column) are drawn against NES, with red
+#' dashed lines at \code{nes_lines}; ORA results against -log10(p-value).
+#'
+#' @param top_pathways Data frame of the pathways to show, with \code{pathway_label}.
+#' @param contrast_name Contrast, used in the title.
+#' @param analysis_name Collection and method, used as the subtitle.
+#' @param nes_lines NES values to mark; NULL draws none.
+#' @return A ggplot object.
+pathway_dotplot <- function(top_pathways, contrast_name, analysis_name, nes_lines = c(-2, 2)) {
+    if (all(c("PValue", "Direction") %in% colnames(top_pathways))) {
+        # cameraPR has no enrichment score: plot significance, with the
+        # direction of the set's mean statistic as colour.
+        p <- ggplot2::ggplot(top_pathways,
+                             ggplot2::aes(x = -log10(PValue),
+                                          y = reorder(pathway_label, -log10(PValue)))) +
+            ggplot2::geom_point(ggplot2::aes(size = NGenes, color = Direction)) +
+            ggplot2::scale_color_manual(values = c(Up = "#b2182b", Down = "#2166ac"),
+                                        name = "Direction") +
+            ggplot2::labs(
+                title = paste("Top Pathways:", contrast_name),
+                subtitle = analysis_name,
+                x = "-log10(p-value)",
+                y = "",
+                size = "Gene Set Size"
+            ) +
+            ggplot2::theme_minimal() +
+            ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+    } else if ("NES" %in% colnames(top_pathways)) {
+        p <- ggplot2::ggplot(top_pathways,
+                             ggplot2::aes(x = NES, y = reorder(pathway_label, NES))) +
+            (if (length(nes_lines) > 0)
+                ggplot2::geom_vline(xintercept = nes_lines, linetype = "dashed",
+                                    colour = "red", linewidth = 0.4)) +
+            ggplot2::geom_point(ggplot2::aes(size = size, color = -log10(padj))) +
+            ggplot2::scale_color_gradient(low = "blue", high = "red", name = "-log10(padj)") +
+            ggplot2::labs(
+                title = paste("Top Pathways:", contrast_name),
+                subtitle = analysis_name,
+                x = "Normalized Enrichment Score",
+                y = "",
+                size = "Gene Set Size"
+            ) +
+            ggplot2::theme_minimal() +
+            ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+    } else {
+        p <- ggplot2::ggplot(top_pathways,
+                             ggplot2::aes(x = -log10(pvalue),
+                                          y = reorder(pathway_label, -log10(pvalue)))) +
+            ggplot2::geom_point(ggplot2::aes(size = overlap, color = -log10(padj))) +
+            ggplot2::scale_color_gradient(low = "blue", high = "red", name = "-log10(padj)") +
+            ggplot2::labs(
+                title = paste("Top Pathways:", contrast_name),
+                subtitle = analysis_name,
+                x = "-log10(p-value)",
+                y = "",
+                size = "Overlap"
+            ) +
+            ggplot2::theme_minimal() +
+            ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+    }
+    p
+}
+
 #' Generate pathway visualization dotplots
 #'
 #' @param pathway_results Output of run_pathway_analysis()
 #' @param output_dir Directory for PNG files
+#' @param nes_lines NES values marked with red dashed vertical lines on GSEA
+#'   (NES) dotplots, to set off the more pronounced enrichments. NULL draws none.
 #' @return Named list of plot file paths
 #' @export
-generate_pathway_plots <- function(pathway_results, output_dir) {
+generate_pathway_plots <- function(pathway_results, output_dir, nes_lines = c(-2, 2)) {
 
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     plot_files <- list()
@@ -1532,54 +1601,7 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
             # Truncate long names for display (max 60 characters)
             top_pathways$pathway_label <- substr(top_pathways[[label_col]], 1, 60)
 
-            if (all(c("PValue", "Direction") %in% colnames(top_pathways))) {
-                # cameraPR has no enrichment score: plot significance, with the
-                # direction of the set's mean statistic as colour.
-                p <- ggplot2::ggplot(top_pathways,
-                                     ggplot2::aes(x = -log10(PValue),
-                                                  y = reorder(pathway_label, -log10(PValue)))) +
-                    ggplot2::geom_point(ggplot2::aes(size = NGenes, color = Direction)) +
-                    ggplot2::scale_color_manual(values = c(Up = "#b2182b", Down = "#2166ac"),
-                                                name = "Direction") +
-                    ggplot2::labs(
-                        title = paste("Top Pathways:", contrast_name),
-                        subtitle = analysis_name,
-                        x = "-log10(p-value)",
-                        y = "",
-                        size = "Gene Set Size"
-                    ) +
-                    ggplot2::theme_minimal() +
-                    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
-            } else if ("NES" %in% colnames(top_pathways)) {
-                p <- ggplot2::ggplot(top_pathways,
-                                     ggplot2::aes(x = NES, y = reorder(pathway_label, NES))) +
-                    ggplot2::geom_point(ggplot2::aes(size = size, color = -log10(padj))) +
-                    ggplot2::scale_color_gradient(low = "blue", high = "red", name = "-log10(padj)") +
-                    ggplot2::labs(
-                        title = paste("Top Pathways:", contrast_name),
-                        subtitle = analysis_name,
-                        x = "Normalized Enrichment Score",
-                        y = "",
-                        size = "Gene Set Size"
-                    ) +
-                    ggplot2::theme_minimal() +
-                    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
-            } else {
-                p <- ggplot2::ggplot(top_pathways,
-                                     ggplot2::aes(x = -log10(pvalue),
-                                                  y = reorder(pathway_label, -log10(pvalue)))) +
-                    ggplot2::geom_point(ggplot2::aes(size = overlap, color = -log10(padj))) +
-                    ggplot2::scale_color_gradient(low = "blue", high = "red", name = "-log10(padj)") +
-                    ggplot2::labs(
-                        title = paste("Top Pathways:", contrast_name),
-                        subtitle = analysis_name,
-                        x = "-log10(p-value)",
-                        y = "",
-                        size = "Overlap"
-                    ) +
-                    ggplot2::theme_minimal() +
-                    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
-            }
+            p <- pathway_dotplot(top_pathways, contrast_name, analysis_name, nes_lines)
 
             plot_file <- file.path(output_dir,
                                    paste0("pathway_", clean_contrast, "_", clean_analysis, ".png"))
