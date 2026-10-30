@@ -356,6 +356,10 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
   # enabled — a disabled config never needs the Python venv. Runs on the built-in
   # human_mfn model by default; a custom model via model_ref/model_json (06d)
   # overrides it (required for non-human organisms).
+  #
+  # Its report sections and their standalone exports (05c) are core for the same
+  # reason: they are the stage's analytical outputs, so they belong with the
+  # stage rather than with the HTML report that happens to display them.
   if (isTRUE(mummichog_enabled)) {
     analysis_core <- c(analysis_core, list(
       # Per-contrast run as ONE format = "file" target: mod_mummichog_pinned()
@@ -395,12 +399,50 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         metab_mummichog_report_files,
         metab_mummichog_pinned_files,
         format = "file"
+      ),
+      # Per-contrast report sections (05c -> 06e): the ORA plot and table, the
+      # complementary GSEA and the supporting evidence, built once. A target of
+      # its own rather than a step inside the report module, so the exports
+      # below and the HTML report consume the SAME sections instead of each
+      # rebuilding them -- which also keeps the embedded plot and the exported
+      # PNG from drifting apart. Writes nothing. Holds ggplot objects, so it is
+      # transient in memory; the store keeps them as RDS.
+      tar_target(
+        metab_mummichog_sections,
+        mod_mummichog_sections(
+          pathways = metab_mummichog_report_pathways,
+          files    = metab_mummichog_report_files,
+          pre      = metab_pre,
+          de_res   = metab_de_res,
+          config   = config,
+          enrichment_res = metab_enrichment_res
+        ),
+        memory = "transient"
+      ),
+      # The sections' standalone exports. In the CORE targets beside the stage
+      # that produced them, not in the outputs block, because they are
+      # analytical artefacts rather than report furniture: they used to be
+      # written inside mod_metabolomics_report(), which made them conditional on
+      # `rmarkdown` and absent in multiomics mode (issue #306). A leaf -- nothing
+      # consumes it -- and format = "file" so a deleted export rebuilds just this
+      # target, without re-running the GSEA permutations behind it.
+      tar_target(
+        metab_mummichog_exports,
+        mod_mummichog_exports(
+          sections = metab_mummichog_sections,
+          files    = metab_mummichog_report_files,
+          out_dir  = metab_out_dir
+        ),
+        format = "file"
       )
     ))
   } else {
     analysis_core <- c(analysis_core, list(
       tar_target(metab_mummichog_report_pathways, NULL),
-      tar_target(metab_mummichog_report_files, NULL)
+      tar_target(metab_mummichog_report_files, NULL),
+      # Stable symbol for the report target in both branches; no exports target
+      # here, because a disabled stage has nothing to export.
+      tar_target(metab_mummichog_sections, NULL)
     ))
   }
 
@@ -502,8 +544,7 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         qc_comparison_file = NULL,
         qc_suite_files     = NULL,
         commentary_file    = metab_commentary,
-        mummichog_pathways = metab_mummichog_report_pathways,
-        mummichog_files    = metab_mummichog_report_files
+        mummichog_sections = metab_mummichog_sections
       ),
       format = "file"
     ),

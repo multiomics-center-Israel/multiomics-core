@@ -333,15 +333,17 @@ test_that("pipe_metabolomics adds the pinned mummichog targets only when enabled
   library(targets)
   on  <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = TRUE)
   off <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = FALSE)
-  # enabling adds _files (the format="file" per-contrast run) + _report_pathways
-  # (the read-back) = 2; disabled adds only the report alias (1) -> net +1
-  expect_equal(length(on) - length(off), 1L)
+  # enabling adds _pinned_files (the format="file" per-contrast run),
+  # _report_pathways, _report_files, _sections and _exports; disabled adds NULL
+  # stubs for _report_pathways, _report_files and _sections, and no exports
+  # target, since there is nothing to export -> net +2
+  expect_equal(length(on) - length(off), 2L)
 
   # the stage lives in analysis_core, so it is also present in multiomics runs
   # (skip_outputs = TRUE), matching the pre-switch behaviour
   mo_on  <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = TRUE)
   mo_off <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = FALSE)
-  expect_equal(length(mo_on) - length(mo_off), 1L)
+  expect_equal(length(mo_on) - length(mo_off), 2L)
 })
 
 test_that("mod_mummichog_pinned refuses a non-human organism without a model", {

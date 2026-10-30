@@ -503,3 +503,122 @@ test_that("orphan cleanup follows the de-duplicated slug, not the bare sanitise"
   expect_false(file.exists(stale_f))
   expect_true(file.exists(live_f))       # never the live section's own file
 })
+
+
+# =============================================================================
+# Issue #306: the target-ready wrappers (05c) that lift the sections and their
+# exports out of the HTML report module. The DAG side is asserted in
+# test-pipeline-orchestration.R; these cover what the two functions actually do.
+# =============================================================================
+
+test_that("mod_mummichog_exports writes exactly what save_mummichog_exports writes", {
+  skip_unless_gsea_deps()
+  fx   <- gsea_wiring_fixture(withr::local_tempdir())
+  secs <- build_mummichog_report_sections(
+    fx$pathways, fx$config, files = fx$files, de_res = fx$de_res,
+    model = fx$model)
+
+  via_wrapper <- withr::local_tempdir()
+  direct      <- withr::local_tempdir()
+
+  written <- mod_mummichog_exports(secs, fx$files, via_wrapper)
+
+  s <- secs[["HL_vs_LL"]]
+  expected <- save_mummichog_exports(s$plot, s$table, direct,
+                                     contrast_label = s$slug,
+                                     gsea      = s$gsea,
+                                     gsea_plot = s$gsea_plot,
+                                     evidence  = s$evidence,
+                                     summary   = s$summary)
+
+  # Same file set, same names -- the move must not rename or drop an export.
+  expect_setequal(basename(written), basename(expected))
+  expect_true(length(written) > 0)
+  expect_true(all(file.exists(written)))
+  expect_true(all(dirname(written) == file.path(via_wrapper, "mummichog_pinned")))
+})
+
+test_that("mod_mummichog_exports is a no-op when there are no sections", {
+  f   <- build_gsea_fixture(withr::local_tempdir())
+  out <- withr::local_tempdir()
+
+  expect_length(mod_mummichog_exports(NULL,   f$files, out), 0L)
+  expect_length(mod_mummichog_exports(list(), f$files, out), 0L)
+  expect_length(list.files(out, recursive = TRUE), 0L)
+})
+
+test_that("mod_mummichog_exports still sweeps a section-less contrast's stale GSEA", {
+  f    <- build_gsea_fixture(withr::local_tempdir())
+  out  <- withr::local_tempdir()
+  dest <- file.path(out, "mummichog_pinned")
+  dir.create(dest, recursive = TRUE, showWarnings = FALSE)
+
+  # A previous run's GSEA table for a contrast that produced no section this
+  # time. The by-name clearing inside save_mummichog_exports() never visits it,
+  # so the wrapper has to carry the orphan sweep across with the loop -- losing
+  # it would leave a stale table reading as current.
+  stale <- file.path(dest, "mummichog_gsea_table_HL_vs_LL.tsv")
+  file.create(stale)
+
+  expect_length(mod_mummichog_exports(list(), f$files, out), 0L)
+  expect_false(file.exists(stale))
+})
+
+test_that("mod_mummichog_exports consumes the sections and never rebuilds them", {
+  skip_unless_gsea_deps()
+  fx   <- gsea_wiring_fixture(withr::local_tempdir())
+  out  <- withr::local_tempdir()
+  secs <- build_mummichog_report_sections(
+    fx$pathways, fx$config, files = fx$files, de_res = fx$de_res,
+    model = fx$model)
+
+  # Booby-trap the builder AFTER the sections exist: a writer that recomputed
+  # them would re-run the GSEA permutations on every deleted export, and could
+  # produce a PNG that disagrees with the one the report embedded.
+  target <- environment(mod_mummichog_exports)
+  orig   <- get("build_mummichog_report_sections", envir = target)
+  assign("build_mummichog_report_sections",
+         function(...) stop("the exports target must not rebuild sections"),
+         envir = target)
+  withr::defer(assign("build_mummichog_report_sections", orig, envir = target))
+
+  written <- mod_mummichog_exports(secs, fx$files, out)
+  expect_true(length(written) > 0)
+  expect_true(all(file.exists(written)))
+})
+
+test_that("mod_mummichog_sections forwards row_data and the whole DE result", {
+  seen   <- NULL
+  target <- environment(mod_mummichog_sections)
+  orig   <- get("build_mummichog_report_sections", envir = target)
+  assign("build_mummichog_report_sections",
+         function(pathways_by_contrast, config, files = NULL, row_data = NULL,
+                  de_res = NULL, model = NULL, enrichment_res = NULL) {
+           seen <<- list(pathways = pathways_by_contrast, config = config,
+                         files = files, row_data = row_data, de_res = de_res,
+                         enrichment_res = enrichment_res)
+           list()
+         }, envir = target)
+  withr::defer(assign("build_mummichog_report_sections", orig, envir = target))
+
+  pre    <- list(row_data = data.frame(feature_id = c("f1", "f2")))
+  de_res <- list(method = "wilcoxon",
+                 de_tables = list(A_vs_B = data.frame(logFC = 1)))
+  pw     <- list(A_vs_B = data.frame(pathway = "P", `p-value` = 0.01,
+                                     check.names = FALSE))
+
+  enr    <- list(ora = data.frame(pathway = "P"))
+  mod_mummichog_sections(pathways = pw, files = "a.tsv", pre = pre,
+                         de_res = de_res, config = list(cfg = TRUE),
+                         enrichment_res = enr)
+
+  expect_identical(seen$pathways, pw)
+  # The Summary's "also supported by identified-metabolite enrichment" column.
+  expect_identical(seen$enrichment_res, enr)
+  expect_identical(seen$files, "a.tsv")
+  expect_identical(seen$row_data, pre$row_data)
+  # The WHOLE de_res, not just its tables: mmc_gsea_rank_metric() reads
+  # de_res$method to decide which column holds a signed statistic, so passing
+  # the tables alone would silently rank wilcoxon's unsigned W as if it were t.
+  expect_identical(seen$de_res, de_res)
+})

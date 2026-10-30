@@ -75,12 +75,14 @@ mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
 #' @param enrichment_res  List from mod_metabolomics_enrichment() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
-#' @param mummichog_files Flat character vector of every mummichog output file
-#'   across all contrasts (`metab_mummichog_report_files`). Supplying it
-#'   activates the supporting-evidence layer and the complementary GSEA, both of
-#'   which read the EmpiricalCompound tables the pathway tables alone do not
-#'   carry; omit it and the report shows the ORA plot and table only. GSEA
-#'   additionally needs `de_res`, whose `method` decides the ranking statistic.
+#' @param mummichog_sections Per-contrast mummichog sections from
+#'   `mod_mummichog_sections()` (`metab_mummichog_sections`), already carrying
+#'   the ORA plot and table, the complementary GSEA, the supporting evidence
+#'   and the Summary.
+#'   Built upstream rather than here so those analytical outputs — and the
+#'   standalone exports made from them — do not depend on `rmarkdown` or on this
+#'   report running at all (see issue #306). NULL or empty keeps the section
+#'   hidden.
 #' @return Character path to the rendered HTML file.
 mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     clustering_res = NULL,
@@ -91,8 +93,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     qc_comparison_file = NULL,
                                     qc_suite_files     = NULL,
                                     commentary_file    = NULL,
-                                    mummichog_pathways = NULL,
-                                    mummichog_files    = NULL) {
+                                    mummichog_sections = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
         return(character(0))
@@ -134,50 +135,11 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         }
     }
 
-    # Build per-contrast mummichog report sections (06e) from the per-contrast
-    # pathway tables. Empty list when mummichog is disabled or no contrast has a
-    # result, which keeps the report section hidden.
-    # `mummichog_files` and pre$row_data additionally activate the supporting-
-    # evidence layer (06f); without either, sections carry evidence = NULL and
-    # the report simply omits that tab.
-    # `de_res` activates the complementary GSEA (06g): it supplies both the
-    # ranking statistic and the DE method that decides which column that is.
-    # `enrichment_res` lets each contrast's Summary say whether a pathway is
-    # also supported by enrichment on identified metabolites.
-    mummi_sections <- build_mummichog_report_sections(
-        mummichog_pathways, config,
-        files    = mummichog_files,
-        row_data = pre$row_data,
-        de_res   = de_res,
-        enrichment_res = enrichment_res)
-
-    # Save standalone presentation exports per contrast (plots as PNG + PDF,
-    # tables as TSV + CSV: the ORA bubble and pathway table, the GSEA scatter
-    # and table, the three evidence tables when built, and the Summary) into
-    # mummichog_pinned/, named by the section's de-duplicated
-    # slug (so labels that collapse to the same token don't overwrite each
-    # other), in addition to embedding them in the HTML. The engine's mcg_*
-    # result files are untouched. Paths are returned so the file target tracks them.
-    mummi_exports <- character(0)
-    for (contrast in names(mummi_sections)) {
-        s <- mummi_sections[[contrast]]
-        mummi_exports <- c(mummi_exports,
-                           save_mummichog_exports(s$plot, s$table, out_dir,
-                                                  contrast_label = s$slug,
-                                                  gsea      = s$gsea,
-                                                  gsea_plot = s$gsea_plot,
-                                                  evidence  = s$evidence,
-                                                  summary   = s$summary))
-    }
-
-    # A contrast the stage ran but that produced no section never reaches the
-    # loop above, so the by-name GSEA and Summary clearing inside
-    # save_mummichog_exports()
-    # never runs for it and a previous run's table would survive. Clearing is
-    # safe for those contrasts because there is nothing of theirs to keep;
-    # whether they should get a GSEA analysis at all is a section-contract
-    # question, tracked separately.
-    clear_orphan_mummichog_gsea_exports(mummichog_files, mummi_sections, out_dir)
+    # The mummichog sections arrive built (05c / metab_mummichog_sections) and
+    # their standalone exports are written by their own target. This function
+    # only renders them, so a missing `rmarkdown` costs the reader the HTML and
+    # nothing else.
+    mummi_sections <- mummichog_sections %||% list()
 
     render_params <- list(
 
@@ -232,7 +194,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         })
     }
 
-    unique(c(out_file, mummi_exports))
+    out_file
 }
 
 
