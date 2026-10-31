@@ -56,6 +56,7 @@ There is no separate `normalization:` block.
 |---|---|
 | `chosen_norm` | `none`, `tss`, `median`, `pqn`, `eigenms`, `eigenms_forced`, `bio_factor`, or `null` |
 | `transform`, `pseudocount` | `transform` sets the log transform of `met_log`, so it affects only `median` and `none`. `tss`, `pqn`, `eigenms`, `eigenms_forced` and `bio_factor` always use `log2(x + pseudocount)` |
+| `pqn_reference` | PQN reference: `all_samples` (default) or `pooled_qc` (the samples flagged in `drift_correction.qc_flag_col`; at least 2, otherwise the run stops). Recorded in `info$normalization` and `normalization_applied.tsv`. Until this was made explicit, PQN used the flagged QC samples automatically whenever at least 2 were present, so such projects can give different results when rerun; set `pooled_qc` to keep that behaviour |
 | `scaling` | Optional feature scaling |
 | `drift_correction` | Optional LOESS signal-drift correction (QC samples + injection order). Opt-in: runs only with `enabled: true` |
 
