@@ -499,7 +499,13 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
     chosen_norm   = chosen_norm,
     drift_applied = drift_result$applied
   )
-  
+  # Record the PQN reference that was actually used; it reaches
+  # metab_pre$info and datasets/normalization_applied.tsv from here.
+  if (identical(chosen_norm, "pqn")) {
+    norm_info$pqn_reference           <- norm_pqn$pqn_reference
+    norm_info$pqn_reference_n_samples <- norm_pqn$pqn_reference_n_samples
+  }
+
   list(
     mat          = final_mat,
     mat_unscaled = mat_unscaled,
@@ -523,8 +529,13 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
 #'
 #' @param data   List returned by \code{mod_met_filtered()} (Linear scale).
 #' @param method Character: \code{"tss"} or \code{"pqn"}.
-#' @param config Full pipeline config list.
-#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
+#' @param config Full pipeline config list. For PQN,
+#'   \code{preprocessing.pqn_reference} selects the reference: \code{"all_samples"}
+#'   (default) or \code{"pooled_qc"} (the samples flagged in
+#'   \code{preprocessing.drift_correction.qc_flag_col}; at least 2 required).
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}; for
+#'   PQN also \code{pqn_reference} and \code{pqn_reference_n_samples}, the
+#'   reference actually used.
 #'
 mod_met_normalize_linear <- function(data, method, config) {
   method      <- tolower(method)
@@ -536,58 +547,42 @@ mod_met_normalize_linear <- function(data, method, config) {
   qc_col  <- dc_cfg$qc_flag_col %||% "is_QC"
   
   qc_idx <- NULL
-  
+  pqn_reference <- NULL
+
   if (method == "pqn") {
-    meta <- data$meta
-    
-    if (is.null(meta) || !qc_col %in% colnames(meta)) {
-      warning(sprintf(
-        "mod_met_normalize_linear: QC flag column '%s' not found; PQN will use all samples as reference.",
-        qc_col
-      ))
-    } else {
-      qc_flag <- isTRUE_vec(meta[[qc_col]])
-      idx <- which(qc_flag)
-      
-      if (length(idx) >= 2L) {
-        qc_idx <- idx
-      } else {
-        warning(sprintf(
-          "mod_met_normalize_linear: QC flag column '%s' has fewer than 2 QC samples; PQN will use all samples as reference.",
-          qc_col
-        ))
+    # The reference is an explicit choice, never inferred from the metadata:
+    # pooled QC samples are used only when pooled_qc is requested, and a request
+    # that cannot be met stops rather than falling back to all samples (#367).
+    pqn_reference <- tolower(norm_cfg$pqn_reference %||% "all_samples")
+    assert_one_of(pqn_reference, "preprocessing$pqn_reference",
+                  c("all_samples", "pooled_qc"))
+
+    if (pqn_reference == "pooled_qc") {
+      meta <- data$meta
+      if (is.null(meta) || !qc_col %in% colnames(meta)) {
+        stop(sprintf(paste0(
+          "mod_met_normalize_linear: preprocessing.pqn_reference = \"pooled_qc\" ",
+          "needs the QC flag column '%s' (preprocessing.drift_correction.qc_flag_col) ",
+          "in the sample metadata, and it is not there. Add that column, point ",
+          "qc_flag_col at the column that marks the pooled QC samples, or set ",
+          "pqn_reference: \"all_samples\"."), qc_col))
       }
+      idx <- which(isTRUE_vec(meta[[qc_col]]))
+      if (length(idx) < 2L) {
+        stop(sprintf(paste0(
+          "mod_met_normalize_linear: preprocessing.pqn_reference = \"pooled_qc\" ",
+          "needs at least 2 pooled QC samples, but QC flag column '%s' marks %d. ",
+          "Values are read as logical: TRUE / \"TRUE\" / \"true\" count, while ",
+          "\"yes\", \"1\" or \"qc\" do not. Fix the column, or set ",
+          "pqn_reference: \"all_samples\"."), qc_col, length(idx)))
+      }
+      qc_idx <- idx
     }
+    message(sprintf("mod_met_normalize_linear: PQN reference = %s (%d samples)",
+                    pqn_reference,
+                    if (is.null(qc_idx)) ncol(data$mat) else length(qc_idx)))
   }
-  
-  # PQN reference samples: use preprocessing.pqn_reference to specify
-  # which sample(s) to use as the reference spectrum (e.g. a QC pool).
-  # Options: a sample name, "pools" (auto-detect from is_QC/Pool columns),
-  #          "median_pool" (middle pool by injection order), or null (default: all).
-  pqn_ref <- norm_cfg$pqn_reference %||% NULL
-  ref_samples <- NULL
-  if (method == "pqn" && !is.null(pqn_ref)) {
-    if (tolower(pqn_ref) == "pools") {
-      # Auto-detect pool samples from metadata
-      ref_samples <- .detect_pool_samples(data$meta, config$modes$metabolomics)
-      if (length(ref_samples) > 0) {
-        message(sprintf("norm_pqn: using %d pool sample(s) as reference: %s",
-                        length(ref_samples), paste(ref_samples, collapse = ", ")))
-      }
-    } else if (tolower(pqn_ref) == "median_pool") {
-      pools <- .detect_pool_samples(data$meta, config$modes$metabolomics)
-      if (length(pools) > 0) {
-        # Pick the middle pool (by position in metadata / injection order)
-        mid_idx <- ceiling(length(pools) / 2)
-        ref_samples <- pools[mid_idx]
-        message(sprintf("norm_pqn: using median pool '%s' as single reference", ref_samples))
-      }
-    } else {
-      # Treat as explicit sample name(s)
-      ref_samples <- unlist(strsplit(as.character(pqn_ref), ",\\s*"))
-    }
-  }
-  
+
   mat_norm <- switch(method,
                      tss = norm_total_sum(data$mat),
                      pqn = norm_pqn(data$mat, qc_idx = qc_idx),
@@ -598,12 +593,17 @@ mod_met_normalize_linear <- function(data, method, config) {
   )
   
   mat_log <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
-  
-  list(
+
+  out <- list(
     mat      = mat_log,
     meta     = data$meta,
     row_data = data$row_data
   )
+  if (method == "pqn") {
+    out$pqn_reference           <- pqn_reference
+    out$pqn_reference_n_samples <- if (is.null(qc_idx)) ncol(data$mat) else length(qc_idx)
+  }
+  out
 }
 
 
