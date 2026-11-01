@@ -206,6 +206,52 @@ test_that("a polarity section keys DE and identified support back to its contras
                "HL vs LL, all features", fixed = TRUE)
 })
 
+test_that("a run label is split into contrast and polarity only in mixed mode", {
+  mode_cfg <- function(m) list(modes = list(metabolomics = list(enrichment = list(
+    mummichog = list(ionization_mode = m)))))
+  lab <- "X, positive ions"
+
+  mixed <- mmc_run_label_parts(lab, mode_cfg("mixed"))
+  expect_identical(mixed$contrast, "X")
+  expect_identical(mixed$polarity, "positive")
+
+  for (m in list("negative", "positive", "pos_default", NULL)) {
+    single <- mmc_run_label_parts(lab, mode_cfg(m))
+    expect_identical(single$contrast, lab)
+    expect_identical(single$polarity, NA_character_)
+  }
+})
+
+test_that("a single-polarity contrast named like a polarity label stays one contrast", {
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root, contrast_dir = "HL_vs_LL_positive_ions")
+  label <- "HL_vs_LL, positive ions"          # a user's own contrast name
+  readr::write_tsv(data.frame(dir = "HL_vs_LL_positive_ions", contrast = label),
+                   file.path(root, "mummichog_pinned", "contrasts.tsv"))
+
+  gmt <- file.path(root, "library.gmt")
+  writeLines(c("p1\tPW_pos\tC00001", "p2\tPW_mid\tC00009", "p3\tPW_neg\tC00017"), gmt)
+  cfg <- list(modes = list(metabolomics = list(enrichment = list(
+    gmt_file = gmt, mummichog = list(p_cutoff = 0.05, ionization_mode = "negative")))))
+  # Two DE tables: one under the full name, a decoy under the stripped name.
+  de_res <- list(method = "limma",
+                 de_tables = stats::setNames(list(f$de_table, f$de_table[0, ]),
+                                             c(label, "HL_vs_LL")))
+  enr <- list(qea_by_contrast = stats::setNames(list(list(res = list(
+    table = data.frame(pathway = "p1 - PW_pos", FDR = 0.01)))), label))
+
+  secs <- build_mummichog_report_sections(
+    stats::setNames(list(read_mummichog_pathways(f$files)), label), cfg,
+    files = f$files, de_res = de_res, model = f$model, enrichment_res = enr)
+
+  s <- secs[[label]]
+  expect_identical(s$polarity, NA_character_)
+  expect_match(s$subtitle, "HL vs LL, positive ions, all features", fixed = TRUE)
+  row <- s$summary[s$summary$Pathway == "PW_pos", , drop = FALSE]
+  expect_identical(row[["Identified-metabolite support"]], "QEA")
+  if (requireNamespace("fgsea", quietly = TRUE)) expect_false(is.null(s$gsea))
+})
+
 test_that("opposite-polarity features in the DE table cannot change mummichog GSEA", {
   skip_if_not_installed("fgsea")
   root <- withr::local_tempdir()

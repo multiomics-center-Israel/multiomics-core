@@ -181,7 +181,7 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
   }
   subtitle <- if (!is.null(contrast) && nzchar(contrast)) {
     # A mixed-mode run label names its polarity; say which features it covers.
-    lab   <- mmc_split_polarity_label(contrast)
+    lab   <- mmc_run_label_parts(contrast, config)
     scope <- if (is.na(lab$polarity)) "all features" else
       paste0(lab$polarity, "-ion features only")
     paste0(gsub("_vs_", " vs ", lab$contrast, fixed = TRUE), ", ", scope)
@@ -310,7 +310,7 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     # In mixed mode the section is one polarity of a DE contrast. The DE table
     # and the identified-metabolite results belong to the contrast, so they are
     # looked up by its name; single-polarity labels are the contrast itself.
-    lab         <- mmc_split_polarity_label(contrast)
+    lab         <- mmc_run_label_parts(contrast, config)
     de_contrast <- lab$contrast
     pw       <- pathways_by_contrast[[i]]
     if (is.null(pw) || !is.data.frame(pw) || nrow(pw) == 0) next

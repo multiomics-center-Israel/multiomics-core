@@ -99,3 +99,26 @@ mmc_split_polarity_label <- function(label) {
   list(contrast = ifelse(hit, sub(rx, "\\1", label), label),
        polarity = ifelse(hit, sub(rx, "\\2", label), NA_character_))
 }
+
+#' Resolve a mummichog run label to its DE contrast and polarity
+#'
+#' The one place the report decides whether a run label is a polarity run. Only
+#' a mixed-mode stage writes polarity labels, so the label is split only when
+#' `ionization_mode` is `mixed` -- read as `mod_mummichog_pinned()` reads it. In
+#' any other mode the label is the contrast itself, even when a contrast's own
+#' name happens to end in ", positive ions".
+#'
+#' @param label  Character vector of run labels.
+#' @param config Full pipeline config.
+#' @return `list(contrast, polarity)`, as `mmc_split_polarity_label()`.
+#' @examples
+#' cfg <- list(modes = list(metabolomics = list(enrichment = list(
+#'   mummichog = list(ionization_mode = "mixed")))))
+#' mmc_run_label_parts("A_vs_B, positive ions", cfg)
+mmc_run_label_parts <- function(label, config) {
+  mode <- config$modes$metabolomics$enrichment$mummichog$ionization_mode %||% ""
+  if (identical(tolower(as.character(mode)), "mixed")) {
+    return(mmc_split_polarity_label(label))
+  }
+  list(contrast = label, polarity = rep(NA_character_, length(label)))
+}
