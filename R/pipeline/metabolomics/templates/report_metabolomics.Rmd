@@ -2604,7 +2604,14 @@ for (contrast in names(mummi_sections)) {
               .MMC_SUMMARY_TOP_N, p_cut))
   pol <- s$polarity %||% NA_character_
   if (!is.na(pol)) {
-    both <- length(mummi_polarities) == 2L
+    # Sibling tabs are per contrast: one contrast can have both polarity tabs
+    # while another has only one, so the report-wide set cannot decide this.
+    base <- mmc_split_polarity_label(contrast)$contrast
+    same <- vapply(names(mummi_sections), function(n)
+      identical(mmc_split_polarity_label(n)$contrast, base), logical(1))
+    sibs <- vapply(mummi_sections[same], function(x) x$polarity %||% NA_character_,
+                   character(1))
+    both <- all(c("positive", "negative") %in% sibs)
     cat(sprintf("This tab covers **%s-ion features only**. The **Identified-metabolite support** column is **contrast-level evidence** from enrichment on identified metabolites across the **%s**; it is not specific to %s-ion features.%s\n\n",
                 pol, if (both) "full dataset (both polarities)" else "full dataset",
                 pol, if (both) " It is the same in the positive- and negative-ion tabs." else ""))

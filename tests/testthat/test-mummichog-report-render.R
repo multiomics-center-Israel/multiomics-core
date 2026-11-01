@@ -491,6 +491,24 @@ test_that("a one-polarity mixed run describes only the polarity that ran", {
   expect_false(grepl("HL vs LL, negative ions", html, fixed = TRUE))
 })
 
+test_that("a tab claims a sibling polarity tab only when its own contrast has one", {
+  skip_unless_renderable()
+
+  # Report-wide both polarities ran, but no single contrast has both tabs.
+  a <- render_mixed_sections("positive")
+  b <- render_mixed_sections("negative")
+  b[[1]]$slug <- "XX_vs_YY_negative_ions"
+  secs <- c(a, stats::setNames(b, mmc_polarity_label("XX_vs_YY", "negative")))
+
+  html <- render_mummichog_section(secs, withr::local_tempdir(), MIXED_RENDER_CFG)
+
+  expect_match(html, "This report has results for <strong>both polarities</strong>",
+               fixed = TRUE)
+  expect_match(html, "XX vs YY, negative ions", fixed = TRUE)
+  expect_false(grepl("same in the positive- and negative-ion tabs", html, fixed = TRUE))
+  expect_false(grepl("full dataset (both polarities)", html, fixed = TRUE))
+})
+
 test_that("a single-polarity run renders no mixed-polarity text", {
   skip_unless_renderable()
 
