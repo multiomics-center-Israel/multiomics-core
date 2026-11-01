@@ -263,7 +263,20 @@ modes:
         p_cutoff: 0.05
         n_permutations: 100
         tolerance_ppm: 10
-        ionization_mode: pos_default   # pos_default | positive | negative
+        ionization_mode: pos_default   # pos_default | positive | negative | mixed
+
+        # Mixed-polarity data (ionization_mode: mixed). mummichog runs one
+        # ionization mode per run, so each contrast is run once per polarity:
+        # positive-ion features in positive_mode, negative-ion features in
+        # "negative", each against only its own polarity's features. Both keys
+        # are REQUIRED in mixed mode; nothing is assumed.
+        #   polarity_column: annotation column giving each feature's polarity,
+        #     as an ion label ending in its charge sign ([M+H]+1, [M-2H]2-) or
+        #     the word positive/negative. A missing or unreadable value stops
+        #     the stage.
+        #   positive_mode: pos_default (8 ion forms) | positive (25 ion forms)
+        # polarity_column: "Reference Ion"
+        # positive_mode: positive
 
         # Force primary ion (mummichog's -z). mummichog 2.7.0 REQUIRES a primary
         # ion (M+H[+] / M-H[-]) to be present before accepting a metabolite

@@ -2493,6 +2493,14 @@ n_perm  <- mummi_cfg$n_permutations %||% 100
 cat("## Methodology\n\n")
 cat("**Mummichog pathway analysis.** [Mummichog](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) complements pathway enrichment based on identified metabolites by using LC–MS features **without requiring a confident metabolite identity for every feature**.\n\n")
 cat("Mummichog groups compatible LC–MS signals into **EmpiricalCompounds (ECs)**, links them to possible metabolite identities and metabolic pathways, and tests whether particular pathways receive more support than expected by chance. Each contrast is analysed independently using that contrast's differential-abundance results.\n\n")
+# Described from the sections that were built, not from the config switch.
+mummi_polarities <- unique(stats::na.omit(vapply(
+  mummi_sections, function(s) s$polarity %||% NA_character_, character(1))))
+if (length(mummi_polarities) > 0) {
+  cat(sprintf("**Mixed-polarity data.** Positive- and negative-ion features were analysed as **separate Mummichog runs** for each contrast, with each feature's polarity read from the `%s` column: positive-ion features in Mummichog's `%s` mode and negative-ion features in its `negative` mode. Each run uses **only the features of its own polarity** — as its background and as its significant list — and has its own tab (*%s*). The two runs' p-values are **not combined**, and Mummichog ORA p-values are not adjusted across pathways; where GSEA reports an FDR, it is computed within that polarity's run only.\n\n",
+              mummi_cfg$polarity_column %||% "?", mummi_cfg$positive_mode %||% "?",
+              paste(mummi_polarities, "ions", collapse = " / ")))
+}
 
 cat("Two complementary analyses are reported:\n\n")
 cat(sprintf("- **ORA** tests whether ECs supported by features with **unadjusted DE p-value below the configured Mummichog cutoff (p < %s)** are over-represented in particular pathways. This ORA input does not use the main DE adjusted-p-value or logFC cutoff. Mummichog ORA reports empirical raw pathway p-values; no adjusted pathway p-value is reported.\n", p_cut))
@@ -2586,6 +2594,11 @@ for (contrast in names(mummi_sections)) {
   cat("### Summary\n\n")
   cat(sprintf("Top %d Mummichog pathways for this contrast, ranked by the smaller raw p-value from ORA or GSEA. Nominal p < %g indicates a pathway-level Mummichog signal; the complete ORA and GSEA results are under **Advanced / Downloads**.\n\n",
               .MMC_SUMMARY_TOP_N, p_cut))
+  pol <- s$polarity %||% NA_character_
+  if (!is.na(pol)) {
+    cat(sprintf("This tab covers **%s-ion features only**. The **Identified-metabolite support** column is **contrast-level evidence** from enrichment on identified metabolites across the **full dataset (both polarities)**: it is the same in the positive- and negative-ion tabs and is not specific to %s-ion features.\n\n",
+                pol, pol))
+  }
   if (is.null(s$summary)) {
     cat("The Summary could not be built for this contrast; the full results are under **Advanced / Downloads**.\n\n")
   } else if (nrow(s$summary) == 0) {
