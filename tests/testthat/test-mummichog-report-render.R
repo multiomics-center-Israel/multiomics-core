@@ -156,7 +156,7 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE,
 
 # Build and knit a harness Rmd made of the template's own setup + mummichog
 # chunks. Returns the rendered HTML as a single string.
-render_mummichog_section <- function(sections, dir) {
+render_mummichog_section <- function(sections, dir, mummichog_cfg = list()) {
   tmpl <- readLines(METAB_TEMPLATE, warn = FALSE)
   chunks <- c(
     extract_chunk(tmpl, "setup"),
@@ -187,9 +187,9 @@ render_mummichog_section <- function(sections, dir) {
     project = list(name = "Test", analyst = "Tester", analysis_round = "A01"),
     modes = list(metabolomics = list(
       organism = "Coelastrella",
-      enrichment = list(mummichog = list(
+      enrichment = list(mummichog = utils::modifyList(list(
         enabled = TRUE, p_cutoff = 0.05, tolerance_ppm = 10,
-        n_permutations = 100))))
+        n_permutations = 100), mummichog_cfg))))
   )
 
   # Mirror the report module: render in a child of an environment holding the
@@ -427,4 +427,94 @@ test_that("the mummichog section renders with no results at all", {
   expect_false(grepl('id="gsea-plot"', html, fixed = TRUE))
   expect_false(grepl('id="ora-plot"', html, fixed = TRUE))
   expect_false(grepl('id="pathway-evidence"', html, fixed = TRUE))
+})
+
+
+# ---- mixed polarity (ionization_mode: mixed) ----------------------------------
+
+# One section per polarity of one contrast, labelled as the stage labels them.
+render_mixed_sections <- function(polarities) {
+  base <- render_fixture_sections(with_gsea = FALSE, with_evidence = FALSE)[[1]]
+  secs <- lapply(polarities, function(p) {
+    s <- base
+    s$subtitle <- sprintf("HL vs LL, %s-ion features only", p)
+    s$polarity <- p
+    s$slug     <- paste0("HL_vs_LL_", p, "_ions")
+    s
+  })
+  stats::setNames(secs, mmc_polarity_label("HL_vs_LL", polarities))
+}
+MIXED_RENDER_CFG <- list(ionization_mode = "mixed",
+                         polarity_column = "Reference Ion",
+                         positive_mode   = "positive")
+
+test_that("a two-polarity mixed run renders a tab per polarity and says both ran", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(render_mixed_sections(c("positive", "negative")),
+                                   withr::local_tempdir(), MIXED_RENDER_CFG)
+
+  expect_match(html, "HL vs LL, positive ions", fixed = TRUE)
+  expect_match(html, "HL vs LL, negative ions", fixed = TRUE)
+  expect_match(html, "This report has results for <strong>both polarities</strong>",
+               fixed = TRUE)
+  expect_match(html, "<code>positive</code> mode", fixed = TRUE)
+  expect_match(html, "negative-ion features in its <code>negative</code> mode",
+               fixed = TRUE)
+  expect_match(html, "<strong>never combined across polarities</strong>", fixed = TRUE)
+  expect_match(html, "This tab covers <strong>positive-ion features only</strong>",
+               fixed = TRUE)
+  expect_match(html, "This tab covers <strong>negative-ion features only</strong>",
+               fixed = TRUE)
+  expect_match(html, "<strong>contrast-level evidence</strong>", fixed = TRUE)
+  expect_match(html, "<strong>full dataset (both polarities)</strong>", fixed = TRUE)
+  expect_match(html, "It is the same in the positive- and negative-ion tabs.",
+               fixed = TRUE)
+})
+
+test_that("a one-polarity mixed run describes only the polarity that ran", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(render_mixed_sections("positive"),
+                                   withr::local_tempdir(), MIXED_RENDER_CFG)
+
+  expect_match(html, "This report has results for <strong>positive-ion features only</strong>",
+               fixed = TRUE)
+  expect_match(html, "This tab covers <strong>positive-ion features only</strong>",
+               fixed = TRUE)
+  expect_match(html, "<strong>full dataset</strong>; it is not specific to positive-ion features",
+               fixed = TRUE)
+  # Nothing may claim a negative-ion run or a second tab that did not happen.
+  expect_false(grepl("both polarities", html, fixed = TRUE))
+  expect_false(grepl("same in the positive- and negative-ion tabs", html, fixed = TRUE))
+  expect_false(grepl("negative-ion features in its", html, fixed = TRUE))
+  expect_false(grepl("HL vs LL, negative ions", html, fixed = TRUE))
+})
+
+test_that("a tab claims a sibling polarity tab only when its own contrast has one", {
+  skip_unless_renderable()
+
+  # Report-wide both polarities ran, but no single contrast has both tabs.
+  a <- render_mixed_sections("positive")
+  b <- render_mixed_sections("negative")
+  b[[1]]$slug <- "XX_vs_YY_negative_ions"
+  secs <- c(a, stats::setNames(b, mmc_polarity_label("XX_vs_YY", "negative")))
+
+  html <- render_mummichog_section(secs, withr::local_tempdir(), MIXED_RENDER_CFG)
+
+  expect_match(html, "This report has results for <strong>both polarities</strong>",
+               fixed = TRUE)
+  expect_match(html, "XX vs YY, negative ions", fixed = TRUE)
+  expect_false(grepl("same in the positive- and negative-ion tabs", html, fixed = TRUE))
+  expect_false(grepl("full dataset (both polarities)", html, fixed = TRUE))
+})
+
+test_that("a single-polarity run renders no mixed-polarity text", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(render_fixture_sections(with_gsea = FALSE,
+                                                           with_evidence = FALSE),
+                                   withr::local_tempdir())
+  expect_false(grepl("Mixed-polarity data", html, fixed = TRUE))
+  expect_false(grepl("This tab covers", html, fixed = TRUE))
 })

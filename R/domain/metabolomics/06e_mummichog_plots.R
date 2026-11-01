@@ -180,7 +180,11 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
     contrast <- names(de_res$de_tables)[1]
   }
   subtitle <- if (!is.null(contrast) && nzchar(contrast)) {
-    paste0(gsub("_vs_", " vs ", contrast, fixed = TRUE), ", all features")
+    # A mixed-mode run label names its polarity; say which features it covers.
+    lab   <- mmc_run_label_parts(contrast, config)
+    scope <- if (is.na(lab$polarity)) "all features" else
+      paste0(lab$polarity, "-ion features only")
+    paste0(gsub("_vs_", " vs ", lab$contrast, fixed = TRUE), ", ", scope)
   } else {
     NULL
   }
@@ -252,8 +256,9 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #'   mummichog pathway is also supported there. Omit it and every comparable
 #'   pathway reads "Not tested".
 #' @return A named list keyed by contrast, each `list(title, subtitle, plot,
-#'   table, gsea, gsea_plot, evidence, summary, slug)`. `summary` is the table
-#'   from `build_mummichog_summary()`. `slug` is a filesystem-safe,
+#'   table, gsea, gsea_plot, evidence, summary, polarity, slug)`. `summary` is
+#'   the table from `build_mummichog_summary()`. `polarity` is `"positive"` or
+#'   `"negative"` for a mixed-mode run and `NA` otherwise. `slug` is a filesystem-safe,
 #'   de-duplicated token for the contrast (mirrors the engine's per-contrast
 #'   directory naming) so the standalone exports never collide. `plot` remains
 #'   the ORA bubble and keeps its meaning; `gsea` is the result list from
@@ -302,6 +307,11 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
   sections <- list()
   for (i in seq_along(pathways_by_contrast)) {
     contrast <- nms[[i]]
+    # In mixed mode the section is one polarity of a DE contrast. The DE table
+    # and the identified-metabolite results belong to the contrast, so they are
+    # looked up by its name; single-polarity labels are the contrast itself.
+    lab         <- mmc_run_label_parts(contrast, config)
+    de_contrast <- lab$contrast
     pw       <- pathways_by_contrast[[i]]
     if (is.null(pw) || !is.data.frame(pw) || nrow(pw) == 0) next
     ttl  <- mummichog_report_titles(config, contrast = contrast)
@@ -333,7 +343,7 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     # finding about the data.
     gsea <- NULL
     if (gsea_enabled && !is.null(cfiles) && !is.null(model)) {
-      de_tbl <- .mmc_de_table_for_contrast(de_res, contrast)
+      de_tbl <- .mmc_de_table_for_contrast(de_res, de_contrast)
       if (is.null(de_tbl)) {
         # Not silent: the stage ran this contrast, so losing GSEA here is a
         # mapping failure the reader should see, not "GSEA not applicable".
@@ -382,13 +392,14 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     summary <- build_mummichog_summary(
       tbl, gsea_table = gsea$table, evidence = evidence,
       pathway_ids = model$pathway_ids,
-      identified  = mmc_identified_support(enrichment_res, contrast),
+      identified  = mmc_identified_support(enrichment_res, de_contrast),
       library_ids = library_ids, p_cutoff = p_cut)
 
     sections[[contrast]] <- list(title = ttl$title, subtitle = ttl$subtitle,
                                  plot = plot, table = tbl,
                                  gsea = gsea, gsea_plot = gsea_plot,
-                                 evidence = evidence, summary = summary)
+                                 evidence = evidence, summary = summary,
+                                 polarity = lab$polarity)
   }
 
   # Assign a de-duplicated, filesystem-safe slug per section (same sanitise +

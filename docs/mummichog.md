@@ -53,7 +53,7 @@ modes:
         p_cutoff: 0.05
         n_permutations: 100
         tolerance_ppm: 10
-        ionization_mode: pos_default   # pos_default | positive | negative
+        ionization_mode: pos_default   # pos_default | positive | negative | mixed (see below)
         force_primary_ion: true        # require a primary ion; false allows non-primary adducts
 ```
 
@@ -69,6 +69,20 @@ tar_make(names = tidyselect::starts_with("met"))
 > **Per-contrast:** mummichog runs **independently for each differential-abundance contrast** (each contrast's own p-values define its significant set against all features, sharing one model + params). Every contrast with a result renders as its own tab in the HTML report's mummichog section and gets its own files on disk (see below).
 >
 > **Organism:** the built-in model is **human only**. A non-human `modes.metabolomics.organism` with no custom model is rejected with a clear error rather than silently run against the human network — supply an organism-specific model (see below).
+
+## Mixed-polarity data
+
+mummichog runs **one ionization mode per run** and matches every submitted m/z against that mode's ion forms; it never reads a feature's own ion label. A single mode over a table that holds both positive- and negative-ion features therefore matches the other polarity's features against the wrong ion forms. For such data, set:
+
+``` yaml
+        ionization_mode: mixed
+        polarity_column: "Reference Ion"   # required
+        positive_mode: positive            # required: pos_default | positive
+```
+
+Each contrast is then run **once per polarity**: the positive-ion features in `positive_mode`, the negative-ion features in `negative`, each with **only its own polarity's features** as background and significant list. Polarity is read per feature from `polarity_column` — an ion label ending in its charge sign (`[M+H]+1`, `[M-H]-1`, `[M-2H]2-`, `[M]+`) or the word `positive`/`negative`. A missing column, or any feature whose polarity cannot be read, **stops the stage**; no polarity is assumed. A polarity with no features is skipped with a message and the other still runs.
+
+Each run is its own unit, labelled `<contrast>, positive ions` / `<contrast>, negative ions`: its own directory (`mummichog_pinned/<contrast>_positive_ions/`), its own report tab and its own export suffix. The two runs' p-values are not combined. The identified-metabolite support shown in each tab is contrast-level (full dataset), not polarity-specific. Single-polarity modes (`pos_default`, `positive`, `negative`) behave exactly as before.
 
 ## Choosing a metabolic model
 

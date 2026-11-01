@@ -93,6 +93,12 @@
 #' significant set against all features, using a single global model + params.
 #' Knobs are read from config$modes$metabolomics$enrichment$mummichog.
 #'
+#' With `ionization_mode: mixed`, each contrast runs once per ion polarity, read
+#' per feature from `polarity_column` (see `mmc_feature_polarity()`): the
+#' positive-ion features in `positive_mode`, the negative-ion features in
+#' `negative`, each against only its own polarity's features. The run labels
+#' (`"<contrast>, positive ions"`) key the output dirs and report tabs.
+#'
 #' @param pre     Preprocessing results; uses `pre$row_data` for m/z and RT.
 #' @param de_res  DE results from mod_metabolomics_de(); each contrast in
 #'                `de_tables` (falls back to summary_df, or a bare data.frame) is
@@ -129,6 +135,20 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     "negative" = "negative",
     "pos_default"
   )
+  # Mixed polarity: one run per contrast x polarity, each with its own mode.
+  # mummichog has a single negative list; the positive list is an explicit
+  # choice because the two differ (pos_default: 8 ion forms, positive: 25).
+  mixed <- identical(tolower(as.character(ion_mode)), "mixed")
+  if (mixed) {
+    pos_mode <- tolower(as.character(mummi_cfg$positive_mode %||% ""))
+    if (length(pos_mode) != 1L || !pos_mode %in% c("pos_default", "positive")) {
+      .mmc_stop("ionization_mode 'mixed' needs positive_mode: \"pos_default\" ",
+                "or \"positive\" -- the mummichog mode for the positive-ion ",
+                "features. Got '", paste(mummi_cfg$positive_mode, collapse = ", "),
+                "'.")
+    }
+    mode_by_polarity <- c(positive = pos_mode, negative = "negative")
+  }
   # Optional mummichog -z (force primary ion). NULL when unset -> mummichog
   # 2.7.0's default (require a primary ion); set false to allow non-primary
   # adducts. Passed through to run_mummichog_v2().
@@ -169,6 +189,12 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   if (!"feature_id" %in% names(row_data)) {
     row_data$feature_id <- mmc_feature_ids(row_data)
   }
+  # Resolved before anything runs: an unreadable polarity stops the stage.
+  polarity <- if (mixed) {
+    mmc_feature_polarity(row_data, mummi_cfg$polarity_column)
+  } else {
+    NULL
+  }
 
   # -- Resolve the set of contrasts to run ------------------------------------
   # Each contrast runs mummichog INDEPENDENTLY: its own DE p-values define the
@@ -188,6 +214,38 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     contrast_names <- paste0("contrast_", seq_along(de_tables))
   }
 
+  # -- Run units: one per contrast, or one per contrast x polarity ------------
+  # A polarity unit carries only that polarity's features, so the join inside
+  # .mmc_run_one_contrast() makes them its complete background.
+  units <- list()
+  for (i in seq_along(de_tables)) {
+    if (!mixed) {
+      units[[length(units) + 1L]] <- list(label = contrast_names[[i]],
+                                          de    = de_tables[[i]],
+                                          rows  = row_data,
+                                          mode  = mode_flag)
+      next
+    }
+    for (p in c("positive", "negative")) {
+      rows_p <- row_data[polarity == p, , drop = FALSE]
+      if (nrow(rows_p) == 0L) {
+        message("mummichog (pinned): contrast '", contrast_names[[i]],
+                "': no ", p, "-ion features in '", mummi_cfg$polarity_column,
+                "' -- only the other polarity is analysed")
+        next
+      }
+      units[[length(units) + 1L]] <- list(
+        label = mmc_polarity_label(contrast_names[[i]], p),
+        de    = de_tables[[i]],
+        rows  = rows_p,
+        mode  = mode_by_polarity[[p]])
+    }
+  }
+  if (length(units) == 0L) {
+    .mmc_stop("no features to analyse: the feature annotations are empty.")
+  }
+  unit_labels <- vapply(units, `[[`, character(1), "label")
+
   # -- Preflight the shared runner ONCE ---------------------------------------
   # The interpreter + pinned-version check is the same for every contrast, so a
   # broken/stale venv is a stage-level setup error, not a per-contrast no-result.
@@ -206,24 +264,24 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   # The same unique token is also mummichog's per-contrast `-o` project id, so
   # each contrast's outputs are uniquely NAMED (mcg_pathwayanalysis_<token>.tsv),
   # not just placed in separate subdirs — no identically-named tables anywhere.
-  contrast_dirs <- make.unique(gsub("[^A-Za-z0-9]+", "_", contrast_names),
+  contrast_dirs <- make.unique(gsub("[^A-Za-z0-9]+", "_", unit_labels),
                                sep = "_")
-  files  <- vector("list", length(de_tables))
-  errors <- vector("list", length(de_tables))
-  for (i in seq_along(de_tables)) {
-    contrast     <- contrast_names[[i]]
+  files  <- vector("list", length(units))
+  errors <- vector("list", length(units))
+  for (i in seq_along(units)) {
+    contrast     <- unit_labels[[i]]
     contrast_dir <- file.path(mummi_dir, contrast_dirs[[i]])
     files[[i]] <- tryCatch(
       .mmc_run_one_contrast(
-        de_table          = de_tables[[i]],
-        row_data          = row_data,
+        de_table          = units[[i]]$de,
+        row_data          = units[[i]]$rows,
         mz_col            = mz_col,
         rt_col            = rt_col,
         contrast_label    = contrast,
         contrast_dir      = contrast_dir,
         project           = contrast_dirs[[i]],
         network           = network,
-        mode              = mode_flag,
+        mode              = units[[i]]$mode,
         instrument_ppm    = ppm,
         permutations      = n_perm,
         cutoff            = p_cutoff,
@@ -264,7 +322,7 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   dir.create(mummi_dir, recursive = TRUE, showWarnings = FALSE)
   map_file <- file.path(mummi_dir, "contrasts.tsv")
   readr::write_tsv(
-    data.frame(dir = contrast_dirs, contrast = contrast_names,
+    data.frame(dir = contrast_dirs, contrast = unit_labels,
                stringsAsFactors = FALSE),
     map_file
   )
