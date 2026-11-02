@@ -13,7 +13,11 @@
 #   both_*    compound seen as [M+H]+ AND [M-H]- at nearly the same RT
 #   rescue_*  positive [M+K]+ (not a primary ion) + negative [M-H]- at close RT
 #   kplus_*   positive [M+K]+ only (no primary ion anywhere)
-#   farrt_*   one compound as [M+H]+ at two distant retention times
+#   farrt_*   one compound at two distant retention times: as [M+H]+ (18) and
+#             as [M-H]- (24). Every mode needs at least one compound cut by
+#             RT: upstream's EC step (peaks_to_function.R L1861-L1868) errors
+#             when none is, so the negative-ion pair keeps negative mode,
+#             where the [M+H]+ pair matches nothing, on upstream's normal path
 #   samemz_*  a positive and a negative feature with the identical m/z value
 #   ppm_*     one feature 8 ppm off [M+H]+ (matches at 10 ppm), one 15 ppm off
 #   print_*   two distinct m/z doubles that print alike at 15 digits; upstream
@@ -68,6 +72,8 @@ ma_fixture_inputs <- function() {
   }
   add("farrt_18_a", mh("C91018"), 2.5, "positive")
   add("farrt_18_b", mh("C91018") + 1e-6, 28.0, "positive")
+  add("farrt_24_neg_a", mmh("C91024"), 3.0, "negative")
+  add("farrt_24_neg_b", mmh("C91024") + 1e-6, 27.0, "negative")
   add("samemz_19_pos", 400.123456, 9.0, "positive")
   add("samemz_19_neg", 400.123456, 9.4, "negative")
   add("ppm_20_in",  mh("C91020") * (1 + 8e-6),  14.0, "positive")
