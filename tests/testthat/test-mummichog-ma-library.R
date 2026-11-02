@@ -60,16 +60,18 @@ test_that("adduct m/z follow upstream's formulas", {
   p <- 1.00727646677
   pos <- mmc_ma_adduct_matrix(mw, "positive")
   neg <- mmc_ma_adduct_matrix(mw, "negative")
-  expect_identical(pos[1, "M[1+]"], mw)
-  expect_identical(pos[1, "M+H[1+]"], mw + p)
-  expect_identical(pos[1, "M+2H[2+]"], mw/2 + p)
-  expect_identical(pos[1, "M+Na[1+]"], mw + 21.9820 + p)
-  expect_identical(neg[1, "M-H[-]"], mw - p)
-  expect_identical(neg[1, "M+Na-2H[-]"], mw + 21.9820 - 2*p)
-  expect_identical(neg[1, "M+Cl[-]"], mw + 34.9689)
+  # A single cell extracted from the matrix keeps its column name; the
+  # expectations compare values only.
+  expect_identical(unname(pos[1, "M[1+]"]), mw)
+  expect_identical(unname(pos[1, "M+H[1+]"]), mw + p)
+  expect_identical(unname(pos[1, "M+2H[2+]"]), mw/2 + p)
+  expect_identical(unname(pos[1, "M+Na[1+]"]), mw + 21.9820 + p)
+  expect_identical(unname(neg[1, "M-H[-]"]), mw - p)
+  expect_identical(unname(neg[1, "M+Na-2H[-]"]), mw + 21.9820 - 2*p)
+  expect_identical(unname(neg[1, "M+Cl[-]"]), mw + 34.9689)
   # textbook check, glucose: [M+H]+ 181.0707, [M-H]- 179.0561
-  expect_equal(pos[1, "M+H[1+]"], 181.0707, tolerance = 1e-4)
-  expect_equal(neg[1, "M-H[-]"], 179.0561, tolerance = 1e-4)
+  expect_equal(unname(pos[1, "M+H[1+]"]), 181.0707, tolerance = 1e-4)
+  expect_equal(unname(neg[1, "M-H[-]"]), 179.0561, tolerance = 1e-4)
 })
 
 test_that("adduct matrix refuses missing or non-numeric masses", {
