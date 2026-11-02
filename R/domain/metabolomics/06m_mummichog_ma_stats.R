@@ -41,6 +41,11 @@
 #         1 - pgamma(1 - FET, shape = <shape>, rate = <scale estimate>)
 #     i.e. the SCALE estimate is passed as the RATE. It is applied to FET (the
 #     code comment says EASE). If the fit errors, Gamma is NA.
+#     The null is dominated by near-zero values (pathways a permutation does
+#     not touch have p = 1), so fitdistrplus often warns while inverting the
+#     Hessian for the standard errors (cov2cor(), sqrt(diag(varcovar)): an SE
+#     reported as NaN). Those warnings concern the SEs only; the estimates come
+#     from optim() and are all the Gamma p-values use. They are not muffled.
 #   * Empirical p: sum(perm p <= FET) / n_perm, per pathway.
 #   * Pathways with no significant EC are dropped; with one pathway or none
 #     left upstream stops.

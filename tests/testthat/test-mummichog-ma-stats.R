@@ -188,21 +188,122 @@ for (case in c("mixed", "positive", "negative", "mixed_no_primary")) {
       fet <- st$pvals[rownames(res), "FET"]
       as_rate  <- signif(1 - stats::pgamma(1 - fet, shape = est["shape"],
                                            rate = est["scale"]), 5)
-      as_scale <- signif(1 - stats::pgamma(1 - fet, shape = est["shape"],
-                                           scale = est["scale"]), 5)
       expect_equal(unname(res[, "Gamma"]), unname(as_rate), tolerance = 1e-12)
-      expect_false(isTRUE(all.equal(unname(res[, "Gamma"]), unname(as_scale))))
+      # This fixture reports FET = 1 for every pathway, where rate and scale
+      # (and Holm and BH) coincide; the targeted fixture below tells them apart.
     }
   })
 }
 
-test_that("the stats fixture tells Holm from BH and fits Gamma at least once", {
+test_that("the end-to-end stats fixture fits Gamma at least once", {
   ref <- ma_stats_ref()
-  distinguishes <- vapply(ref$cases, function(up) {
-    p <- up$mummi.resmat[, "FET"]
-    !isTRUE(all.equal(stats::p.adjust(p, "holm"), stats::p.adjust(p, "BH")))
-  }, logical(1))
-  expect_true(any(distinguishes))
   expect_true(any(vapply(ref$cases, function(up)
     any(!is.na(up$mummi.resmat[, "Gamma"])), logical(1))))
+})
+
+# ---- targeted fixture: informative p-values ----------------------------------------
+# A hand-built EC universe (fixtures/mummichog_ma_parity/
+# generate_stats_targeted_reference.R) whose pathway p-values separate Gamma's
+# rate from scale and Holm from BH, run through the pinned upstream
+# permutations and statistics.
+
+ma_targeted_ref <- function() {
+  ref_file <- file.path(ma_fixture_dir, "stats_targeted_reference.rds")
+  skip_if_not(file.exists(ref_file), "targeted stats reference not generated yet")
+  ref <- readRDS(ref_file)
+  expect_identical(ref$metaboanalystr_commit,
+                   "398476ae2a0c996e390925fa62adc46b5ecde334")
+  skip_if_not(identical(Sys.getlocale("LC_COLLATE"), ref$locale_collate),
+              paste0("targeted reference generated under LC_COLLATE '",
+                     ref$locale_collate, "'"))
+  skip_if_not_installed("fitdistrplus")
+  skip_if_not(identical(as.character(utils::packageVersion("fitdistrplus")),
+                        ref$fitdistrplus_version),
+              paste0("targeted reference generated under fitdistrplus ",
+                     ref$fitdistrplus_version))
+  ref
+}
+
+ma_targeted_run <- function(ref) {
+  inp <- ref$inputs
+  ecs <- inp[c("input_ecpdlist", "total_matched_ecpds", "mz2ec_dict",
+               "ecpd_cpd_dict")]
+  perms <- mmc_ma_permutations(list(ref_mzlist = inp$ref_mzlist), ecs,
+                               inp$pathways, inp$input_mzlist,
+                               n_perm = ref$perm_num)
+  # fitdistrplus warns while estimating standard errors; see the test below.
+  st <- suppressWarnings(mmc_ma_pathway_stats(ecs, inp$pathways, perms))
+  list(perms = perms, stats = st)
+}
+
+test_that("targeted: pathway statistics match MetaboAnalystR exactly", {
+  ref <- ma_targeted_ref()
+  up <- ref$upstream
+  got <- ma_targeted_run(ref)
+  st <- got$stats
+  expect_identical(got$perms$perm_record, up$perm_record)
+  expect_identical(got$perms$perm_hits, up$perm_hits)
+  expect_identical(st$pvals, up$pvals)
+  expect_identical(st$resmat[, -11, drop = FALSE], up$mummi.resmat)
+  expect_identical(rownames(st$resmat), up$path.nms)
+  expect_identical(unname(st$resmat[, "FET"]), up$path.pval)
+  expect_identical(st$restable, up$restable)
+})
+
+test_that("targeted: the fixture is informative", {
+  ref <- ma_targeted_ref()
+  res <- ref$upstream$mummi.resmat
+  expect_gte(nrow(res), 3L)
+  expect_true(any(res[, "FET"] > 0 & res[, "FET"] < 0.05))
+  expect_true(all(is.finite(res[, "Gamma"])))
+  expect_true(any(res[, "Gamma"] > 0 & res[, "Gamma"] < 1))
+})
+
+test_that("targeted: upstream passes the Gamma scale estimate as the rate", {
+  ref <- ma_targeted_ref()
+  st <- ma_targeted_run(ref)$stats
+  res <- ref$upstream$mummi.resmat
+  est <- st$gamma$estimate
+  fet <- st$pvals[rownames(res), "FET"]
+  as_rate  <- signif(1 - stats::pgamma(1 - fet, shape = est["shape"],
+                                       rate = est["scale"]), 5)
+  as_scale <- signif(1 - stats::pgamma(1 - fet, shape = est["shape"],
+                                       scale = est["scale"]), 5)
+  expect_false(isTRUE(all.equal(unname(as_rate), unname(as_scale))))
+  expect_equal(unname(res[, "Gamma"]), unname(as_rate), tolerance = 1e-12)
+  expect_false(isTRUE(all.equal(unname(res[, "Gamma"]), unname(as_scale))))
+})
+
+test_that("targeted: upstream adjusts by Holm, not BH", {
+  ref <- ma_targeted_ref()
+  res <- ref$upstream$mummi.resmat
+  tab <- ref$upstream$restable
+  for (pair in list(c("FET", "AdjP.Fisher"), c("EASE", "AdjP.EASE"),
+                    c("Gamma", "AdjP.Gamma"))) {
+    adj  <- as.numeric(tab[, pair[2]])
+    holm <- unname(stats::p.adjust(res[, pair[1]], method = "holm"))
+    bh   <- unname(stats::p.adjust(res[, pair[1]], method = "BH"))
+    expect_false(isTRUE(all.equal(holm, bh)), label = paste(pair[1], "Holm vs BH"))
+    expect_equal(adj, holm, tolerance = 1e-12, label = pair[2])
+    expect_false(isTRUE(all.equal(adj, bh)), label = paste(pair[2], "is not BH"))
+  }
+})
+
+test_that("targeted: Gamma uses the fitted estimates; the fit warnings concern only their SEs", {
+  ref <- ma_targeted_ref()
+  st <- ma_targeted_run(ref)$stats
+  dg <- ref$diagnostics
+  # the optimiser converged, and the estimates are finite and positive ...
+  expect_identical(dg$convergence, 0L)
+  expect_true(all(is.finite(dg$estimate) & dg$estimate > 0))
+  # ... our fit is the same call on the same null, estimate for estimate ...
+  expect_true(st$gamma$fitted)
+  expect_identical(st$gamma$estimate, dg$estimate)
+  # ... and the Gamma column is a function of those estimates alone (already
+  # shown to equal upstream's). Any warnings come from fitdistrplus inverting
+  # the Hessian for the standard errors (cov2cor / sqrt(diag(varcovar))),
+  # which neither upstream nor this engine reads.
+  if (length(dg$warnings) > 0) {
+    expect_true(all(grepl("cov2cor|sqrt|NaN", dg$warnings)))
+  }
 })
