@@ -84,6 +84,65 @@ Each contrast is then run **once per polarity**: the positive-ion features in `p
 
 Each run is its own unit, labelled `<contrast>, positive ions` / `<contrast>, negative ions`: its own directory (`mummichog_pinned/<contrast>_positive_ions/`), its own report tab and its own export suffix. The two runs' p-values are not combined. The identified-metabolite support shown in each tab is contrast-level (full dataset), not polarity-specific. Single-polarity modes (`pos_default`, `positive`, `negative`) behave exactly as before.
 
+This per-polarity behaviour is the **python engine's**. For one joint analysis of both polarities, as MetaboAnalyst runs it, use the MetaboAnalyst-compatible engine below.
+
+## MetaboAnalyst-compatible engine (joint mixed polarity)
+
+`engine: metaboanalyst` replaces the python subprocess with a native R reimplementation of the mummichog algorithm in MetaboAnalyst's MS Peaks-to-Pathways module. The reference is MetaboAnalystR at commit `398476ae2a0c996e390925fa62adc46b5ecde334`. Each step was ported from that commit's source and checked against that commit's own output on synthetic fixtures (`tests/testthat/fixtures/mummichog_ma_parity/`):
+
+- the compound library built from our model JSON;
+- peak preparation and per-polarity m/z matching;
+- empirical compounds;
+- permutations and pathway statistics.
+
+The python engine is untouched and stays the default.
+
+``` yaml
+        engine: metaboanalyst
+        ionization_mode: mixed             # or positive / negative
+        polarity_column: "Reference Ion"   # required for mixed
+        model_ref: { url: ..., sha256: ... }   # or model_json; required
+        # optional (MetaboAnalyst defaults): rt_frac: 0.02, min_pathway_size: 3
+```
+
+What differs from the python engine:
+
+| | python engine | `engine: metaboanalyst` |
+|---|---|---|
+| `mixed` | one run per polarity, each with its own background | **one joint run**: one peak list, one EC grouping, one background, one permutation null. Each feature is still matched only against its own polarity's ion forms, and a compound's positive- and negative-ion matches at similar retention time form one EC |
+| ion lists | `pos_default` (8) or `positive` (25); `negative` | MetaboAnalyst's: 25 positive, 16 negative (`pos_default` refused) |
+| significant features | `p < p_cutoff` | `p <= p_cutoff` (MetaboAnalyst's rule) |
+| headline pathway p | mummichog's empirical p-value | **FET** (Fisher's exact test), MetaboAnalyst's plotted p-value |
+| other pathway statistics | — | EASE, Gamma-adjusted, empirical (from permutations) |
+| adjusted p-values | none | **Holm** (`adj.p Holm *` columns), MetaboAnalyst's `p.adjust()` default — **not BH/FDR** |
+| permutation seeds | `params.seed` | `123 + i` for permutation `i` (MetaboAnalyst's own) |
+| model | built-in `human_mfn` or a custom JSON | a custom JSON (`model_ref` / `model_json`) is required |
+| GSEA, Pathway Evidence | yes | **not run** (they read the python engine's EC tables) |
+
+Reproduced on purpose, because MetaboAnalyst does it:
+
+- **Duplicate m/z across polarities:** a positive- and a negative-ion feature with the *same* m/z keep only the one with the smaller p-value.
+- **Gamma parameterization:** the Gamma p-value is `1 - pgamma(1 - FET, shape, rate = <scale estimate>)`, so the scale estimate is passed as the rate.
+- **Row order:** rows are ordered by Gamma as text.
+- **Rounding:** values are rounded to 5 significant digits before the Holm adjustment.
+- **fitdistrplus warnings:** these may concern the standard errors of the Gamma fit; the engine uses only the estimates.
+
+Outputs, per contrast, in `mummichog_pinned/<contrast>/metaboanalyst/`:
+
+- `ma_pathway_results.tsv`: the pathway table.
+- `mummichog_pathway_enrichment_mummichog.csv`: MetaboAnalyst's own result table, verbatim.
+- `ma_matched_features.tsv`: every match with its EC, feature id and polarity.
+- `ma_input.tsv`: the peak list the analysis was given.
+- `ma_run_info.json`: parameters, model, Gamma fit and counts.
+
+The report, its exports and the Shiny payload read these through the same targets as before. The report's ORA table adds the EASE, Gamma, empirical and Holm columns.
+
+Limits:
+
+- Retention time is required. MetaboAnalyst's no-RT, compound-level path is not reproduced.
+- In mixed mode, both polarities' retention times must be on one scale.
+- MetaboAnalyst's custom-adduct and currency-customisation options are not offered. The default currency list is applied.
+
 ## Choosing a metabolic model
 
 The `-n` model is selected from the `mummichog` config block with this precedence:

@@ -88,7 +88,7 @@ There is no separate `normalization:` block.
 | `metab_de_res` | `mod_metabolomics_de()` | `03_differential.R`: `run_metabolomics_de()` (`de.method`: `limma`, `t_test` (Welch), `t_test_equal`, `wilcoxon`), `load_precomputed_metabolomics_de()`, `build_de_summary()` |
 | `metab_feature_sel_res` | `mod_metabolomics_feature_selection()` | `04_feature_selection.R` (random forest, PLS-DA) |
 | `metab_enrichment_res` | `mod_metabolomics_enrichment()` | `06_enrichment.R`: QEA, ssGSEA, ORA, GSEA |
-| `metab_mummichog_pinned_files` | `mod_mummichog_pinned()` (only when mummichog is enabled) | `06c`–`06e_mummichog_*.R` |
+| `metab_mummichog_pinned_files` | `mod_mummichog_pinned()` (only when mummichog is enabled), or `mod_mummichog_metaboanalyst()` with `mummichog.engine: metaboanalyst` | `06c`–`06e_mummichog_*.R`; MetaboAnalyst-compatible engine `06j`–`06n_mummichog_ma_*.R` |
 | `metab_mummichog_sections` | `mod_mummichog_sections()` | `06e_mummichog_plots.R`: `build_mummichog_report_sections()` (ORA plot + table, GSEA, evidence, Summary) |
 | `metab_mummichog_exports` | `mod_mummichog_exports()` | `06e_mummichog_plots.R`: `save_mummichog_exports()`, `clear_orphan_mummichog_gsea_exports()` |
 | `metab_final_results` | `write_metabolomics_final_results()` | `05_outputs_legacy.R`: `build_final_results_metabolomics()`, `build_group_cv_metabolomics()` |

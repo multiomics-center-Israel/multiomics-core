@@ -278,6 +278,30 @@ modes:
         # polarity_column: "Reference Ion"
         # positive_mode: positive
 
+        # Engine. python (default) is the pinned mummichog 2.7.0 engine above;
+        # everything in this block describes it unless noted.
+        # metaboanalyst is a native R reimplementation of MetaboAnalyst's MS
+        # Peaks-to-Pathways mummichog (MetaboAnalystR @ 398476ae), validated
+        # against that version's output. Under engine: metaboanalyst:
+        #   * ionization_mode: positive | negative | mixed. mixed is ONE joint
+        #     analysis of both polarities (one EC grouping, one background, one
+        #     permutation null), as in MetaboAnalyst, NOT one run per polarity.
+        #     polarity_column is required for mixed; positive_mode is unused
+        #     (MetaboAnalyst's lists: 25 positive, 16 negative ion forms), and
+        #     pos_default is refused.
+        #   * p_cutoff is inclusive (p <= p_cutoff), as MetaboAnalyst applies it.
+        #   * permutation i is seeded 123 + i (MetaboAnalyst's seeds); the project
+        #     seed is not used.
+        #   * the headline pathway p-value is FET; EASE, Gamma, empirical and
+        #     HOLM-adjusted (not BH/FDR) values are reported beside it.
+        #   * a readable model (model_ref / model_json below) is required.
+        #   * the complementary GSEA and the Pathway Evidence section are not run.
+        #   * needs the fitdistrplus package (in renv.lock).
+        # engine: python
+        # Optional, engine: metaboanalyst only (MetaboAnalyst defaults shown):
+        # rt_frac: 0.02          # RT tolerance = max(RT) * rt_frac; rank tolerance = n * rt_frac
+        # min_pathway_size: 3    # pathways with fewer model compounds are not tested
+
         # Force primary ion (mummichog's -z). mummichog 2.7.0 REQUIRES a primary
         # ion (M+H[+] / M-H[-]) to be present before accepting a metabolite
         # prediction, which reduces noise from irrelevant adducts — this is the
