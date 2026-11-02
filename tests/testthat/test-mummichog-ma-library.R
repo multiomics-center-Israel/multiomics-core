@@ -4,36 +4,7 @@
 # from our model JSON (06j). Unit tests on synthetic inputs, plus a parity test
 # against the pinned MetaboAnalystR library builder
 # (fixtures/mummichog_ma_parity/generate_library_reference.R). All synthetic.
-
-ma_fixture_dir <- file.path(
-  normalizePath(if (dir.exists("R")) "." else "../..", mustWork = FALSE),
-  "tests", "testthat", "fixtures", "mummichog_ma_parity")
-
-# Write a minimal Azimuth-shape model. `pathways` is a named list
-# (pathway id -> compound ids); each pathway gets one reaction holding all of
-# its compounds as reactants, so the reaction-derived membership is exactly the
-# list given.
-ma_write_model <- function(cpd, pathways, path = tempfile(fileext = ".json"),
-                           pathway_names = names(pathways)) {
-  rxns <- lapply(seq_along(pathways), function(k) {
-    list(id = sprintf("R9%04d", k), reactants = I(pathways[[k]]),
-         products = I(character()))
-  })
-  pws <- lapply(seq_along(pathways), function(k) {
-    list(id = names(pathways)[[k]], name = pathway_names[[k]],
-         list_of_reactions = I(sprintf("R9%04d", k)))
-  })
-  cpds <- lapply(seq_len(nrow(cpd)), function(i) {
-    list(id = cpd$id[[i]], name = cpd$name[[i]],
-         neutral_mono_mass = cpd$mw[[i]])
-  })
-  jsonlite::write_json(
-    list(id = "syn_model", version = "20000101", meta_data = list(),
-         list_of_compounds = cpds, list_of_reactions = rxns,
-         list_of_pathways = pws),
-    path, auto_unbox = TRUE, digits = NA)
-  path
-}
+# ma_write_model() and ma_fixture_dir come from helper-mummichog-ma.R.
 
 ma_cpd <- data.frame(id = c("C90001", "C90002", "C90003"),
                      name = c("syn A", "syn B", "syn C"),
