@@ -30,8 +30,11 @@ ma_ecs_for <- function(pk, mode = "mixed", rt_frac = 0.02, rt_tol = NA,
                    force_primary_ion = force_primary_ion)
 }
 
-ec_of <- function(ecs, form) {
-  unique(ecs$matched_res$Empirical.Compound[ecs$matched_res$Matched.Form == form])
+# The EC(s) of one compound. Selected by compound, not by ion form: several
+# compounds can share a form (both compounds of pk_both have an [M+H]+).
+ec_of <- function(ecs, cpd) {
+  unique(ecs$matched_res$Empirical.Compound[
+    ecs$matched_res$Matched.Compound == cpd])
 }
 
 pk_both <- data.frame(
@@ -106,10 +109,12 @@ test_that("an EC set with no primary ion at all stops with a clear message", {
 
 test_that("EC statistic is the max of its members; significant ECs follow the m/z", {
   ecs <- ma_ecs_for(pk_both, sig = as.character(MW_B + PROTON))
-  ec_a <- ec_of(ecs, "M+H[1+]")
+  ec_a <- ec_of(ecs, "C90001")             # members: A_pos (2), A_neg (-3)
+  ec_b <- ec_of(ecs, "C90002")             # member:  B_pos (1)
+  expect_length(ec_a, 1L)
+  expect_length(ec_b, 1L)
   expect_identical(unname(ecs$ec_exp[ec_a]), 2)
-  ec_b <- unique(ecs$matched_res$Empirical.Compound[
-    ecs$matched_res$Matched.Compound == "C90002"])
+  expect_identical(unname(ecs$ec_exp[ec_b]), 1)
   expect_identical(ecs$input_ecpdlist, ec_b)
   expect_setequal(ecs$total_matched_ecpds, c(ec_a, ec_b))
   expect_setequal(names(ecs$mz2ec_dict), unique(ecs$matched_res$Query.Mass))
