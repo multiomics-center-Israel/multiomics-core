@@ -44,13 +44,13 @@ test_that("an m/z shared across polarities keeps only the smaller p", {
   expect_identical(prep$removed[["duplicate_mz"]], 1L)
 })
 
-test_that("distinct m/z printing alike get distinct keys", {
-  pk <- ma_peaks(c("a", "b"), c(300.1234567890121, 300.1234567890123), 1:2,
-                 c(0.1, 0.2))
+test_that("m/z printing alike at 15 digits are duplicates, the later dropped", {
+  pk <- ma_peaks(c("a", "b", "c"), c(300.1234567890121, 300.1234567890123, 400),
+                 1:3, c(0.1, 0.2, 0.3))
   prep <- mmc_ma_prepare_peaks(pk, "negative", min_features = 1)
-  expect_false(anyDuplicated(prep$ref_mzlist) > 0)
-  expect_identical(prep$ref_mzlist[1], "300.123456789012")
-  expect_match(prep$ref_mzlist[2], "^300\\.123456789012[1-9]$")
+  expect_identical(prep$table$feature_id, c("a", "c"))
+  expect_identical(prep$ref_mzlist, c("300.123456789012", "400"))
+  expect_identical(prep$removed[["duplicate_mz"]], 1L)
 })
 
 test_that("RT ranks are reproducible and leave the caller's RNG untouched", {

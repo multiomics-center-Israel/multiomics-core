@@ -16,8 +16,9 @@
 #   farrt_*   one compound as [M+H]+ at two distant retention times
 #   samemz_*  a positive and a negative feature with the identical m/z value
 #   ppm_*     one feature 8 ppm off [M+H]+ (matches at 10 ppm), one 15 ppm off
-#   print_*   two distinct m/z doubles that print alike at 15 digits, which
-#             sends upstream's de-duplication loop through its seeded sample()
+#   print_*   two distinct m/z doubles that print alike at 15 digits; upstream
+#             rounds m/z to that text form first, so print_b is dropped as a
+#             duplicate of print_a
 #   tie_*     two features sharing a retention time (random tie-breaking)
 #   range_*   m/z outside 50 < m/z < 2001
 #   atp_*     ATP [M-H]- (currency)

@@ -36,8 +36,9 @@
 #     EXACTLY equals an earlier one is dropped — across polarities, so of a
 #     positive and a negative feature sharing an m/z only the smaller p
 #     survives;
-#   * m/z values become character strings (15 significant digits), the keys
-#     every later upstream lookup uses;
+#   * m/z values are first rounded to their 15-significant-digit text form
+#     (so m/z printing alike count as duplicates), and those strings are the
+#     keys every later upstream lookup uses;
 #   * tolerance ppm * 1e-6 * m/z, strict `<`, over the floor-1, floor, floor+1
 #     bins of the library tree;
 #   * currency compounds (upstream's default list) removed from the match
@@ -125,6 +126,10 @@ mmc_ma_prepare_peaks <- function(peaks, mode = c("mixed", "positive", "negative"
     v
   }
   mz   <- num(peaks$mz, "mz")
+  # Upstream re-reads every m/z from its 15-significant-digit text form before
+  # ordering, trimming and de-duplicating (L718-L719, L736), so two m/z that
+  # print alike become one value and the later is dropped as a duplicate.
+  mz   <- as.numeric(as.character(mz))
   rt   <- num(peaks$rt, "rt")
   pval <- num(peaks$p_value, "p_value")
   tsc  <- num(peaks$statistic, "statistic")
@@ -167,8 +172,9 @@ mmc_ma_prepare_peaks <- function(peaks, mode = c("mixed", "positive", "negative"
               min_features, " features as too few for enrichment.")
   }
 
-  # The character keys, made unique the way upstream does (only distinct
-  # doubles printing alike can collide), then the seeded RT ranking.
+  # The character keys, made unique the way upstream does (after the rounding
+  # above they cannot collide, but upstream's loop and its seed are kept), then
+  # the seeded RT ranking.
   keyed <- withr::with_seed(123, {
     mzs <- as.character(tbl$mz)
     mzs_unq <- mzs[duplicated(mzs)]
