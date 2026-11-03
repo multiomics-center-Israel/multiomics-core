@@ -20,45 +20,44 @@
 #' Which mummichog engine a config selects
 #'
 #' The single resolver for `modes.metabolomics.enrichment.mummichog.engine`:
-#' `"metaboanalyst"` (the MetaboAnalyst-compatible engine — the default) or
-#' `"python"` (the pinned mummichog 2.7.0 engine, kept as a legacy option).
-#' Every consumer — the DAG, the stage, the report sections, the report text,
-#' the polarity-label resolver — asks this rather than reading the key itself.
+#' `"metaboanalyst"` (the MetaboAnalyst-compatible engine, which new configs
+#' select) or `"python"` (the pinned mummichog 2.7.0 engine, kept as a legacy
+#' option). Every consumer — the DAG, the stage, the report sections, the
+#' report text, the polarity-label resolver — asks this rather than reading the
+#' key itself.
 #'
-#' An unset engine means the default, with one exception: a config that carries
-#' a setting only the python engine has (`ionization_mode: pos_default`, or
-#' `positive_mode`) was written for the python engine, which was the default
-#' before. Re-running it with the new default would silently change its
-#' results, so it stops and asks for the engine to be named.
+#' When mummichog is enabled the engine must be named. Before the key existed
+#' every config ran the python engine, so an enabled config without `engine`
+#' is a python config whose results a silent default would change; it stops
+#' instead, and nothing about it (polarity, model, ion list) is used to guess.
+#' A disabled config never stops: nothing runs, so `"metaboanalyst"` is
+#' returned only so callers have a value.
 #'
 #' @param config Full pipeline config.
-#' @return `"metaboanalyst"` or `"python"`. An unknown engine, or an unset
-#'   engine on a python-only config, stops.
+#' @return `"metaboanalyst"` or `"python"`. An unknown engine, or no engine on
+#'   an enabled config, stops.
 #' @examples
 #' mmc_engine(list(modes = list(metabolomics = list(enrichment = list(
-#'   mummichog = list(engine = "python"))))))
+#'   mummichog = list(enabled = TRUE, engine = "python"))))))
 mmc_engine <- function(config) {
   mm <- config$modes$metabolomics$enrichment$mummichog %||% list()
   if (is.null(mm$engine)) {
-    mode <- tolower(as.character(mm$ionization_mode %||% ""))
-    if (identical(mode, "pos_default") || !is.null(mm$positive_mode)) {
-      .mmc_stop("this mummichog config has no 'engine' but uses ",
-                if (identical(mode, "pos_default")) "ionization_mode: pos_default"
-                else "positive_mode",
-                ", which only the python engine has. The default engine is now ",
-                "\"metaboanalyst\" (MetaboAnalyst-compatible, joint mixed ",
-                "polarity). To reproduce earlier results, add  engine: python. ",
-                "To use the new engine, add  engine: metaboanalyst  and set ",
-                "ionization_mode to positive, negative or mixed (and drop ",
-                "positive_mode).")
-    }
-    return("metaboanalyst")
+    if (!isTRUE(mm$enabled)) return("metaboanalyst")
+    .mmc_stop(
+      "mummichog is enabled but no engine is chosen. Add one line to the ",
+      "mummichog block of your config (modes > metabolomics > enrichment > ",
+      "mummichog):\n",
+      "    engine: python          # keep earlier results: configs without ",
+      "'engine' ran the python mummichog engine, so this reproduces them\n",
+      "    engine: metaboanalyst   # the MetaboAnalyst-compatible engine (ORA + ",
+      "GSEA, joint mixed polarity); results will differ from python runs\n",
+      "The engine is never guessed from other settings. See docs/mummichog.md.")
   }
   eng <- tolower(trimws(as.character(mm$engine)))
   if (length(eng) != 1L || is.na(eng) || !eng %in% c("python", "metaboanalyst")) {
     .mmc_stop("mummichog.engine must be \"metaboanalyst\" (the MetaboAnalyst-",
-              "compatible engine, default) or \"python\" (the pinned mummichog ",
-              "2.7.0 engine, legacy); got '", paste(mm$engine, collapse = ", "), "'.")
+              "compatible engine) or \"python\" (the pinned mummichog 2.7.0 ",
+              "engine, legacy); got '", paste(mm$engine, collapse = ", "), "'.")
   }
   eng
 }

@@ -56,22 +56,66 @@ ma_run_stage <- function(ref, mode) {
 
 # ---- engine switch -------------------------------------------------------------
 
-test_that("the engine defaults to metaboanalyst and accepts only the two engines", {
-  expect_identical(mmc_engine(list()), "metaboanalyst")
-  expect_identical(mmc_engine(ma_cfg(engine = NULL)), "metaboanalyst")
-  expect_identical(mmc_engine(ma_cfg()), "metaboanalyst")
-  expect_identical(mmc_engine(ma_cfg(engine = "Python")), "python")
+# ---- engine selection and migration -------------------------------------------
+# Configs written before the `engine` key ran the python engine, so an enabled
+# config must name its engine; it is never guessed or defaulted.
+
+test_that("an explicit engine is honoured whatever the other settings", {
+  for (m in c("pos_default", "positive", "negative", "mixed")) {
+    expect_identical(mmc_engine(ma_cfg(engine = "python", ionization_mode = m)),
+                     "python", label = m)
+  }
+  expect_identical(mmc_engine(ma_cfg(engine = "python", positive_mode = "positive")),
+                   "python")
+  for (m in c("positive", "negative", "mixed")) {
+    expect_identical(mmc_engine(ma_cfg(engine = "metaboanalyst", ionization_mode = m)),
+                     "metaboanalyst", label = m)
+  }
+  expect_identical(mmc_engine(ma_cfg(engine = " Python ")), "python")
+  expect_identical(mmc_engine(ma_cfg(engine = "MetaboAnalyst")), "metaboanalyst")
   expect_error(mmc_engine(ma_cfg(engine = "mummichog3")), "must be")
 })
 
-test_that("an engine-less config written for the python engine stops, not switches", {
-  expect_error(mmc_engine(ma_cfg(engine = NULL, ionization_mode = "pos_default")),
-               "engine: python")
-  expect_error(mmc_engine(ma_cfg(engine = NULL, positive_mode = "positive")),
-               "positive_mode")
-  # named explicitly, the same settings keep running on the python engine
-  expect_identical(mmc_engine(ma_cfg(engine = "python",
-                                     ionization_mode = "pos_default")), "python")
+test_that("an enabled config without an engine stops, whatever its polarity", {
+  for (m in list("positive", "negative", "mixed", "pos_default", NULL)) {
+    cfg <- ma_cfg(engine = NULL)
+    cfg$modes$metabolomics$enrichment$mummichog$ionization_mode <- m
+    err <- tryCatch(mmc_engine(cfg), error = conditionMessage)
+    lab <- if (is.null(m)) "no ionization_mode" else m
+    expect_match(err, "no engine is chosen", label = lab)
+    expect_match(err, "engine: python", fixed = TRUE, label = lab)
+    expect_match(err, "engine: metaboanalyst", fixed = TRUE, label = lab)
+    expect_match(err, "reproduces", label = lab)
+  }
+})
+
+test_that("a disabled config needs no engine", {
+  expect_identical(mmc_engine(list()), "metaboanalyst")
+  expect_identical(mmc_engine(ma_cfg(engine = NULL, enabled = FALSE)), "metaboanalyst")
+  expect_identical(mmc_engine(ma_cfg(engine = NULL, enabled = FALSE,
+                                     ionization_mode = "pos_default")), "metaboanalyst")
+})
+
+test_that("the template selects the MetaboAnalyst-compatible engine explicitly", {
+  tpl <- file.path(normalizePath(if (dir.exists("R")) "." else "../..", mustWork = FALSE),
+                   "config", "templates", "metabolomics_template.yaml")
+  skip_if_not(file.exists(tpl), "template not found")
+  mm <- yaml::read_yaml(tpl)$modes$metabolomics$enrichment$mummichog
+  expect_identical(mm$engine, "metaboanalyst")
+  mm$enabled <- TRUE
+  cfg <- list(modes = list(metabolomics = list(enrichment = list(mummichog = mm))))
+  expect_identical(mmc_engine(cfg), "metaboanalyst")
+})
+
+test_that("the wizard names the python engine for its built-in human model", {
+  run_r <- file.path(normalizePath(if (dir.exists("R")) "." else "../..", mustWork = FALSE),
+                     "run.R")
+  skip_if_not(file.exists(run_r), "run.R not found")
+  src <- paste(readLines(run_r, warn = FALSE), collapse = "\n")
+  block <- regmatches(src, regexpr("mummichog_yaml <- '[^']*'", src))
+  expect_length(block, 1L)
+  expect_match(block, "engine: python", fixed = TRUE)
+  expect_match(block, "enabled: true", fixed = TRUE)
 })
 
 test_that("a joint mixed run is labelled by its contrast, never split", {

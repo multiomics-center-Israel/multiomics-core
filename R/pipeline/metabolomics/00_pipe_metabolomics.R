@@ -374,7 +374,7 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       #
       # The engine is chosen at plan-definition time (mmc_engine() on
       # modes.metabolomics.enrichment.mummichog.engine): metaboanalyst (05d,
-      # the MetaboAnalyst-compatible engine, default) or python (legacy, this
+      # the MetaboAnalyst-compatible engine) or python (legacy, this
       # command unchanged). Both fill this one target and write under mummichog_pinned/, so
       # every downstream target reads either the same way.
       if (identical(mummichog_engine, "metaboanalyst")) {

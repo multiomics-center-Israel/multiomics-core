@@ -254,7 +254,8 @@ modes:
         # current default; evaluate TRUE vs FALSE on your data before relying on it.
         standardize: false
 
-      # Mummichog m/z-based pathway analysis (ORA + GSEA). Opt-in. Default
+      # Mummichog m/z-based pathway analysis (ORA + GSEA). Opt-in. When enabled,
+      # `engine` is REQUIRED (it is never defaulted or guessed). New configs:
       # engine: metaboanalyst — a native R reimplementation of MetaboAnalyst's
       # MS Peaks-to-Pathways mummichog; needs a custom model (model_ref /
       # model_json below). The legacy python engine (engine: python, pinned
@@ -263,7 +264,7 @@ modes:
       # `export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"`.
       mummichog:
         enabled: false
-        engine: metaboanalyst          # metaboanalyst (default) | python (legacy)
+        engine: metaboanalyst          # metaboanalyst | python (legacy; reproduces configs written before this key)
         p_cutoff: 0.05
         n_permutations: 100
         tolerance_ppm: 10
@@ -282,13 +283,14 @@ modes:
         # polarity_column: "Reference Ion"
         # positive_mode: positive
 
-        # Engine. metaboanalyst (default) is a native R reimplementation of
-        # MetaboAnalyst's MS Peaks-to-Pathways mummichog (MetaboAnalystR @
-        # 398476ae), validated against that version's output; python (legacy)
-        # is the pinned mummichog 2.7.0 engine, described by the comments that
-        # do not say otherwise. A config with no engine but a python-only
-        # setting (pos_default, positive_mode) stops and asks for the engine to
-        # be named. Under engine: metaboanalyst:
+        # Engine. metaboanalyst is a native R reimplementation of MetaboAnalyst's
+        # MS Peaks-to-Pathways mummichog (MetaboAnalystR @ 398476ae), validated
+        # against that version's output; python (legacy) is the pinned
+        # mummichog 2.7.0 engine, described by the comments that do not say
+        # otherwise. Configs written before the `engine` key ran python: an
+        # enabled config without `engine` stops and asks for it — add
+        # engine: python to reproduce its earlier results. Under
+        # engine: metaboanalyst:
         #   * ionization_mode: positive | negative | mixed. mixed is ONE joint
         #     analysis of both polarities (one EC grouping, one background, one
         #     permutation null), as in MetaboAnalyst, NOT one run per polarity.
