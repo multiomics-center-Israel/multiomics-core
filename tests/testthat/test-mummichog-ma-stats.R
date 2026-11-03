@@ -21,6 +21,29 @@ st_ecs <- list(
 st_prep <- list(ref_mzlist = as.character(100 + 1:20))
 st_sig <- as.character(100 + c(1, 2, 5, 11, 12))     # N = 5
 
+# Permutation records against the MetaboAnalystR fixture. The fixture was
+# generated on one platform; phyper() goes through the C maths library
+# (lgamma, log1p, exp), whose last bits can differ on another (CI is Linux),
+# so the p-values are compared to a relative 1e-12 rather than bit for bit.
+# Everything else stays exact: the record's structure (per-permutation list,
+# matrix dimensions and attributes) and its NA pattern; the overlap counts
+# (perm_hits) and all reported ORA / Holm outputs are compared with
+# expect_identical() by the callers. The measured difference is printed so the
+# CI log shows it.
+expect_perm_record_parity <- function(got, ref, what) {
+  shape <- function(rec) lapply(rec, function(x) lapply(x, attributes))
+  expect_identical(length(got), length(ref), label = paste(what, "length"))
+  expect_identical(shape(got), shape(ref), label = paste(what, "structure"))
+  a <- unlist(got); b <- unlist(ref)
+  expect_identical(is.na(a), is.na(b), label = paste(what, "NA pattern"))
+  ok <- !is.na(a) & !is.na(b)
+  rel <- if (any(ok)) max(abs(a[ok] - b[ok]) / pmax(abs(b[ok]), .Machine$double.xmin)) else 0
+  cat(sprintf("\n[perm_record parity] %s: %d value(s), %d differ, max rel diff %.3g (%s, %s)\n",
+              what, sum(ok), sum(a[ok] != b[ok]), rel, R.version.string,
+              Sys.info()[["sysname"]]))
+  expect_lte(rel, 1e-12, label = paste(what, "max relative difference"))
+}
+
 # ---- permutation p-values --------------------------------------------------------
 
 test_that("a permutation's p-value is upstream's unclamped phyper", {
@@ -155,7 +178,7 @@ for (case in c("mixed", "positive", "negative", "mixed_no_primary")) {
     got <- ma_stats_run(ref, up)
     st <- got$stats
 
-    expect_identical(got$perms$perm_record, up$perm_record)
+    expect_perm_record_parity(got$perms$perm_record, up$perm_record, case)
     expect_identical(got$perms$perm_hits, up$perm_hits)
     expect_identical(st$pvals, up$pvals)
     expect_identical(st$resmat[, -11, drop = FALSE], up$mummi.resmat)
@@ -241,7 +264,7 @@ test_that("targeted: pathway statistics match MetaboAnalystR exactly", {
   up <- ref$upstream
   got <- ma_targeted_run(ref)
   st <- got$stats
-  expect_identical(got$perms$perm_record, up$perm_record)
+  expect_perm_record_parity(got$perms$perm_record, up$perm_record, "targeted")
   expect_identical(got$perms$perm_hits, up$perm_hits)
   expect_identical(st$pvals, up$pvals)
   expect_identical(st$resmat[, -11, drop = FALSE], up$mummi.resmat)
