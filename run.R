@@ -1560,12 +1560,15 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     input_yaml <- sprintf('    input:\n      format: "%s"\n      sheet: null',
                           input_format)
   }
-  # Build mummichog section (pinned engine; built-in human_mfn model by default)
+  # Build mummichog section (pinned engine; built-in human_mfn model by default).
+  # The wizard sets up the python engine — the one that ships the built-in
+  # human model — so it is named: the default engine is now metaboanalyst.
   mummichog_yaml <- ""
   if (run_mummichog) {
     mummichog_yaml <- '
       mummichog:
         enabled: true
+        engine: python
         p_cutoff: 0.05
         tolerance_ppm: 10
         n_permutations: 100

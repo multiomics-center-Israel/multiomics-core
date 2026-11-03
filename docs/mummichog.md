@@ -2,6 +2,8 @@
 
 > Moved here from the top-level README; the stochasticity caveat has since been corrected to match the code. Back to the [docs index](README.md).
 
+> **Default engine: `metaboanalyst`.** Mummichog ORA and GSEA now run by default on the MetaboAnalyst-compatible engine ([below](#metaboanalyst-compatible-engine-joint-mixed-polarity)). The python engine described in the next sections is kept as a legacy option: `engine: python`. A config with no `engine` that uses a python-only setting (`ionization_mode: pos_default`, `positive_mode`) stops and asks for the engine to be named, rather than silently changing its results — add `engine: python` to reproduce earlier results.
+
 The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
 
 ## One-time setup
@@ -95,7 +97,9 @@ This per-polarity behaviour is the **python engine's**. For one joint analysis o
 - empirical compounds;
 - permutations and pathway statistics.
 
-The python engine is untouched and stays the default.
+This engine is the default. The python engine is untouched and selectable with `engine: python`.
+
+What only the python engine provides (lost if it is ever removed): the Pathway Evidence section (supporting features and annotation agreement), mummichog's modular/network analysis outputs and `result.html`, the `pos_default` ion list, the built-in `human_mfn` model, and its own GSEA variant on python mummichog's m/z-merged ECs.
 
 ``` yaml
         engine: metaboanalyst

@@ -24,7 +24,7 @@
 #                                                      └─ metab_pre (adapter)
 pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
                               mummichog_enabled = FALSE,
-                              mummichog_engine = "python") {
+                              mummichog_engine = "metaboanalyst") {
   # -- Validate chosen_norm at plan-definition time --------------------------
   # "none" = analysis mode on the transform-only matrix (met_log), for tables
   # that arrive already normalized; NULL stays QC-review mode.
@@ -372,10 +372,10 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       # side-effecting run as the file-target command means {targets} re-runs the
       # whole stage if any tracked output is deleted (self-healing).
       #
-      # The engine is chosen at plan-definition time
-      # (modes.metabolomics.enrichment.mummichog.engine): python (default, this
-      # command unchanged) or metaboanalyst (05d, the MetaboAnalyst-compatible
-      # engine). Both fill this one target and write under mummichog_pinned/, so
+      # The engine is chosen at plan-definition time (mmc_engine() on
+      # modes.metabolomics.enrichment.mummichog.engine): metaboanalyst (05d,
+      # the MetaboAnalyst-compatible engine, default) or python (legacy, this
+      # command unchanged). Both fill this one target and write under mummichog_pinned/, so
       # every downstream target reads either the same way.
       if (identical(mummichog_engine, "metaboanalyst")) {
         tar_target(

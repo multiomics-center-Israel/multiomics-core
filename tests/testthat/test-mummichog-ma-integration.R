@@ -56,11 +56,22 @@ ma_run_stage <- function(ref, mode) {
 
 # ---- engine switch -------------------------------------------------------------
 
-test_that("the engine defaults to python and accepts only the two engines", {
-  expect_identical(mmc_engine(list()), "python")
+test_that("the engine defaults to metaboanalyst and accepts only the two engines", {
+  expect_identical(mmc_engine(list()), "metaboanalyst")
+  expect_identical(mmc_engine(ma_cfg(engine = NULL)), "metaboanalyst")
   expect_identical(mmc_engine(ma_cfg()), "metaboanalyst")
   expect_identical(mmc_engine(ma_cfg(engine = "Python")), "python")
   expect_error(mmc_engine(ma_cfg(engine = "mummichog3")), "must be")
+})
+
+test_that("an engine-less config written for the python engine stops, not switches", {
+  expect_error(mmc_engine(ma_cfg(engine = NULL, ionization_mode = "pos_default")),
+               "engine: python")
+  expect_error(mmc_engine(ma_cfg(engine = NULL, positive_mode = "positive")),
+               "positive_mode")
+  # named explicitly, the same settings keep running on the python engine
+  expect_identical(mmc_engine(ma_cfg(engine = "python",
+                                     ionization_mode = "pos_default")), "python")
 })
 
 test_that("a joint mixed run is labelled by its contrast, never split", {
@@ -87,7 +98,7 @@ test_that("the stage refuses settings with no MetaboAnalyst meaning", {
 
 # ---- DAG wiring ------------------------------------------------------------------
 
-test_that("the DAG runs the python stage by default and the MA stage on request", {
+test_that("the DAG runs the MA stage by default and the python stage on request", {
   skip_if_not_installed("targets")
   # pipe_metabolomics() calls tar_target() unqualified, as _targets.R does
   # after attaching targets; attach it for this test only, so the file runs
@@ -98,9 +109,12 @@ test_that("the DAG runs the python stage by default and the MA stage on request"
     paste(deparse(tl[[which(nm == "metab_mummichog_pinned_files")]]$command$expr),
           collapse = " ")
   }
-  py <- pipe_metabolomics("pqn", mummichog_enabled = TRUE)
+  py <- pipe_metabolomics("pqn", mummichog_enabled = TRUE,
+                          mummichog_engine = "python")
   ma <- pipe_metabolomics("pqn", mummichog_enabled = TRUE,
                           mummichog_engine = "metaboanalyst")
+  # the default plan is the MetaboAnalyst-compatible stage
+  expect_identical(cmd(pipe_metabolomics("pqn", mummichog_enabled = TRUE)), cmd(ma))
   expect_match(cmd(py), "mod_mummichog_pinned\\(")
   expect_false(grepl("metaboanalyst", cmd(py)))
   expect_match(cmd(ma), "mod_mummichog_metaboanalyst\\(")

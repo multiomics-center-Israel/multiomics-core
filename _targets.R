@@ -150,7 +150,7 @@ list(
     if (!is.null(cfg_raw$modes$metabolomics)) {
       met_chosen <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
       met_mcg    <- isTRUE(cfg_raw$modes$metabolomics$enrichment$mummichog$enabled)
-      met_mcg_engine <- if (met_mcg) mmc_engine(cfg_raw) else "python"
+      met_mcg_engine <- if (met_mcg) mmc_engine(cfg_raw) else "metaboanalyst"
       mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen, skip_outputs = has_multiomics, mummichog_enabled = met_mcg, mummichog_engine = met_mcg_engine))
     }
     

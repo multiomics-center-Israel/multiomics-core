@@ -254,18 +254,22 @@ modes:
         # current default; evaluate TRUE vs FALSE on your data before relying on it.
         standardize: false
 
-      # Mummichog m/z-based pathway analysis — isolated, version-pinned engine
-      # (mummichog==2.7.0 via processx). Opt-in; runs on the built-in human_mfn
-      # model by default. Requires the pinned venv: `make mummichog-venv` then
+      # Mummichog m/z-based pathway analysis (ORA + GSEA). Opt-in. Default
+      # engine: metaboanalyst — a native R reimplementation of MetaboAnalyst's
+      # MS Peaks-to-Pathways mummichog; needs a custom model (model_ref /
+      # model_json below). The legacy python engine (engine: python, pinned
+      # mummichog==2.7.0 via processx, built-in human_mfn model available)
+      # needs the pinned venv: `make mummichog-venv` then
       # `export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"`.
       mummichog:
         enabled: false
+        engine: metaboanalyst          # metaboanalyst (default) | python (legacy)
         p_cutoff: 0.05
         n_permutations: 100
         tolerance_ppm: 10
-        ionization_mode: pos_default   # pos_default | positive | negative | mixed
+        ionization_mode: positive      # positive | negative | mixed; python also pos_default
 
-        # Mixed-polarity data (ionization_mode: mixed). mummichog runs one
+        # Python engine only — mixed-polarity data (ionization_mode: mixed). mummichog runs one
         # ionization mode per run, so each contrast is run once per polarity:
         # positive-ion features in positive_mode, negative-ion features in
         # "negative", each against only its own polarity's features. Both keys
@@ -278,11 +282,13 @@ modes:
         # polarity_column: "Reference Ion"
         # positive_mode: positive
 
-        # Engine. python (default) is the pinned mummichog 2.7.0 engine above;
-        # everything in this block describes it unless noted.
-        # metaboanalyst is a native R reimplementation of MetaboAnalyst's MS
-        # Peaks-to-Pathways mummichog (MetaboAnalystR @ 398476ae), validated
-        # against that version's output. Under engine: metaboanalyst:
+        # Engine. metaboanalyst (default) is a native R reimplementation of
+        # MetaboAnalyst's MS Peaks-to-Pathways mummichog (MetaboAnalystR @
+        # 398476ae), validated against that version's output; python (legacy)
+        # is the pinned mummichog 2.7.0 engine, described by the comments that
+        # do not say otherwise. A config with no engine but a python-only
+        # setting (pos_default, positive_mode) stops and asks for the engine to
+        # be named. Under engine: metaboanalyst:
         #   * ionization_mode: positive | negative | mixed. mixed is ONE joint
         #     analysis of both polarities (one EC grouping, one background, one
         #     permutation null), as in MetaboAnalyst, NOT one run per polarity.
@@ -299,7 +305,6 @@ modes:
         #     (MetaboAnalyst's peaks GSEA; gsea_enabled and the gsea_* keys below
         #     apply); the Pathway Evidence section is not produced.
         #   * needs the fitdistrplus package (in renv.lock).
-        # engine: python
         # Optional, engine: metaboanalyst only (MetaboAnalyst defaults shown):
         # rt_frac: 0.02          # RT tolerance = max(RT) * rt_frac; rank tolerance = n * rt_frac
         # min_pathway_size: 3    # pathways with fewer model compounds are not tested
