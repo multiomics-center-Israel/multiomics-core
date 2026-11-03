@@ -295,7 +295,9 @@ modes:
         #   * the headline pathway p-value is FET; EASE, Gamma, empirical and
         #     HOLM-adjusted (not BH/FDR) values are reported beside it.
         #   * a readable model (model_ref / model_json below) is required.
-        #   * the complementary GSEA and the Pathway Evidence section are not run.
+        #   * GSEA runs on the same joint-polarity ECs and pathway sets as the ORA
+        #     (MetaboAnalyst's peaks GSEA; gsea_enabled and the gsea_* keys below
+        #     apply); the Pathway Evidence section is not produced.
         #   * needs the fitdistrplus package (in renv.lock).
         # engine: python
         # Optional, engine: metaboanalyst only (MetaboAnalyst defaults shown):

@@ -48,6 +48,11 @@ if (is.null(config_path) || is.null(dest)) {
 # back, and only the sections, exports, report, Shiny payload and note are
 # rebuilt there.
 rerender <- "--rerender" %in% args
+# --rerun-mummichog (with --rerender): also re-run the MetaboAnalyst-compatible
+# stage (ORA + GSEA) in --dest. The ORA result tables it had are kept aside and
+# must come back identical.
+rerun_mm <- "--rerun-mummichog" %in% args
+if (rerun_mm && !rerender) stop("--rerun-mummichog needs --rerender")
 if (!file.exists("_targets.R") || !dir.exists("R")) stop("run from the multiomics-core root")
 for (layer in c("core", "services", "domain", "modules")) {
   for (f in sort(list.files(file.path("R", layer), pattern = "\\.R$",
@@ -184,11 +189,26 @@ cfg_ma$modes$metabolomics$enrichment$mummichog <- mm
 
 # ---- 4. engine, sections, exports, Shiny payload, report --------------------------
 out_dir <- file.path(dest, "metabolomics")
-files <- if (rerender) {
+ora_files <- function() {
+  f <- list.files(file.path(out_dir, "mummichog_pinned"), recursive = TRUE,
+                  full.names = TRUE)
+  f[basename(f) %in% c("ma_pathway_results.tsv",
+                       "mummichog_pathway_enrichment_mummichog.csv")]
+}
+ora_before <- if (rerun_mm) lapply(stats::setNames(nm = ora_files()), readLines) else NULL
+files <- if (rerender && !rerun_mm) {
   list.files(file.path(out_dir, "mummichog_pinned"), recursive = TRUE, full.names = TRUE)
 } else {
   mod_mummichog_metaboanalyst(pre, de_res, cfg_ma, out_dir)
 }
+if (rerun_mm) {
+  ora_after <- lapply(stats::setNames(nm = ora_files()), readLines)
+  check("ORA result tables identical to the previous build (GSEA added, ORA unchanged)",
+        identical(ora_before, ora_after),
+        sprintf("%d file(s) before, %d after", length(ora_before), length(ora_after)))
+}
+check("GSEA results written for every contrast",
+      length(files[basename(files) == "ma_gsea_results.tsv"]) == length(de_res$de_tables))
 pathways <- read_mummichog_pathways_by_contrast(files)
 sections <- mod_mummichog_sections(pathways, files, pre, de_res, cfg_ma,
                                    enrichment_res = enrichment_res)
@@ -227,12 +247,13 @@ note <- c(
   "Only the Mummichog (m/z-based pathway) analysis was redone. Preprocessing, QC, normalization, differential abundance, clustering, feature selection, identified-metabolite enrichment and the final Excel files are the original run's, carried over unchanged; the new analysis reads the stored differential-abundance results of that run.", "",
   "## What changed", "",
   "- **Before:** python mummichog 2.7.0, mixed-polarity data run **separately per ion polarity** (each polarity its own background, significant list and permutation null; separate result tabs; p-values not combined).",
-  "- **Now:** a native R reimplementation of MetaboAnalyst's MS Peaks-to-Pathways mummichog (MetaboAnalystR commit 398476ae2a0c996e390925fa62adc46b5ecde334), run **jointly over both polarities** per contrast: one peak list, each feature matched only to its own polarity's ion forms, a compound's positive- and negative-ion matches at similar retention times forming one empirical compound, one background and one permutation null. Each step was validated against that MetaboAnalystR version's own output.", "",
+  "- **Now:** ORA and GSEA from a native R reimplementation of MetaboAnalyst's MS Peaks-to-Pathways mummichog (MetaboAnalystR commit 398476ae2a0c996e390925fa62adc46b5ecde334), run **jointly over both polarities** per contrast: one peak list, each feature matched only to its own polarity's ion forms, a compound's positive- and negative-ion matches at similar retention times forming one empirical compound, one background and one permutation null. Each step was validated against that MetaboAnalystR version's own output.", "",
   "## How to read the results", "",
   "- `p.value` is the **unadjusted** Fisher exact test (FET) p-value per pathway; *nominal* means FET p < the cutoff.",
   "- `adj.p Holm *` columns are **Holm** (family-wise) adjustments over the reported pathways, as MetaboAnalyst computes them — **not** Benjamini–Hochberg FDR.",
   "- A pathway nominal by FET is a pathway-level hypothesis, **not** a result that is significant after multiple-testing correction.",
-  "- The complementary GSEA and the Pathway Evidence section are not produced by this engine.", "",
+  "- GSEA (MetaboAnalyst's peaks GSEA) runs on the same joint-polarity empirical compounds and pathway sets as the ORA, over the complete ranked list; `P.Value` is its raw permutation p-value and `padj` its **Benjamini–Hochberg FDR** (ORA: Holm; GSEA: BH — as in MetaboAnalyst). NES sign is not a biological direction.",
+  "- The Pathway Evidence section (python engine only) is not produced.", "",
   "## Provenance", "",
   sprintf("- multiomics-core commit: %s", core_sha),
   sprintf("- MetaboAnalystR reference: %s @ %s", info1$reference$repo, info1$reference$commit),
@@ -254,7 +275,9 @@ check("original run unchanged (same files, sizes, mtimes)", identical(before, af
 
 dest_files <- list.files(dest, recursive = TRUE)
 mm_files <- dest_files[grepl("mummichog|mcg_", dest_files, ignore.case = TRUE)]
-old <- mm_files[grepl("/v2/|mcg_|_positive_ions|_negative_ions|mummichog_gsea_|mummichog_evidence_",
+# Python-engine artefacts. GSEA exports are legitimate now (the new engine's
+# own GSEA); evidence exports exist only for the python engine.
+old <- mm_files[grepl("/v2/|mcg_|_positive_ions|_negative_ions|mummichog_evidence_",
                       mm_files)]
 check("no old Mummichog artefact in the new run", length(old) == 0,
       if (length(old)) paste(utils::head(old, 3), collapse = "; ") else "")

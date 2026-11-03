@@ -340,8 +340,8 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     # contrast its ORA plot and table.
     cfiles   <- files_by_contrast[[contrast]]
     # The MetaboAnalyst-compatible engine writes no python EmpiricalCompound
-    # tables, which both layers below read: they are skipped for it, by name,
-    # rather than attempted and failed (see the report's engine note).
+    # tables, which both python layers below read: they are skipped for it, by
+    # name, rather than attempted and failed. Its own GSEA is attached below.
     is_ma <- .mmc_is_ma_table(pw)
     if (is_ma) cfiles <- NULL
     evidence <- if (is.null(cfiles) || is.null(model)) NULL else tryCatch(
@@ -401,6 +401,11 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
         )
       }
     }
+    # The MetaboAnalyst-compatible engine ran its GSEA in the stage, on its
+    # own joint-polarity ECs (06o); its result travels with the pathway table.
+    # The python GSEA above never runs for it (cfiles is NULL), so the two
+    # engines' results cannot be mixed in one section.
+    if (is_ma && gsea_enabled) gsea <- attr(pw, "ma_gsea")
     # Same cutoff the ORA plot and the report's figure legends use: the legend
     # states the value from config, so a scatter drawn at the function default
     # would put its dashed line somewhere the caption does not claim.

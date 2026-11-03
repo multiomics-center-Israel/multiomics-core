@@ -50,6 +50,7 @@ mmc_engine <- function(config) {
 .MMC_MA_FEATURES_FILE <- "ma_matched_features.tsv"
 .MMC_MA_INPUT_FILE    <- "ma_input.tsv"
 .MMC_MA_INFO_FILE     <- "ma_run_info.json"
+.MMC_MA_GSEA_FILE     <- "ma_gsea_results.tsv"
 
 #' Run the MetaboAnalyst-compatible mummichog analysis for one peak list
 #'
@@ -68,8 +69,12 @@ mmc_engine <- function(config) {
 #' @param force_primary_ion Apply the primary-ion rule (default TRUE).
 #' @param rt_frac Retention-time tolerance fraction (default 0.02).
 #' @param min_lib Smallest pathway kept, in compounds (default 3).
+#' @param gsea NULL to skip GSEA, or a list of `mmc_ma_gsea()` settings
+#'   (`n_perm`, `min_size`, `max_size`, `seed`, `metric_label`). It runs on the
+#'   same ECs and pathway sets as the ORA, after it, and changes nothing in it.
 #' @return A list: `prep`, `input_mzlist`, `matched`, `ecs`, `pathways`,
-#'   `perms`, `stats`.
+#'   `perms`, `stats`, `gsea` (NULL when skipped or nothing passed its size
+#'   filter).
 #' @examples
 #' \dontrun{
 #' run <- mmc_ma_run_contrast(peaks, lib, "mixed", ppm = 10, cutoff = 0.05)
@@ -77,7 +82,7 @@ mmc_engine <- function(config) {
 #' }
 mmc_ma_run_contrast <- function(peaks, lib, mode, ppm, cutoff, n_perm = 100,
                                 force_primary_ion = TRUE, rt_frac = 0.02,
-                                min_lib = 3) {
+                                min_lib = 3, gsea = NULL) {
   prep <- mmc_ma_prepare_peaks(peaks, mode, rt_frac = rt_frac)
   sig <- mmc_ma_input_mzlist(prep, cutoff)
   matched <- mmc_ma_match_peaks(prep, lib, ppm = ppm)
@@ -85,9 +90,10 @@ mmc_ma_run_contrast <- function(peaks, lib, mode, ppm, cutoff, n_perm = 100,
                           force_primary_ion = force_primary_ion)
   pw <- mmc_ma_pathway_ecs(lib, ecs, min_lib = min_lib)
   perms <- mmc_ma_permutations(prep, ecs, pw, sig, n_perm = n_perm)
+  stats <- mmc_ma_pathway_stats(ecs, pw, perms)
+  g <- if (is.null(gsea)) NULL else do.call(mmc_ma_gsea, c(list(ecs, pw), gsea))
   list(prep = prep, input_mzlist = sig, matched = matched, ecs = ecs,
-       pathways = pw, perms = perms,
-       stats = mmc_ma_pathway_stats(ecs, pw, perms))
+       pathways = pw, perms = perms, stats = stats, gsea = g)
 }
 
 #' Write one contrast's MetaboAnalyst-compatible results
@@ -106,7 +112,9 @@ mmc_ma_run_contrast <- function(peaks, lib, mode, ppm, cutoff, n_perm = 100,
 #'   \item{ma_run_info.json}{Engine, reference, parameters, model, Gamma fit
 #'     and counts.}
 #' }
-#' Only these five names are removed before writing, so nothing else in `dir`
+#' and, when GSEA ran, `ma_gsea_results.tsv` (the GSEA table in
+#' MetaboAnalyst's order; its settings and provenance go into the run record).
+#' Only these six names are removed before writing, so nothing else in `dir`
 #' is touched.
 #'
 #' @param run  Output of `mmc_ma_run_contrast()`.
@@ -114,7 +122,7 @@ mmc_ma_run_contrast <- function(peaks, lib, mode, ppm, cutoff, n_perm = 100,
 #' @param dir  Destination directory (created if absent).
 #' @param info Named list of run information to record (parameters, model).
 #' @param pathway_ids Named character vector, pathway name -> model pathway id.
-#' @return Character vector of the five written paths.
+#' @return Character vector of the written paths.
 #' @examples
 #' \dontrun{
 #' write_mummichog_ma_results(run, peaks, "out/mummichog_pinned/A_vs_B/metaboanalyst",
@@ -125,7 +133,9 @@ write_mummichog_ma_results <- function(run, peaks, dir, info, pathway_ids) {
   paths <- file.path(dir, c(.MMC_MA_RESULTS_FILE, .MMC_MA_UPSTREAM_CSV,
                             .MMC_MA_FEATURES_FILE, .MMC_MA_INPUT_FILE,
                             .MMC_MA_INFO_FILE))
-  unlink(paths[file.exists(paths)])
+  gsea_path <- file.path(dir, .MMC_MA_GSEA_FILE)
+  stale <- c(paths, gsea_path)
+  unlink(stale[file.exists(stale)])
 
   st <- run$stats
   tbl <- st$table
@@ -168,8 +178,20 @@ write_mummichog_ma_results <- function(run, peaks, dir, info, pathway_ids) {
                   significant_ecs = length(run$ecs$input_ecpdlist),
                   pathways_tested = length(run$pathways$name),
                   pathways_reported = nrow(st$resmat))))
-  jsonlite::write_json(info, paths[5], auto_unbox = TRUE, pretty = TRUE,
-                       digits = NA, null = "null")
+  gs <- run$gsea
+  if (!is.null(gs)) {
+    readr::write_tsv(gs$table, gsea_path, na = "NA")
+    info$gsea <- list(ran = TRUE, metric_label = gs$metric_label,
+                      params = gs$params, deviations = gs$deviations,
+                      reference = gs$reference, adjustment = "BH (p.adjust 'fdr')",
+                      n_ec = gs$n_ec, n_positions = gs$n_positions,
+                      n_pathways = gs$n_pathways)
+    paths <- c(paths, gsea_path)
+  } else {
+    info$gsea <- list(ran = FALSE)
+  }
+  jsonlite::write_json(info, file.path(dir, .MMC_MA_INFO_FILE), auto_unbox = TRUE,
+                       pretty = TRUE, digits = NA, null = "null")
   paths
 }
 
@@ -207,9 +229,28 @@ read_mummichog_ma_pathways <- function(files) {
   tbl$pathway_size <- tbl[["Total.EC"]]
   tbl[["p-value"]] <- tbl[["FET"]]
   info_file <- files[basename(files) == .MMC_MA_INFO_FILE]
+  info <- NULL
   if (length(info_file) > 0L) {
-    attr(tbl, "ma_info") <- jsonlite::fromJSON(info_file[[1]],
-                                               simplifyVector = TRUE)
+    info <- jsonlite::fromJSON(info_file[[1]], simplifyVector = TRUE)
+    attr(tbl, "ma_info") <- info
+  }
+  gsea_file <- files[basename(files) == .MMC_MA_GSEA_FILE]
+  if (length(gsea_file) > 0L) {
+    g <- as.data.frame(readr::read_tsv(
+      gsea_file[[1]], show_col_types = FALSE, na = "NA",
+      col_types = readr::cols(
+        "Pathway" = "c", "Leading-edge EmpiricalCompounds" = "c",
+        "EmpiricalCompounds" = "c", "ES fallback reason" = "c",
+        "ES defaulted by reference implementation" = "l", .default = "d")),
+      check.names = FALSE)
+    gi <- info$gsea %||% list()
+    # The shape the report's GSEA tab and Summary read (as for python GSEA).
+    attr(tbl, "ma_gsea") <- list(
+      table = g, metric_label = gi$metric_label, params = gi$params,
+      deviations = as.character(unlist(gi$deviations)),
+      reference = gi$reference, nes_note = mmc_gsea_nes_note(),
+      n_ec = gi$n_ec, n_positions = gi$n_positions, n_pathways = nrow(g),
+      adjustment = gi$adjustment, engine = "metaboanalyst")
   }
   tbl
 }

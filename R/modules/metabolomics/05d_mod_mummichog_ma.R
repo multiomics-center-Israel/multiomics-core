@@ -16,7 +16,9 @@
 #   * permutation i is seeded 123 + i (MetaboAnalyst's own seeds), not from
 #     params.seed;
 #   * the model must be a readable JSON (model_ref / model_json): the built-in
-#     human_mfn model lives inside the python package and has no masses here.
+#     human_mfn model lives inside the python package and has no masses here;
+#   * GSEA runs here, in the stage, on the same ECs and pathway sets as the
+#     ORA (06o), not in the report layer from python EC tables.
 
 
 #' Run the MetaboAnalyst-compatible mummichog engine for every contrast
@@ -73,6 +75,18 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
   min_lib  <- num1(mummi_cfg$min_pathway_size, "min_pathway_size", 3)
   force_primary_ion <- .mmc_as_flag(mummi_cfg$force_primary_ion,
                                     "force_primary_ion") %||% TRUE
+  # GSEA: same switch and overrides as the python engine's; defaults are
+  # MetaboAnalyst's. It needs fgsea.
+  gsea_on <- isTRUE(mummi_cfg$gsea_enabled %||% TRUE)
+  if (gsea_on && !requireNamespace("fgsea", quietly = TRUE)) {
+    message("mummichog (metaboanalyst): fgsea not available — GSEA skipped")
+    gsea_on <- FALSE
+  }
+  gsea_settings <- list(
+    n_perm   = mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm,
+    min_size = mummi_cfg$gsea_min_size     %||% .MMC_GSEA_DEFAULTS$min_size,
+    max_size = mummi_cfg$gsea_max_size     %||% .MMC_GSEA_DEFAULTS$max_size,
+    seed     = mummi_cfg$gsea_seed         %||% .MMC_GSEA_DEFAULTS$seed)
 
   # -- model -> library, once ---------------------------------------------------
   network <- mmc_select_model(mummi_cfg,
@@ -149,11 +163,21 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
       }
       merged <- merge(de, row_data[, c("feature_id", mz_col, rt_col, ".polarity")],
                       by = "feature_id")
+      # The peak list's score is MetaboAnalyst's t.score: the signed DE
+      # statistic the GSEA ranks on, chosen from the DE method exactly as for
+      # the python engine's GSEA (mmc_gsea_rank_metric). The ORA does not use
+      # it; it becomes each EC's GSEA score (the max over its members).
+      rank <- mmc_gsea_rank_metric(
+        merged, de_method = if (is.data.frame(de_res)) NULL else de_res$method)
+      if (is.null(rank)) {
+        .mmc_stop("contrast '", contrast, "': no usable signed statistic or ",
+                  "logFC in the DE table to score features.")
+      }
       peaks <- data.frame(feature_id = as.character(merged$feature_id),
                           mz = as.numeric(merged[[mz_col]]),
                           rt = as.numeric(merged[[rt_col]]),
                           p_value = as.numeric(merged$P.Value),
-                          statistic = as.numeric(merged$logFC),
+                          statistic = unname(rank$values[as.character(merged$feature_id)]),
                           polarity = merged$.polarity,
                           stringsAsFactors = FALSE)
       # MetaboAnalyst drops rows with a missing value before anything else
@@ -175,7 +199,9 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
       run <- mmc_ma_run_contrast(peaks, lib, mode, ppm = ppm, cutoff = p_cutoff,
                                  n_perm = n_perm,
                                  force_primary_ion = force_primary_ion,
-                                 rt_frac = rt_frac, min_lib = min_lib)
+                                 rt_frac = rt_frac, min_lib = min_lib,
+                                 gsea = if (gsea_on) c(gsea_settings,
+                                   list(metric_label = rank$label)) else NULL)
       write_mummichog_ma_results(
         run, peaks, file.path(mummi_dir, dirs[[i]], .MMC_MA_SUBDIR),
         info = c(list(contrast = contrast), info), pathway_ids = pathway_ids)

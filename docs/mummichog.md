@@ -117,7 +117,8 @@ What differs from the python engine:
 | adjusted p-values | none | **Holm** (`adj.p Holm *` columns), MetaboAnalyst's `p.adjust()` default — **not BH/FDR** |
 | permutation seeds | `params.seed` | `123 + i` for permutation `i` (MetaboAnalyst's own) |
 | model | built-in `human_mfn` or a custom JSON | a custom JSON (`model_ref` / `model_json`) is required |
-| GSEA, Pathway Evidence | yes | **not run** (they read the python engine's EC tables) |
+| GSEA | on python mummichog's ECs (m/z-merged scores) | MetaboAnalyst's peaks GSEA on the **same joint-polarity ECs and pathway sets as the ORA**; EC score = max of its features' signed DE statistic; `padj` is **BH** |
+| Pathway Evidence | yes | not produced (it reads the python engine's EC tables) |
 
 Reproduced on purpose, because MetaboAnalyst does it:
 
@@ -133,9 +134,12 @@ Outputs, per contrast, in `mummichog_pinned/<contrast>/metaboanalyst/`:
 - `mummichog_pathway_enrichment_mummichog.csv`: MetaboAnalyst's own result table, verbatim.
 - `ma_matched_features.tsv`: every match with its EC, feature id and polarity.
 - `ma_input.tsv`: the peak list the analysis was given.
-- `ma_run_info.json`: parameters, model, Gamma fit and counts.
+- `ma_gsea_results.tsv`: the GSEA table in MetaboAnalyst's order (raw p, BH `padj`, NES, leading edge, each pathway's ECs).
+- `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts.
 
-The report, its exports and the Shiny payload read these through the same targets as before. The report's ORA table adds the EASE, Gamma, empirical and Holm columns.
+The report, its exports and the Shiny payload read these through the same targets as before. The report's ORA table adds the EASE, Gamma, empirical and Holm columns; its GSEA tab, scatter and GSEA table export show this engine's GSEA. Python GSEA never runs with this engine, so the two engines' results are never mixed in one report.
+
+GSEA reproduces `.compute.mummichog.RT.fgsea()` at the pinned commit, with two documented exceptions that change no statistic: MetaboAnalyst's result CSV attaches EC hits in library order to rows sorted by p-value (here each row carries its own pathway's ECs), and a single tested pathway stays a row. Validated end to end against that commit on the synthetic fixtures (`generate_gsea_reference.R`).
 
 Limits:
 

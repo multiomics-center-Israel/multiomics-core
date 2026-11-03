@@ -2512,7 +2512,18 @@ if (identical(mummi_engine, "metaboanalyst")) {
   cat("**Adjusted p-values are Holm, not Benjamini–Hochberg.** The `adj.p Holm` columns are MetaboAnalyst's own adjustment: `p.adjust()` with its default, Holm's family-wise method, over the reported pathways, applied to the rounded FET, EASE and Gamma values. They are not FDR values.\n\n")
   cat(sprintf("Pathways with fewer than %s compounds in the model are not tested, and pathways with no significant EC are not reported.\n\n",
               ma_p$min_pathway_size %||% 3))
-  cat("**Not run by this engine:** the complementary **GSEA** and the **Pathway Evidence** section, which need the python engine's EmpiricalCompound tables. Each contrast's GSEA tab says so.\n\n")
+  ma_gseas <- Filter(Negate(is.null), lapply(mummi_sections, `[[`, "gsea"))
+  if (length(ma_gseas) > 0) {
+    g1 <- ma_gseas[[1]]
+    labels <- unique(vapply(ma_gseas, function(g) g$metric_label %||% "?", character(1)))
+    cat(sprintf("**GSEA.** MetaboAnalyst's peaks GSEA, on the **same** EmpiricalCompounds and pathway sets as the ORA, using the **complete ranked EC list without a significance cutoff**. Each feature is scored by the %s; an EC's score is the **maximum** over its member features, which in mixed mode can come from both polarities. A pathway's gene set is its ECs. The test is MetaboAnalyst's fixed-permutation fgsea variant (%s permutations, minimum set size %s, seed %s). It reports a raw permutation p-value (`P.Value`) and its **Benjamini–Hochberg FDR** (`padj`), computed over the pathways tested — GSEA is BH-adjusted, ORA Holm-adjusted, as in MetaboAnalyst. %s\n\n",
+                if (length(labels) == 1L) labels else paste0("statistic chosen per contrast (", paste(labels, collapse = "; "), ")"),
+                g1$params$n_perm %||% "?", g1$params$min_size %||% "?", g1$params$seed %||% "?",
+                g1$nes_note %||% ""))
+  } else {
+    cat("**GSEA** has no results in this report: either it was switched off (`gsea_enabled`), `fgsea` was unavailable, or no pathway passed its size filter. The console log for the run distinguishes them.\n\n")
+  }
+  cat("**Not produced by this engine:** the **Pathway Evidence** section, which reads the python engine's EmpiricalCompound tables.\n\n")
   cat("**Mummichog is complementary to, not a replacement for, enrichment based on identified metabolites.** It provides pathway-level hypotheses from ambiguous LC–MS features; candidate metabolite assignments should not be interpreted as confirmed metabolite identifications.\n\n")
   cat("**Parameters:**\n\n")
   cat(sprintf("- Ionization mode: %s\n", ma_mode))
@@ -2530,6 +2541,16 @@ if (identical(mummi_engine, "metaboanalyst")) {
     else sprintf("%s: not fitted (%s) — Gamma is NA", n, g$error %||% "too few hits")
   }, character(1))
   cat(sprintf("- Gamma fit per contrast: %s\n", paste(gamma_state, collapse = "; ")))
+  if (length(ma_gseas) > 0) {
+    devs <- unique(unlist(lapply(ma_gseas, `[[`, "deviations"), use.names = FALSE))
+    cat(sprintf("- GSEA engine: MetaboAnalystR peaks GSEA (%s @ `%s`), fgsea %s; adjustment %s\n",
+                g1$reference$repo %||% "?", substr(g1$reference$commit %||% "?", 1, 10),
+                g1$params$fgsea_version %||% "?", g1$adjustment %||% "BH"))
+    if (length(devs) > 0) {
+      cat(sprintf("- **GSEA deviations from the reference implementation:** %s\n",
+                  paste(devs, collapse = "; ")))
+    }
+  }
   cat("- Gamma parameterization: MetaboAnalyst fits (scale, shape) and evaluates `1 - pgamma(1 - FET, shape, rate = <scale estimate>)`; this engine reproduces that exactly. fitdistrplus may warn about the standard errors of the fit; they are not used.\n")
   cat(sprintf("- fitdistrplus %s\n", ma1$fitdistrplus_version %||% "?"))
   cat("- Row order and rounding are MetaboAnalyst's: rows ordered by Gamma (by FET when Gamma is unavailable) as MetaboAnalyst orders them, values rounded to 5 significant digits.\n")
@@ -2718,7 +2739,7 @@ for (contrast in names(mummi_sections)) {
       cat("GSEA ran for this contrast but its scatter could not be rendered. The results themselves are unaffected — see the full GSEA table under **Advanced / Downloads**.\n\n")
     }
   } else if (is_ma_section) {
-    cat("GSEA is not run by the MetaboAnalyst-compatible engine: it reads the python engine's EmpiricalCompound tables, which this engine does not write. The ORA analysis for this contrast is shown under the **ORA plot** tab.\n\n")
+    cat("No GSEA results for this contrast: either GSEA was switched off or unavailable, or no pathway passed its size filter. The ORA analysis for this contrast is shown under the **ORA plot** tab.\n\n")
   } else {
     # Same wording as the methodology block: a NULL result does not say which
     # of the two it was, so the tab names both.

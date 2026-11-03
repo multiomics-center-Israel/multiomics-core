@@ -124,6 +124,15 @@ check_ma_report <- function(orig, dest, check) {
   lacking <- names(t_new)[!vapply(t_new, function(s) all(want %in% s), logical(1))]
   check("Mummichog: every contrast tab has Summary, ORA plot, GSEA plot, Advanced / Downloads",
         length(lacking) == 0, paste(lacking, collapse = ", "))
+  n_gsea <- lengths(regmatches(new, gregexpr("GSEA over the complete ranked list of",
+                                             new, fixed = TRUE)))
+  check("Mummichog: every contrast tab shows GSEA results (no placeholder)",
+        n_gsea >= length(t_new) && length(t_new) > 0 &&
+          !grepl("No GSEA results for this contrast", new, fixed = TRUE),
+        sprintf("%d GSEA result block(s) for %d tab(s)", n_gsea, length(t_new)))
+  check("Mummichog: GSEA labelled BH and ORA labelled Holm",
+        grepl("Benjamini–Hochberg FDR", new, fixed = TRUE) &&
+          grepl("Holm, not Benjamini", new, fixed = TRUE))
   lines <- c(lines, "# Mummichog tabs (original)", names(t_old),
              "# Mummichog tabs (new)", names(t_new))
 

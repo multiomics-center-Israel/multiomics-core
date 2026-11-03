@@ -74,10 +74,15 @@ fpi <- isTRUE(p$force_primary_ion)
 
 # ---- ours -----------------------------------------------------------------------
 lib <- mmc_ma_library_from_model(model)
+gp <- info$gsea$params
+gsea_settings <- if (isTRUE(info$gsea$ran)) list(
+  n_perm = gp$n_perm, min_size = gp$min_size,
+  max_size = suppressWarnings(as.numeric(gp$max_size)), seed = gp$seed,
+  metric_label = info$gsea$metric_label) else NULL
 ours <- suppressWarnings(mmc_ma_run_contrast(
   peaks, lib, p$ionization_mode, ppm = p$tolerance_ppm, cutoff = p$p_cutoff,
   n_perm = p$n_permutations, force_primary_ion = fpi, rt_frac = p$rt_frac,
-  min_lib = p$min_pathway_size))
+  min_lib = p$min_pathway_size, gsea = gsea_settings))
 
 # ---- upstream -------------------------------------------------------------------
 up <- new.env()
@@ -95,9 +100,25 @@ up$load_stringr <- function() invisible(NULL)
 if (!exists("%||%", envir = baseenv(), inherits = FALSE)) {
   up$`%||%` <- function(x, y) if (is.null(x)) y else x
 }
-for (f in c("peaks_to_function.R", "util_psea.R", "depends_refs.R")) {
+for (f in c("peaks_to_function.R", "util_psea.R", "depends_refs.R", "util_fgsea.R")) {
   sys.source(file.path(mar_dir, "R", f), envir = up)
 }
+# my.fgsea's subprocess bridge without the subprocess: the same call, same args.
+up$my.fgsea <- function(mSetObj, pathways, stats, ranks, nperm, minSize = 1,
+                        maxSize = Inf, nproc = 0, gseaParam = 1, BPPARAM = NULL) {
+  res <- up$.run_fgsea_inner(mSetObj, pathways, stats, ranks, nperm, minSize,
+                             maxSize, gseaParam)
+  up$fgsea_res <- res
+  res
+}
+gstart <- grep("^\\.compute\\.mummichog\\.RT\\.fgsea <- function\\(", src_all <-
+                 readLines(file.path(mar_dir, "R", "peaks_to_function.R")))
+ganchor <- grep("json.mat <- RJSONIO::toJSON(json.res);", src_all, fixed = TRUE)
+ganchor <- ganchor[ganchor > gstart][1]
+eval(parse(text = sub("^\\.compute\\.mummichog\\.RT\\.fgsea <- ",
+                      ".compute_rt_fgsea_no_json <- ",
+                      c(src_all[gstart:(ganchor - 1L)], "  return(mSetObj)", "}"))),
+     envir = up)
 src <- readLines(file.path(mar_dir, "R", "peaks_to_function.R"))
 start  <- grep("^\\.compute\\.mummichogRTSigPvals <- function\\(", src)
 anchor <- grep("json.mat <- RJSONIO::toJSON(json.res);", src, fixed = TRUE)
@@ -138,6 +159,12 @@ withr::with_dir(wd, invisible(capture.output(withCallingHandlers({
   mSet$dataSet$paramSet <- mSet$paramSet
   mSet <- up$.perform.mummichogRTPermutations(mSet, p$n_permutations)
   mSet <- up$.compute_sig_pvals_no_json(mSet)
+  if (!is.null(gsea_settings)) {
+    gset <- mSet
+    gset$mum_nm_csv <- "gsea.csv"
+    gset <- up$.compute_rt_fgsea_no_json(gset, gsea_settings$n_perm)
+    up$gsea_resmat <- gset$mummi.gsea.resmat
+  }
 }, warning = function(w) { up_warn <<- c(up_warn, conditionMessage(w))
                            invokeRestart("muffleWarning") }))))
 cat(sprintf("upstream ran in %.1f min (%d warning(s))\n",
@@ -181,6 +208,44 @@ cmp("reported table (Gamma, empirical, order)", ours$stats$resmat[, -11, drop = 
 cmp("result CSV incl. Holm columns",        ours$stats$restable,
     up$csv_store[[mSet$mum_nm_csv]])
 
+# ---- GSEA ---------------------------------------------------------------------
+if (!is.null(gsea_settings)) {
+  check("GSEA ran with MetaboAnalyst's defaults (permutations, size, seed)",
+        identical(as.numeric(c(gsea_settings$n_perm, gsea_settings$min_size, gsea_settings$seed)),
+                  c(100, 1, 123)) && is.infinite(gsea_settings$max_size))
+  cmp("GSEA EC scores (ec_exp)", ours$ecs$ec_exp, mSet$ec_exp)
+  f <- ours$gsea$fgsea; e <- up$fgsea_res
+  cmp("GSEA tested pathways and order", f$pathway, as.character(e$pathway))
+  cmp("GSEA tested sizes", as.numeric(f$size), as.numeric(e$size))
+  cmp("GSEA leading edges", ifelse(is.na(f$leadingEdge), "", f$leadingEdge),
+      as.character(e$leadingEdgeMatched))
+  for (col in c("ES", "NES", "pval", "padj", "nMoreExtreme")) {
+    d <- max(abs(as.numeric(f[[col]]) - as.numeric(e[[col]])), na.rm = TRUE)
+    check(paste("GSEA", col, "(|diff| <= 1e-8)"), is.finite(d) && d <= 1e-8,
+          sprintf("max |diff| %.3g", d))
+  }
+  cmp("GSEA result table (rounded, ordered)", ours$gsea$resmat, up$gsea_resmat)
+  own <- vapply(rownames(ours$gsea$resmat), function(pw)
+    paste(names(up$qs_store[["pathwaysFiltered.qs"]][[pw]]), collapse = ";"),
+    character(1), USE.NAMES = FALSE)
+  cmp("GSEA EC hits per pathway", ours$gsea$table$EmpiricalCompounds, own)
+  gnom <- function(m) rownames(m)[m[, "P_val"] < p$p_cutoff]
+  gbh  <- function(m) rownames(m)[m[, "P_adj"] < p$p_cutoff]
+  check("same pathways nominal in GSEA (p < cutoff)", setequal(gnom(ours$gsea$resmat), gnom(up$gsea_resmat)))
+  check("same pathways passing GSEA BH FDR < cutoff", setequal(gbh(ours$gsea$resmat), gbh(up$gsea_resmat)))
+  gw <- file.path(ma_dir, "ma_gsea_results.tsv")
+  if (file.exists(gw)) {
+    wr <- readr::read_tsv(gw, show_col_types = FALSE)
+    check("the run's written GSEA table equals this re-run",
+          identical(wr$Pathway, ours$gsea$table$Pathway) &&
+            isTRUE(all.equal(wr$P.Value, ours$gsea$table$P.Value)) &&
+            isTRUE(all.equal(wr$padj, ours$gsea$table$padj)) &&
+            isTRUE(all.equal(wr$NES, ours$gsea$table$NES)))
+  }
+} else {
+  check("the run recorded a GSEA", FALSE, "ma_run_info.json says GSEA did not run")
+}
+
 # the run's own written CSV is this engine's output
 written <- utils::read.csv(file.path(ma_dir, "mummichog_pathway_enrichment_mummichog.csv"),
                            check.names = FALSE, row.names = 1, colClasses = "character")
@@ -197,7 +262,8 @@ check("same pathways nominal at FET < cutoff", setequal(nom(a), nom(b)),
               length(setdiff(nom(b), nom(a)))))
 check("same pathways passing Holm < cutoff", setequal(holm(a), holm(b)))
 
-saveRDS(list(ours = ours, upstream = mSet[c("pvals", "mummi.resmat", "perm_record",
+saveRDS(list(ours = ours, upstream_gsea = list(fgsea = up$fgsea_res, resmat = up$gsea_resmat),
+             upstream = mSet[c("pvals", "mummi.resmat", "perm_record",
                                             "pathways", "input_ecpdlist",
                                             "total_matched_ecpds")],
              upstream_initial_ecs = up$qs_store[["initial_ecs.qs"]],

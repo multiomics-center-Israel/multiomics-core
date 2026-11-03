@@ -123,7 +123,7 @@ for (mode in c("mixed", "positive", "negative")) {
                     c("ma_pathway_results.tsv",
                       "mummichog_pathway_enrichment_mummichog.csv",
                       "ma_matched_features.tsv", "ma_input.tsv",
-                      "ma_run_info.json"))
+                      "ma_run_info.json", "ma_gsea_results.tsv"))
 
     # MetaboAnalystR's own result CSV, cell for cell.
     csv <- utils::read.csv(file.path(ma_dir, "mummichog_pathway_enrichment_mummichog.csv"),
@@ -164,7 +164,7 @@ test_that("the matched-feature table carries feature ids and polarity", {
 
 # ---- report sections and the Shiny contract --------------------------------------
 
-test_that("MA sections show FET with Holm columns and skip GSEA and evidence", {
+test_that("MA sections show FET with Holm columns, the MA GSEA, and no evidence", {
   ref <- ma_int_ref()
   st <- ma_run_stage(ref, "mixed")
   pw <- read_mummichog_pathways_by_contrast(st$files)
@@ -173,7 +173,13 @@ test_that("MA sections show FET with Holm columns and skip GSEA and evidence", {
     de_res = st$si$de_res))
   s <- secs[["HL_vs_LL"]]
   expect_identical(s$engine, "metaboanalyst")
-  expect_null(s$gsea)
+  # GSEA: the engine's own, on its joint-polarity ECs; never python's
+  expect_false(is.null(s$gsea))
+  expect_identical(s$gsea$engine, "metaboanalyst")
+  expect_true(all(c("Pathway", "NES", "P.Value", "padj", "EmpiricalCompounds") %in%
+                    names(s$gsea$table)))
+  expect_false(is.null(s$gsea_plot))
+  expect_true(all(s$summary$Pathway %in% c(s$table$Pathway, s$gsea$table$Pathway)))
   expect_null(s$evidence)
   expect_true(is.na(s$polarity))
   expect_false(is.null(s$ma_info))
