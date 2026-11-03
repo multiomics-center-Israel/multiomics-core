@@ -73,7 +73,10 @@
 #' @return Invisibly, the lines written to `<dest>/report_check.txt`.
 check_ma_report <- function(orig, dest, check) {
   lines <- character()
-  read_html <- function(f) paste(readLines(f, warn = FALSE), collapse = "\n")
+  # Whitespace-normalised: pandoc wraps HTML text at 72 columns, so a phrase can
+  # be split across a line break in the file.
+  read_html <- function(f) gsub("\\s+", " ", paste(readLines(f, warn = FALSE),
+                                                    collapse = "\n"))
   f_old <- file.path(orig, "report_metabolomics.html")
   f_new <- file.path(dest, "report_metabolomics.html")
   if (!file.exists(f_old) || !file.exists(f_new)) {
@@ -133,6 +136,50 @@ check_ma_report <- function(orig, dest, check) {
   check("Mummichog: GSEA labelled BH and ORA labelled Holm",
         grepl("Benjamini–Hochberg FDR", new, fixed = TRUE) &&
           grepl("Holm, not Benjamini", new, fixed = TRUE))
+  # -- exports, per contrast (as save_mummichog_exports() names them) ---------
+  map <- file.path(dest, "metabolomics", "mummichog_pinned", "contrasts.tsv")
+  if (file.exists(map)) {
+    cmap <- utils::read.delim(map, stringsAsFactors = FALSE)
+    slugs <- make.unique(gsub("[^A-Za-z0-9]+", "_", cmap$contrast), sep = "_")
+    want_ex <- c("mummichog_pathway_bubble_%s.png", "mummichog_pathway_bubble_%s.pdf",
+                 "mummichog_pathway_table_%s.tsv", "mummichog_pathway_table_%s.csv",
+                 "mummichog_summary_%s.tsv", "mummichog_summary_%s.csv",
+                 "mummichog_gsea_table_%s.tsv", "mummichog_gsea_table_%s.csv",
+                 "mummichog_gsea_scatter_%s.png", "mummichog_gsea_scatter_%s.pdf")
+    ex <- as.vector(outer(want_ex, slugs, sprintf))
+    gone <- ex[!file.exists(file.path(dest, "metabolomics", "mummichog_pinned", ex))]
+    check("exports: ORA plot/table, Summary, GSEA table/scatter for every contrast",
+          length(gone) == 0, paste(utils::head(gone, 4), collapse = "; "))
+    per <- file.path(dest, "metabolomics", "mummichog_pinned", cmap$dir, "metaboanalyst")
+    need <- c("ma_pathway_results.tsv", "mummichog_pathway_enrichment_mummichog.csv",
+              "ma_gsea_results.tsv", "ma_matched_features.tsv", "ma_input.tsv",
+              "ma_run_info.json")
+    miss_r <- as.vector(outer(per, need, file.path))
+    miss_r <- miss_r[!file.exists(miss_r)]
+    check("engine results: ORA and GSEA tables and run record for every contrast",
+          length(miss_r) == 0, paste(utils::head(basename(miss_r), 4), collapse = "; "))
+    ora_tbl <- file.path(dest, "metabolomics", "mummichog_pinned",
+                         sprintf("mummichog_pathway_table_%s.tsv", slugs))
+    ora_tbl <- ora_tbl[file.exists(ora_tbl)]
+    hdr_ok <- vapply(ora_tbl, function(f) {
+      h <- strsplit(readLines(f, n = 1L), "\t", fixed = TRUE)[[1]]
+      all(c("p.value", "adj.p Holm FET") %in% h) && !any(grepl("BH|FDR", h))
+    }, logical(1))
+    gsea_tbl <- file.path(dest, "metabolomics", "mummichog_pinned",
+                          sprintf("mummichog_gsea_table_%s.tsv", slugs))
+    gsea_tbl <- gsea_tbl[file.exists(gsea_tbl)]
+    ghdr_ok <- vapply(gsea_tbl, function(f) {
+      h <- strsplit(readLines(f, n = 1L), "\t", fixed = TRUE)[[1]]
+      all(c("P.Value", "padj", "NES") %in% h) && !any(grepl("Holm", h))
+    }, logical(1))
+    check("exported ORA tables carry FET + Holm columns, no BH/FDR column",
+          length(hdr_ok) > 0 && all(hdr_ok))
+    check("exported GSEA tables carry P.Value / padj (BH) / NES, no Holm column",
+          length(ghdr_ok) > 0 && all(ghdr_ok))
+  } else {
+    check("contrast map present", FALSE, map)
+  }
+
   lines <- c(lines, "# Mummichog tabs (original)", names(t_old),
              "# Mummichog tabs (new)", names(t_new))
 

@@ -287,7 +287,10 @@ check("every Mummichog file outside the new engine's tree is a new export",
             grepl("^MUMMICHOG_UPDATE_NOTE", mm_files)))
 check("final Excel files present", any(grepl("\\.xlsx$", dest_files)))
 
-html_new <- paste(readLines(file.path(dest, "report_metabolomics.html"), warn = FALSE), collapse = "\n")
+# Whitespace-normalised: pandoc wraps HTML text at 72 columns, so a phrase can
+# be split across a line break in the file.
+html_new <- gsub("\\s+", " ", paste(readLines(file.path(dest, "report_metabolomics.html"),
+                                             warn = FALSE), collapse = "\n"))
 check("report names the new engine", grepl("MetaboAnalyst-compatible engine", html_new, fixed = TRUE))
 check("report states joint mixed-polarity analysis", grepl("analysed jointly", html_new, fixed = TRUE))
 check("report states Holm, not BH/FDR", grepl("Holm, not Benjamini", html_new, fixed = TRUE))
