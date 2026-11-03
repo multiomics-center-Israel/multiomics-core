@@ -92,21 +92,47 @@ halt_if_failed()
 
 # ---- 3. stored objects, paths pointed at the copy --------------------------------
 prefixes <- unique(c(orig, orig_given, sub("/$", "", orig_given)))
-relocate <- function(x) {
-  if (is.character(x)) {
-    for (pre in prefixes) {
-      hit <- !is.na(x) & startsWith(x, paste0(pre, "/"))
-      x[hit] <- paste0(dest, substring(x[hit], nchar(pre) + 1L))
+# Graphics objects are never descended into. A compound grid `unit` is a list
+# whose `[[` returns another unit, so walking one recursed until the node stack
+# overflowed; plots and grobs carry no output paths anyway. A depth cap guards
+# against any other self-similar object.
+.no_descend <- c("unit", "grob", "gList", "gTree", "gtable", "gg", "ggplot",
+                 "theme", "patchwork", "Heatmap", "HeatmapList", "pheatmap",
+                 "htmlwidget", "recordedplot", "trellis")
+walk_paths <- function(x, f, depth = 0L) {
+  if (is.character(x)) return(f(x))
+  if (is.list(x) && depth < 40L && !inherits(x, .no_descend)) {
+    for (i in seq_along(x)) {
+      if (!is.null(x[[i]])) x[[i]] <- walk_paths(x[[i]], f, depth + 1L)
     }
-    return(x)
-  }
-  if (is.list(x)) {
-    for (i in seq_along(x)) if (!is.null(x[[i]])) x[[i]] <- relocate(x[[i]])
   }
   x
 }
+in_orig <- function(x) {
+  hit <- rep(FALSE, length(x))
+  for (pre in prefixes) hit <- hit | (!is.na(x) & startsWith(x, paste0(pre, "/")))
+  hit
+}
+relocate <- function(x) walk_paths(x, function(s) {
+  for (pre in prefixes) {
+    hit <- !is.na(s) & startsWith(s, paste0(pre, "/"))
+    s[hit] <- paste0(dest, substring(s[hit], nchar(pre) + 1L))
+  }
+  s
+})
+left_in_orig <- function(x) {
+  n <- 0L
+  walk_paths(x, function(s) { n <<- n + sum(in_orig(s)); s })
+  n
+}
 read_t <- function(n) targets::tar_read_raw(n, store = store)
-opt_t <- function(n) if (n %in% targets::tar_objects(store = store)) relocate(read_t(n)) else NULL
+# Read and relocated EAGERLY, one target at a time, so a failure names its target
+# instead of surfacing inside whichever function first forces a lazy argument.
+opt_t <- function(n) {
+  if (!n %in% targets::tar_objects(store = store)) return(NULL)
+  tryCatch(relocate(read_t(n)), error = function(e)
+    stop("relocating stored target '", n, "': ", conditionMessage(e), call. = FALSE))
+}
 pre <- relocate(read_t("metab_pre"))
 de_raw <- read_t("metab_de_res")
 de_res <- relocate(de_raw)
@@ -114,6 +140,19 @@ check("DE tables unchanged by path relocation", identical(de_res$de_tables, de_r
 inputs <- relocate(read_t("metab_inputs"))
 enrichment_res <- opt_t("metab_enrichment_res")
 fs <- opt_t("metab_feature_sel_res")
+qc_obj <- opt_t("metab_qc_pre_obj")
+clustering_obj <- opt_t("metab_clustering_obj")
+final_results <- opt_t("metab_final_results")
+network_obj <- opt_t("metab_network")
+commentary <- opt_t("metab_commentary")
+stored <- list(pre = pre, de_res = de_res, inputs = inputs,
+               enrichment = enrichment_res, feature_sel = fs, qc = qc_obj,
+               clustering = clustering_obj, final_results = final_results,
+               network = network_obj, commentary = commentary)
+left <- vapply(stored, left_in_orig, integer(1))
+check("no stored path still points into the original run", all(left == 0L),
+      if (any(left > 0L)) paste(names(left)[left > 0L], collapse = ", ") else "")
+halt_if_failed()
 
 cfg_ma <- config
 mm <- cfg_ma$modes$metabolomics$enrichment$mummichog %||% list()
@@ -130,21 +169,27 @@ sections <- mod_mummichog_sections(pathways, files, pre, de_res, cfg_ma,
 exports <- mod_mummichog_exports(sections, files, out_dir)
 shiny_file <- file.path(out_dir, sprintf("shiny_payload_metabolomics_%s.rds",
                                          get_run_name(config)))
-save_shiny_payload_metabolomics(
-  pre = pre, de_res = de_res, inputs = inputs, config = cfg_ma,
-  pca_res = opt_t("metab_qc_pre_obj"), clustering_res = opt_t("metab_clustering_obj"),
-  rf_res = if (!is.null(fs)) fs$rf else NULL,
-  plsda_res = if (!is.null(fs)) fs$plsda else NULL,
-  enrichment_res = enrichment_res, include_legacy = TRUE,
-  xlsx_files = opt_t("metab_final_results"), mummichog_pathways = pathways,
-  out_file = shiny_file)
+# The report does not read the Shiny payload, so it is rendered first and a
+# payload failure cannot cost it.
 report <- mod_metabolomics_report(
-  pre = pre, qc_res = opt_t("metab_qc_pre_obj"), de_res = de_res,
-  clustering_res = opt_t("metab_clustering_obj"), feature_sel_res = fs,
-  enrichment_res = enrichment_res, network_res = opt_t("metab_network"),
+  pre = pre, qc_res = qc_obj, de_res = de_res,
+  clustering_res = clustering_obj, feature_sel_res = fs,
+  enrichment_res = enrichment_res, network_res = network_obj,
   config = cfg_ma, out_dir = out_dir, qc_comparison_file = NULL,
-  qc_suite_files = NULL, commentary_file = opt_t("metab_commentary"),
+  qc_suite_files = NULL, commentary_file = commentary,
   mummichog_sections = sections)
+shiny_ok <- tryCatch({
+  save_shiny_payload_metabolomics(
+    pre = pre, de_res = de_res, inputs = inputs, config = cfg_ma,
+    pca_res = qc_obj, clustering_res = clustering_obj,
+    rf_res = if (!is.null(fs)) fs$rf else NULL,
+    plsda_res = if (!is.null(fs)) fs$plsda else NULL,
+    enrichment_res = enrichment_res, include_legacy = TRUE,
+    xlsx_files = final_results, mummichog_pathways = pathways,
+    out_file = shiny_file)
+  TRUE
+}, error = function(e) { message("Shiny payload: ", conditionMessage(e)); FALSE })
+check("Shiny payload written", shiny_ok)
 
 # ---- 5. methods / provenance note --------------------------------------------------
 info1 <- attr(pathways[[1]], "ma_info")
@@ -223,9 +268,11 @@ if (file.exists(orig_html)) {
 } else {
   check("original report found for the section comparison", FALSE, orig_html)
 }
-payload <- readRDS(shiny_file)
-check("Shiny payload: one mummichog entry per contrast",
-      setequal(names(payload$mummichog), names(de_res$de_tables)))
+if (shiny_ok) {
+  payload <- readRDS(shiny_file)
+  check("Shiny payload: one mummichog entry per contrast",
+        setequal(names(payload$mummichog), names(de_res$de_tables)))
+}
 
 cat("\nNew run: ", dest, "\n", sep = "")
 if (!all(unlist(results))) quit(status = 1)
