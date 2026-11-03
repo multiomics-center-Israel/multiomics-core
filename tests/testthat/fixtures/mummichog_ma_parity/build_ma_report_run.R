@@ -41,8 +41,13 @@ opt <- function(flag, default = NULL) {
 config_path <- opt("--config"); dest <- opt("--dest")
 if (is.null(config_path) || is.null(dest)) {
   stop("usage: build_ma_report_run.R --config <config.yaml> --dest <new run dir> ",
-       "[--store <store>] [--polarity-column <col>]")
+       "[--store <store>] [--polarity-column <col>] [--rerender]")
 }
+# --rerender: --dest is an earlier build of this script. Nothing is copied and
+# the Mummichog engine is not re-run: its results already in --dest are read
+# back, and only the sections, exports, report, Shiny payload and note are
+# rebuilt there.
+rerender <- "--rerender" %in% args
 if (!file.exists("_targets.R") || !dir.exists("R")) stop("run from the multiomics-core root")
 for (layer in c("core", "services", "domain", "modules")) {
   for (f in sort(list.files(file.path("R", layer), pattern = "\\.R$",
@@ -63,9 +68,14 @@ orig <- normalizePath(orig_given, mustWork = FALSE)
 store <- opt("--store", targets_store_for(config))
 check("original run directory exists", dir.exists(orig), orig)
 check("targets store exists", dir.exists(store), store)
-check("--dest does not exist yet", !file.exists(dest), dest)
+if (rerender) {
+  check("--dest holds an earlier build (MetaboAnalyst-compatible results present)",
+        file.exists(file.path(dest, "metabolomics", "mummichog_pinned", "contrasts.tsv")), dest)
+} else {
+  check("--dest does not exist yet", !file.exists(dest), dest)
+}
 halt_if_failed()
-dir.create(dest, recursive = TRUE)
+if (!rerender) dir.create(dest, recursive = TRUE)
 dest <- normalizePath(dest)
 check("--dest is outside the original run", !startsWith(paste0(dest, "/"), paste0(orig, "/")))
 check("--dest is a sibling of the original run (report helpers resolve the same)",
@@ -83,12 +93,14 @@ before <- snapshot(orig)
 
 # ---- 2. copy, without the old Mummichog / report / Shiny payload ----------------
 excluded <- "^metabolomics/mummichog_pinned/|^report_metabolomics\\.(html|Rmd)$|^metabolomics/shiny_payload_metabolomics_.*\\.rds$"
-to_copy <- before$file[!grepl(excluded, before$file)]
-for (d in unique(dirname(file.path(dest, to_copy)))) dir.create(d, recursive = TRUE, showWarnings = FALSE)
-ok <- file.copy(file.path(orig, to_copy), file.path(dest, to_copy), copy.date = TRUE)
-check("run copied (old Mummichog, report and Shiny payload left out)", all(ok),
-      sprintf("%d file(s) not copied", sum(!ok)))
-halt_if_failed()
+if (!rerender) {
+  to_copy <- before$file[!grepl(excluded, before$file)]
+  for (d in unique(dirname(file.path(dest, to_copy)))) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  ok <- file.copy(file.path(orig, to_copy), file.path(dest, to_copy), copy.date = TRUE)
+  check("run copied (old Mummichog, report and Shiny payload left out)", all(ok),
+        sprintf("%d file(s) not copied", sum(!ok)))
+  halt_if_failed()
+}
 
 # ---- 3. stored objects, paths pointed at the copy --------------------------------
 prefixes <- unique(c(orig, orig_given, sub("/$", "", orig_given)))
@@ -128,8 +140,12 @@ left_in_orig <- function(x) {
 read_t <- function(n) targets::tar_read_raw(n, store = store)
 # Read and relocated EAGERLY, one target at a time, so a failure names its target
 # instead of surfacing inside whichever function first forces a lazy argument.
+# Existence from the store's metadata: tar_objects() lists only targets stored
+# as R objects, so format = "file" targets (the final Excel files, the AI
+# commentary) were silently read as absent.
+stored_names <- targets::tar_meta(store = store, fields = "name")$name
 opt_t <- function(n) {
-  if (!n %in% targets::tar_objects(store = store)) return(NULL)
+  if (!n %in% stored_names) return(NULL)
   tryCatch(relocate(read_t(n)), error = function(e)
     stop("relocating stored target '", n, "': ", conditionMessage(e), call. = FALSE))
 }
@@ -145,6 +161,12 @@ clustering_obj <- opt_t("metab_clustering_obj")
 final_results <- opt_t("metab_final_results")
 network_obj <- opt_t("metab_network")
 commentary <- opt_t("metab_commentary")
+check("final-results Excel files found in the store",
+      !is.null(final_results) && any(grepl("\\.xlsx$", final_results)) &&
+        all(file.exists(final_results)))
+check("AI commentary file found in the store (if the original run has one)",
+      !("metab_commentary" %in% stored_names) ||
+        (!is.null(commentary) && all(file.exists(commentary))))
 stored <- list(pre = pre, de_res = de_res, inputs = inputs,
                enrichment = enrichment_res, feature_sel = fs, qc = qc_obj,
                clustering = clustering_obj, final_results = final_results,
@@ -162,7 +184,11 @@ cfg_ma$modes$metabolomics$enrichment$mummichog <- mm
 
 # ---- 4. engine, sections, exports, Shiny payload, report --------------------------
 out_dir <- file.path(dest, "metabolomics")
-files <- mod_mummichog_metaboanalyst(pre, de_res, cfg_ma, out_dir)
+files <- if (rerender) {
+  list.files(file.path(out_dir, "mummichog_pinned"), recursive = TRUE, full.names = TRUE)
+} else {
+  mod_mummichog_metaboanalyst(pre, de_res, cfg_ma, out_dir)
+}
 pathways <- read_mummichog_pathways_by_contrast(files)
 sections <- mod_mummichog_sections(pathways, files, pre, de_res, cfg_ma,
                                    enrichment_res = enrichment_res)
@@ -248,31 +274,8 @@ check("report carries none of the old per-polarity Mummichog wording",
 check("report never calls a Mummichog pathway significant after correction",
       !grepl("significant after (multiple-testing )?correction", html_new, perl = TRUE))
 
-headings <- function(html) {
-  h <- regmatches(html, gregexpr("<h[1-4][^>]*>.*?</h[1-4]>", html, perl = TRUE))[[1]]
-  unique(trimws(gsub("<[^>]+>", "", h)))
-}
-orig_html <- file.path(orig, "report_metabolomics.html")
-if (file.exists(orig_html)) {
-  h_old <- headings(paste(readLines(orig_html, warn = FALSE), collapse = "\n"))
-  h_new <- headings(html_new)
-  missing <- setdiff(h_old, h_new)
-  # Expected to go: the old per-polarity tabs and the sub-tabs this engine does
-  # not produce.
-  expected_gone <- grepl("positive ions|negative ions|^Pathway Evidence$", missing)
-  check("no report section lost (apart from old per-polarity / evidence tabs)",
-        !any(!expected_gone),
-        if (any(!expected_gone)) paste(missing[!expected_gone], collapse = " | ") else "")
-  writeLines(c("# headings in the original report missing from the new one", missing),
-             file.path(dest, "report_heading_diff.txt"))
-} else {
-  check("original report found for the section comparison", FALSE, orig_html)
-}
-if (shiny_ok) {
-  payload <- readRDS(shiny_file)
-  check("Shiny payload: one mummichog entry per contrast",
-        setequal(names(payload$mummichog), names(de_res$de_tables)))
-}
+source(file.path("tests", "testthat", "fixtures", "mummichog_ma_parity", "check_ma_report.R"))
+check_ma_report(orig, dest, check)
 
 cat("\nNew run: ", dest, "\n", sep = "")
 if (!all(unlist(results))) quit(status = 1)

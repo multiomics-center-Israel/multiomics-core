@@ -71,7 +71,8 @@ store <- opt("--store", targets_store_for(config))
 check("targets store exists", dir.exists(store), store)
 stop_if_failed()
 read_t <- function(name) targets::tar_read_raw(name, store = store)
-has_t <- function(name) name %in% targets::tar_objects(store = store)
+# tar_meta(), not tar_objects(): the latter omits format = "file" targets.
+has_t <- function(name) name %in% targets::tar_meta(store = store, fields = "name")$name
 
 need <- c("metab_pre", "metab_de_res", "metab_inputs", "metab_enrichment_res")
 for (n in need) check(paste("stored target", n), has_t(n))
