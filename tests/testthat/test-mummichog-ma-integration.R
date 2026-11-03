@@ -89,6 +89,10 @@ test_that("the stage refuses settings with no MetaboAnalyst meaning", {
 
 test_that("the DAG runs the python stage by default and the MA stage on request", {
   skip_if_not_installed("targets")
+  # pipe_metabolomics() calls tar_target() unqualified, as _targets.R does
+  # after attaching targets; attach it for this test only, so the file runs
+  # on its own.
+  withr::local_package("targets")
   cmd <- function(tl) {
     nm <- vapply(tl, function(t) t$settings$name, character(1))
     paste(deparse(tl[[which(nm == "metab_mummichog_pinned_files")]]$command$expr),
