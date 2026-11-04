@@ -42,6 +42,10 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     # 3. Generate Volcano and MA plots
     id_col_cfg <- cfg$de$id_col %||% "Gene" # or FeatureID
 
+    # One scale for every contrast's volcano, per p-value type
+    volcano_lims <- lapply(c(padj = "padj", pval = "pval"),
+                           function(pt) volcano_axis_limits(tables, pt))
+
     for (cn in names(tables)) {
         de_tbl <- tables[[cn]]
         if (is.null(de_tbl) || nrow(de_tbl) == 0) {
@@ -71,7 +75,9 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
                     cfg = cfg,
                     title = paste0("Volcano: ", cn,
                                    " (", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
-                    pvalue_type = ptype
+                    pvalue_type = ptype,
+                    xlim = volcano_lims[[ptype]]$x,
+                    ylim = volcano_lims[[ptype]]$y
                 ),
                 error = function(e) {
                     # padj must always work; only the raw-pval variant may be
