@@ -3018,6 +3018,19 @@ if (length(offline_dotplots) > 0) {
 }
 ```
 
+```{r enrichment-across-contrasts, eval=length(contrast_names) > 5, results='asis', fig.width=10, fig.height=9}
+enr_across <- collect_enrichment_results(enrich_dir)
+if (nrow(enr_across) > 0) {
+    cat("\n## Enrichment Across Contrasts {.tabset}\n\n")
+    cat("Each heatmap has one row per gene set and one column per contrast.",
+        "GSEA cells show NES; ORA cells show -log10(padj). Three selections per",
+        "analysis: gene sets significant in more than half of the contrasts, those",
+        "significant in only one or two, and the top 30 by smallest padj in any",
+        "contrast. Each list is cut to 30 rows, ordered by smallest padj.\n\n")
+    print_enrichment_contrast_heatmaps(enr_across, contrast_names, gsea_cut = enr_settings$sig_cutoff, ora_cut = enr_settings$ora_cutoff)
+}
+```
+
 ## Leading Edge Genes {.tabset}
 
 The **leading edge** genes are those that contribute most to the enrichment signal of each pathway. These are the genes that appear before the peak of the running enrichment score.
