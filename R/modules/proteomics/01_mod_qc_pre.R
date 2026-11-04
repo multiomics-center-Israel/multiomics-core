@@ -225,7 +225,8 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
         plots$imputation_hist <- p_imp
 
         f_box <- file.path(out_qc, "imputed_boxplot.png")
-        p_bp <- norm_boxplot(pre$expr_imp_single, pre$meta, cfg, out_file = f_box)
+        p_bp <- norm_boxplot(pre$expr_imp_single, pre$meta, cfg, out_file = f_box,
+                             title = proteomics_qc_boxplot_title(pre, cfg))
         files <- c(files, f_box)
         plots$boxplot <- p_bp
     }
@@ -325,4 +326,36 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
             outlier_res = outlier_res # outlier detection results
         )
     )
+}
+
+
+#' Title for the post-imputation QC boxplot
+#'
+#' Names every step the plotted matrix (`pre$expr_imp_single`) went through,
+#' so the image says what it shows. The default "Normalized expression
+#' boxplots" hid imputation and batch correction, and claimed normalization
+#' even for pre-normalized input (`normalization.method: none`).
+#'
+#' Normalization is read the way `preprocess_proteomics()` reads it; batch
+#' correction from `pre$batch_corrected`, the runtime record of a correction
+#' that ran, not the config that requested it. Imputation is always named:
+#' the boxplot is only drawn when imputation QC exists.
+#'
+#' @param pre Preprocessed proteomics object (after batch correction, if any).
+#' @param cfg Proteomics mode config (`config$modes$proteomics`).
+#' @return A single character string.
+#' @examples
+#' proteomics_qc_boxplot_title(list(batch_corrected = TRUE, batch_method = "combat"),
+#'                             list(normalization = list(method = "median")))
+#' # "Expression boxplots (after median normalization + imputation + combat batch correction)"
+proteomics_qc_boxplot_title <- function(pre, cfg) {
+    norm_method <- cfg$normalization$method %||% "none"
+    steps <- c(
+        if (norm_method != "none") sprintf("%s normalization", norm_method),
+        "imputation",
+        if (isTRUE(pre$batch_corrected)) {
+            paste(c(pre$batch_method, "batch correction"), collapse = " ")
+        }
+    )
+    sprintf("Expression boxplots (after %s)", paste(steps, collapse = " + "))
 }
