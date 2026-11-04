@@ -543,6 +543,74 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 
 # R/plots/plot_de.R
 
+#' Shared and unique DE feature counts between contrasts
+#'
+#' Cell \code{[i, j]} counts the features DE in both contrast i and contrast j.
+#' The diagonal counts the features DE in that contrast and in no other.
+#'
+#' @param gene_sets Named list of feature vectors, one per contrast.
+#' @return Integer matrix, contrasts on both dimensions, in input order.
+#' @examples
+#' de_overlap_matrix(list(a = c("g1", "g2", "g3"), b = c("g2", "g4"), c = "g2"))
+de_overlap_matrix <- function(gene_sets) {
+  sets <- lapply(gene_sets, function(x) unique(as.character(x[!is.na(x)])))
+  k <- length(sets)
+  m <- matrix(0L, k, k, dimnames = list(names(sets), names(sets)))
+  for (i in seq_len(k)) {
+    for (j in seq_len(k)) {
+      m[i, j] <- if (i == j) {
+        length(setdiff(sets[[i]], unlist(sets[-i])))
+      } else {
+        length(intersect(sets[[i]], sets[[j]]))
+      }
+    }
+  }
+  m
+}
+
+#' Heatmap of shared and unique DE features between contrasts
+#'
+#' A table-like view of \code{\link{de_overlap_matrix}} for studies with many
+#' contrasts, where a Venn diagram has too many regions to read. Each cell is
+#' labelled with its count; diagonal cells are outlined.
+#'
+#' @param gene_sets Named list of feature vectors, one per contrast.
+#' @param title Plot title.
+#' @param fill_high Fill colour for the largest count.
+#' @param feature_label Word used in the caption, e.g. "genes" or "proteins".
+#' @return ggplot object.
+plot_de_overlap_matrix <- function(gene_sets, title = NULL, fill_high = "steelblue",
+                                   feature_label = "features") {
+  m <- de_overlap_matrix(gene_sets)
+  k <- nrow(m)
+  totals <- vapply(gene_sets, function(x) length(unique(x[!is.na(x)])), integer(1))
+  lab <- paste0(names(gene_sets), " (n = ", totals, ")")
+  # as.vector() is column-major: the row index varies fastest.
+  df <- data.frame(
+    row = factor(rep(lab, times = k), levels = rev(lab)),
+    col = factor(rep(lab, each = k), levels = lab),
+    value = as.vector(m),
+    is_diag = rep(seq_len(k), times = k) == rep(seq_len(k), each = k)
+  )
+  ggplot2::ggplot(df, ggplot2::aes(x = col, y = row, fill = value)) +
+    ggplot2::geom_tile(colour = "grey85") +
+    ggplot2::geom_tile(data = df[df$is_diag, , drop = FALSE], colour = "grey20",
+                       fill = NA, linewidth = 0.6) +
+    ggplot2::geom_text(ggplot2::aes(label = value), size = 3.5) +
+    ggplot2::scale_fill_gradient(low = "white", high = fill_high, name = "Count") +
+    ggplot2::labs(
+      title = title, x = NULL, y = NULL,
+      caption = paste0("Diagonal (outlined): DE ", feature_label, " found only in that contrast. ",
+                       "Off-diagonal: DE in both contrasts. n = DE ", feature_label,
+                       " in the contrast.")
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+                   panel.grid = ggplot2::element_blank(),
+                   plot.title = ggplot2::element_text(hjust = 0),
+                   plot.caption = ggplot2::element_text(hjust = 0))
+}
+
 #' Volcano plot for a single DE table (one contrast)
 #'
 #' Consistent logic — everything is driven by the *selected* p-value column
