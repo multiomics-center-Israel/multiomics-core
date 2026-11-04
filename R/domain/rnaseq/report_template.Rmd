@@ -1366,6 +1366,12 @@ Hover over points to see gene names and statistics. Enter gene names to highligh
 
 ```{r volcano-interactive, results='asis', fig.height=6}
 if (!is.null(de_data) && length(contrast_names) > 0) {
+    # Build every volcano first so all contrasts can share one axis range.
+    vol_all <- lapply(setNames(contrast_names, contrast_names), function(cn)
+        make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+             log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), gsub("_", " ", cn)))
+    vol_lims <- volcano_axis_limits(lapply(Filter(Negate(is.null), vol_all), function(v)
+        data.frame(logFC = v$plot_df$logFC, adj.P.Val = v$plot_df$adjPval)))
     for (i in seq_along(contrast_names)) {
         cn <- contrast_names[i]
         contrast_clean <- gsub("_", " ", cn)
@@ -1389,8 +1395,12 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </div>
 ', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
 
-        vol_res <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
-                                  log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
+        vol_res <- vol_all[[cn]]
+        if (!is.null(vol_res) && !is.null(vol_lims)) {
+            vol_res$widget <- plotly::layout(vol_res$widget,
+                # 5% margin: plotly draws the range edge-to-edge, ggplot pads it.
+                xaxis = list(range = vol_lims$x * 1.05), yaxis = list(range = vol_lims$y * 1.05))
+        }
         if (!is.null(vol_res)) {
             p <- vol_res$widget
             p$elementId <- paste0("volcano_plot_", clean_id)
