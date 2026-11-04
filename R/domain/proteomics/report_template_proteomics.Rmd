@@ -1489,6 +1489,27 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
 }
 ```
 
+```{r de-overlap-matrix-heading, eval=length(contrast_names) > 5, results='asis'}
+cat("\n### Shared vs unique\n\n")
+cat("With more than five contrasts, the counts are also shown as a table:",
+    "each off-diagonal cell is the number of proteins DE in both contrasts, and",
+    "each diagonal cell the number DE only in that contrast.\n\n")
+```
+
+```{r de-overlap-matrix, eval=length(contrast_names) > 5 && !is.null(de_data), fig.height=max(5, 0.5 * length(contrast_names) + 3), fig.width=10, results='asis'}
+# The Venn chunks above build these lists with the same DE rule; the Venn
+# drawing replaces " vs " with a line break in some names, so undo that here.
+for (dir in list(list(if (exists("de_protein_lists")) de_protein_lists, "All DE proteins", "steelblue"),
+                 list(if (exists("up_protein_lists")) up_protein_lists, "Up-regulated proteins", "#E41A1C"),
+                 list(if (exists("down_protein_lists")) down_protein_lists, "Down-regulated proteins", "#377EB8"))) {
+    sets <- dir[[1]]
+    if (length(sets) < 2) next
+    names(sets) <- gsub("\n", " ", names(sets))
+    print(plot_de_overlap_matrix(sets, title = dir[[2]], fill_high = dir[[3]],
+                                 feature_label = "proteins"))
+}
+```
+
 `r if (!.show_overlap) "-->"`
 
 ```{r identified-proteins-venn, results='asis', fig.height=6, fig.width=10}
