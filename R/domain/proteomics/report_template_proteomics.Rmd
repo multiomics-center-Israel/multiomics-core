@@ -858,6 +858,30 @@ if (file.exists(pca_cc_file)) {
 }
 ```
 
+```{r pca-batch-before-after, eval=show_pca_section, echo=FALSE, results='asis'}
+# Written by mod_proteomics_batch_pca() only when a batch correction actually
+# ran, and removed otherwise, so the file is the evidence -- not the config.
+pca_batch_file <- file.path(diag_dir, "PCA_batch_before_after.png")
+if (file.exists(pca_batch_file)) {
+    bc_method <- prot_cfg$batch_correction$method %||% ""
+    cat("### Batch correction — before vs after\n\n")
+    cat(sprintf(
+        '<div style="text-align: center;"><img src="%s" style="width:100%%; max-width: 1100px; height: auto;" alt="PCA before and after batch correction" /></div>\n\n',
+        knitr::image_uri(pca_batch_file)))
+    figure_legend(paste(
+        "PC1 vs PC2 of the same samples, proteins and imputation draw, before (left) and after (right) batch correction.",
+        "Top row: coloured by experimental group. Bottom row: coloured by batch.",
+        "PCA is computed separately on each matrix, so PC1 and PC2 can represent different directions before and after correction:",
+        "compare how samples group within each panel, not their coordinates across panels.",
+        "Batches that mix after correction (bottom right) and groups that stay apart (top right) are desirable visual signs,",
+        "not proof that the correction succeeded: two components show only the largest sources of variation,",
+        "and over- or under-correction can be invisible here."))
+    if (identical(tolower(bc_method), "probatch")) {
+        cat("\n> **Note:** proBatch does not preserve the experimental condition. In unbalanced designs it can remove part of the biological signal; check the top-right panel for lost group separation.\n\n")
+    }
+}
+```
+
 ```{r pca-topvar-block, eval=show_pca_section && show_pca_topvar, echo=FALSE, results='asis'}
 # PCA feature-set selector: the full matrix and the top-variable sets.
 # list_pca_feature_panels() in R/domain/proteomics/08_report.R decides which
