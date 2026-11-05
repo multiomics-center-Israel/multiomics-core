@@ -1059,7 +1059,7 @@ if (file.exists(bp)) {
 ```
 
 ```{r legend-distribution-boxplot, eval=show_density && !has_imputation, results='asis'}
-figure_legend("Per-sample boxplots of protein expression after normalization. Boxes show the interquartile range. Aligned medians and IQR widths across samples indicate successful normalization.")
+figure_legend("Per-sample boxplots of the matrix used for the QC plots in this section. The plot title lists every preprocessing step applied to it (normalization and imputation if configured, batch correction if it ran). Boxes show the interquartile range (IQR) for each sample. Consistent medians and IQR widths across samples indicate comparable sample distributions.")
 ```
 
 ```{r imp-hist-tab-heading, eval=has_imputation, results='asis'}
@@ -1098,7 +1098,7 @@ if (file.exists(f_box)) knitr::include_graphics(f_box)
 ```
 
 ```{r legend-imp-boxplot, eval=has_imputation, results='asis'}
-figure_legend("Per-sample boxplots of the matrix used for the QC plots in this section. The plot title lists every preprocessing step applied to it (normalization if configured, imputation, and batch correction if it ran). Boxes show the interquartile range (IQR) for each sample. Consistent medians and IQR widths across samples indicate comparable sample distributions.")
+figure_legend("Per-sample boxplots of the matrix used for the QC plots in this section. The plot title lists every preprocessing step applied to it (normalization and imputation if configured, batch correction if it ran). Boxes show the interquartile range (IQR) for each sample. Consistent medians and IQR widths across samples indicate comparable sample distributions.")
 ```
 
 ```{r commentary-boxplot-post, results='asis'}

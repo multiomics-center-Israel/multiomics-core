@@ -336,10 +336,13 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
 #' boxplots" hid imputation and batch correction, and claimed normalization
 #' even for pre-normalized input (`normalization.method: none`).
 #'
-#' Normalization is read the way `preprocess_proteomics()` reads it; batch
-#' correction from `pre$batch_corrected`, the runtime record of a correction
-#' that ran, not the config that requested it. Imputation is always named:
-#' the boxplot is only drawn when imputation QC exists.
+#' Normalization is read the way `preprocess_proteomics()` reads it, and
+#' imputation the way `impute_proteomics()` reads it (default `perseus_like`,
+#' alias `perseus`). Imputation cannot be inferred from the boxplot existing:
+#' under `method: none` the imputer still returns missingness flags, so the
+#' plot is drawn with nothing imputed. Batch correction comes from
+#' `pre$batch_corrected`, the runtime record of a correction that ran, not the
+#' config that requested it.
 #'
 #' @param pre Preprocessed proteomics object (after batch correction, if any).
 #' @param cfg Proteomics mode config (`config$modes$proteomics`).
@@ -347,15 +350,19 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
 #' @examples
 #' proteomics_qc_boxplot_title(list(batch_corrected = TRUE, batch_method = "combat"),
 #'                             list(normalization = list(method = "median")))
-#' # "Expression boxplots (after median normalization + imputation + combat batch correction)"
+#' # "Expression boxplots (after median normalization + perseus_like imputation
+#' #  + combat batch correction)"
 proteomics_qc_boxplot_title <- function(pre, cfg) {
     norm_method <- cfg$normalization$method %||% "none"
+    imp_method <- cfg$imputation$method %||% "perseus_like"
+    if (imp_method == "perseus") imp_method <- "perseus_like"
     steps <- c(
         if (norm_method != "none") sprintf("%s normalization", norm_method),
-        "imputation",
+        if (imp_method != "none") sprintf("%s imputation", imp_method),
         if (isTRUE(pre$batch_corrected)) {
             paste(c(pre$batch_method, "batch correction"), collapse = " ")
         }
     )
+    if (length(steps) == 0) return("Expression boxplots (no normalization, imputation or batch correction)")
     sprintf("Expression boxplots (after %s)", paste(steps, collapse = " + "))
 }
