@@ -33,9 +33,11 @@ mod_proteomics_batch_correction <- function(pre, config, verbose = FALSE) {
 #' Before/after batch-correction PCA diagnostic
 #'
 #' Draws one PNG with four PC1-vs-PC2 panels: uncorrected and batch-corrected,
-#' each coloured by condition (`effects.color`) and by the batch column. It
-#' answers the two questions a correction raises: did the batch structure go
-#' away, and did the condition separation survive it.
+#' each coloured by condition (`effects.color`) and by the batch column. It is a
+#' visual check of the two questions a correction raises -- does the batch
+#' structure fade, does the condition separation remain -- not a test of either.
+#' PCA is fitted separately on each side, so axes are not comparable across
+#' panels.
 #'
 #' The two sides differ only in the correction. `pre_raw` is the input that
 #' `correct_batch_proteomics()` was fitted on, so both matrices hold the same
@@ -65,9 +67,21 @@ mod_proteomics_batch_pca <- function(pre_raw, pre, config, out_dir) {
   cfg <- config$modes$proteomics
   batch_col <- get_proteomics_batch_config(cfg)$batch_col
 
+  # The correction returns the matrix it was given, so the samples should
+  # already match; check rather than assume, since a mismatch would make the
+  # two sides differ by more than the correction.
+  samples <- colnames(pre_raw$expr_imp_single)
+  if (!setequal(samples, colnames(pre$expr_imp_single))) {
+    cli::cli_abort(c(
+      "Before/after batch PCA: the uncorrected and corrected matrices hold different samples.",
+      "i" = "Only in uncorrected: {.val {setdiff(samples, colnames(pre$expr_imp_single))}}.",
+      "i" = "Only in corrected: {.val {setdiff(colnames(pre$expr_imp_single), samples)}}.",
+      "i" = "Both are expected to come from the same preprocessing run (prot_pre_raw -> prot_pre)."
+    ))
+  }
   ids <- select_shared_pca_features(pre_raw$expr_imp_single, pre$expr_imp_single)
-  before <- pre_raw$expr_imp_single[ids, , drop = FALSE]
-  after  <- pre$expr_imp_single[ids, , drop = FALSE]
+  before <- pre_raw$expr_imp_single[ids, samples, drop = FALSE]
+  after  <- pre$expr_imp_single[ids, samples, drop = FALSE]
 
   # A numeric batch label (e.g. pair_no 1, 2, 3) would get a colour gradient;
   # batches are categories.

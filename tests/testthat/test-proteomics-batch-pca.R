@@ -67,6 +67,17 @@ test_that("no correction ran: nothing is written and a stale panel is removed", 
     expect_false(file.exists(stale))
 })
 
+test_that("different samples before and after correction is an error, not a silent mismatch", {
+    fx <- make_batch_pca_fixture()
+    out_dir <- withr::local_tempdir()
+    fx$pre$expr_imp_single <- fx$pre$expr_imp_single[, -1, drop = FALSE]
+
+    expect_error(mod_proteomics_batch_pca(fx$pre_raw, fx$pre, fx$config, out_dir),
+                 "different samples")
+    expect_false(file.exists(file.path(out_dir, "Diagnostic_plots",
+                                       "PCA_batch_before_after.png")))
+})
+
 test_that("a correction that ran writes the four-panel PNG", {
     skip_if_not_installed("patchwork")
     fx <- make_batch_pca_fixture()
