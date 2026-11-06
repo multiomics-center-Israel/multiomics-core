@@ -142,6 +142,11 @@ validate_multiomics_config <- function(multiomics_cfg) {
         multiomics_cfg$enrichment$cross_lookup$top_n <- 15
     }
 
+    # Pathway coverage: on by default (labels only); see .pathway_coverage_config().
+    if (is.null((enrich_cfg$pathway_coverage %||% list())$enabled)) {
+        multiomics_cfg$enrichment$pathway_coverage$enabled <- TRUE
+    }
+
     # Validate loadings enrichment config: GSEA over the signed DIABLO loadings
     # and MOFA2 weights unless a project asks for the top-feature ORA.
     ld_cfg <- enrich_cfg$loadings %||% list()
