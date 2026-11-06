@@ -128,37 +128,19 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
             message("  Skipping expression correlation: features not harmonized and no gene mapping")
         }
 
-        # Save results and plots if correlations were computed
         if (exists("correlations") && length(correlations) > 0) {
+            # Only the summary scalar is kept, for the foundational summary.
+            # The per-gene histogram is no longer drawn: with no pairing term
+            # it mostly tracks between-sample differences (e.g. cell line)
+            # shared by both layers, not the contrast, and it read as RNA-protein
+            # agreement where the log2FC comparison showed none. The checkable
+            # artifact is tables/rna_protein_log2FC_pairs.csv, written after the
+            # DE join.
             cor_df <- data.frame(
                 gene_symbol = names(correlations),
                 correlation = correlations,
                 stringsAsFactors = FALSE
             )
-
-            if (!is.null(out_dir)) {
-                # The per-gene across-sample correlation is deliberately NOT
-                # written any more. Its feature ids are the harmonized MAE
-                # rownames (GENE_1, GENE_2, ...), which trace back to neither a
-                # gene nor a protein, and with the samples paired arbitrarily
-                # across omics the per-gene coefficient is not interpretable.
-                # The summary scalar is still computed below for the
-                # foundational summary. The checkable artifact is
-                # tables/rna_protein_log2FC_pairs.csv, written after the DE join.
-                p <- ggplot2::ggplot(cor_df, ggplot2::aes(x = correlation)) +
-                    ggplot2::geom_histogram(bins = 50, fill = "steelblue",
-                                            color = "white", alpha = 0.7) +
-                    ggplot2::geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
-                    ggplot2::theme_minimal() +
-                    ggplot2::labs(
-                        title = "RNA-Protein Expression Correlation Distribution",
-                        x = "Pearson Correlation",
-                        y = "Count"
-                    )
-                ggplot2::ggsave(file.path(out_dir, "plots", "rna_protein_concordance.png"),
-                                p, width = 8, height = 6, dpi = 150)
-            }
-
             summary_stats$n_genes <- length(correlations)
             summary_stats$mean_cor <- mean(correlations)
             summary_stats$median_cor <- median(correlations)
