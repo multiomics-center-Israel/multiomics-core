@@ -820,7 +820,7 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
         # this list.
         stale <- list.files(
             pv_dir,
-            pattern = "\\.(multi_ora|metab_top|prot_top)[^/]*\\.png$",
+            pattern = "\\.(multi_ora|metab_top|prot_top|gsea_pair)[^/]*\\.png$",
             full.names = TRUE)
     }
     pdfs <- file.path(out_dir, c("multi_ora_pathview_supported.pdf",
@@ -828,7 +828,9 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
                                  "multi_ora_pathview_union.pdf",
                                  "multi_ora_pathview_union.yaml",
                                  "pathview_top_metabolomics_pathways.pdf",
-                                 "pathview_top_proteomics_pathways.pdf"))
+                                 "pathview_top_proteomics_pathways.pdf",
+                                 "pathview_gsea_and_pairs.pdf",
+                                 "pathview_gsea_and_pairs_selection.tsv"))
     stale <- c(stale, pdfs[file.exists(pdfs)])
     if (length(stale) > 0) {
         unlink(stale)
@@ -887,6 +889,9 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #'   shared \code{.PATHVIEW_THRESHOLDS}, which is also what
 #'   \code{pathview_significance_caption()} states, so the figure's caption
 #'   cannot claim a cutoff the selection did not use.
+#' @param methods Lower-case `method` values whose rows count. ORA by default,
+#'   as the union renderer has always selected; the GSEA/pair renderer passes
+#'   the rank-based methods instead.
 #' @return Named list keyed by canonical contrast key, each element a list of
 #'   `label` (the first raw spelling seen), `pathways` (normalized KEGG ids,
 #'   ranked best score first) and `scores` (the score behind that ranking, named
@@ -895,7 +900,8 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #'   against some other contrast's fold changes is the bug this structure exists
 #'   to prevent.
 .kegg_hits_by_contrast <- function(ora_tables, kegg_org = NULL,
-                                   alpha = .PATHVIEW_THRESHOLDS$fdr_alpha) {
+                                   alpha = .PATHVIEW_THRESHOLDS$fdr_alpha,
+                                   methods = "ora") {
     hits <- list()
     # Indices, not names: the production input is named per omics, but iterating
     # over names() means an unnamed list runs the loop zero times and selects
@@ -921,7 +927,7 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
                     "so its rows cannot be confirmed as ORA; skipping it")
             next
         }
-        is_ora <- !is.na(d$method) & tolower(as.character(d$method)) == "ora"
+        is_ora <- !is.na(d$method) & tolower(as.character(d$method)) %in% methods
         if (!any(is_ora)) next
 
         # Identity is resolved by #201's row-wise helper, not by assuming the
