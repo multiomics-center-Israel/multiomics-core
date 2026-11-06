@@ -444,7 +444,8 @@ render_mixed_sections <- function(polarities) {
   })
   stats::setNames(secs, mmc_polarity_label("HL_vs_LL", polarities))
 }
-MIXED_RENDER_CFG <- list(ionization_mode = "mixed",
+MIXED_RENDER_CFG <- list(engine          = "python",
+                         ionization_mode = "mixed",
                          polarity_column = "Reference Ion",
                          positive_mode   = "positive")
 

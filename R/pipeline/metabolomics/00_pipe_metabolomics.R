@@ -23,7 +23,8 @@
 #                    └────┴──── [chosen_norm] ──→ met_corrected
 #                                                      └─ metab_pre (adapter)
 pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
-                              mummichog_enabled = FALSE) {
+                              mummichog_enabled = FALSE,
+                              mummichog_engine = "metaboanalyst") {
   # -- Validate chosen_norm at plan-definition time --------------------------
   # "none" = analysis mode on the transform-only matrix (met_log), for tables
   # that arrive already normalized; NULL stays QC-review mode.
@@ -370,16 +371,35 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       # mcg_modularanalysis_*, inputs, id-maps, manifests). Keeping the
       # side-effecting run as the file-target command means {targets} re-runs the
       # whole stage if any tracked output is deleted (self-healing).
-      tar_target(
-        metab_mummichog_pinned_files,
-        mod_mummichog_pinned(
-          pre     = metab_pre,
-          de_res  = metab_de_res,
-          config  = config,
-          out_dir = metab_out_dir
-        ),
-        format = "file"
-      ),
+      #
+      # The engine is chosen at plan-definition time (mmc_engine() on
+      # modes.metabolomics.enrichment.mummichog.engine): metaboanalyst (05d,
+      # the MetaboAnalyst-compatible engine) or python (legacy, this
+      # command unchanged). Both fill this one target and write under mummichog_pinned/, so
+      # every downstream target reads either the same way.
+      if (identical(mummichog_engine, "metaboanalyst")) {
+        tar_target(
+          metab_mummichog_pinned_files,
+          mod_mummichog_metaboanalyst(
+            pre     = metab_pre,
+            de_res  = metab_de_res,
+            config  = config,
+            out_dir = metab_out_dir
+          ),
+          format = "file"
+        )
+      } else {
+        tar_target(
+          metab_mummichog_pinned_files,
+          mod_mummichog_pinned(
+            pre     = metab_pre,
+            de_res  = metab_de_res,
+            config  = config,
+            out_dir = metab_out_dir
+          ),
+          format = "file"
+        )
+      },
       # Report-facing pathways: read each contrast's pathway table back from the
       # tracked files (grouped by contrast dir). Always-defined so the report
       # target depends on one stable symbol (NULL in the disabled branch below).
