@@ -76,7 +76,11 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
   
   # ---- Build sample subsets: "all" and "noQC" ----
   sample_col <- cfg$effects$samples %||% "sample_id"
-  subsets <- build_qc_subsets(expr_qc, pre$expr_filt, pre$meta, sample_col)
+  condition_col <- (cfg$de %||% list())$condition_column %||%
+    cfg$effects$color %||% "sample_type"
+  subsets <- build_qc_subsets(expr_qc, pre$expr_filt, pre$meta, sample_col,
+                              condition_col = condition_col,
+                              qc_flag_column = cfg$qc$qc_flag_column)
   
   # ---- PCA plots ----
   color_config <- cfg$effects$color
@@ -115,20 +119,21 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
       files <- c(files, f_pca13_wqc)
       plots[[paste0("pca_1_3_w_qc", color_suffix, tag)]] <- p13
       
-      # PCA without QC samples
+      # PCA without QC samples. Keys end in "_noQC": the report looks for that
+      # suffix to add its "Without QC samples" tabs.
       if (length(subsets) >= 2) {
         s_noqc_pca <- subsets[[2]]
         f_pca12 <- file.path(out_qc, paste0("PCA_PC1.vs.PC2", color_suffix, ".png"))
         p12_noqc <- qc_pca_scatter(s_noqc_pca$expr_work, s_noqc_pca$meta, cfg_temp, pcs = c(1, 2),
                                    out_file = f_pca12)
         files <- c(files, f_pca12)
-        plots[[paste0("pca_1_2", color_suffix)]] <- p12_noqc
-        
+        plots[[paste0("pca_1_2", color_suffix, "_noQC")]] <- p12_noqc
+
         f_pca13 <- file.path(out_qc, paste0("PCA_PC1.vs.PC3", color_suffix, ".png"))
         p13_noqc <- qc_pca_scatter(s_noqc_pca$expr_work, s_noqc_pca$meta, cfg_temp, pcs = c(1, 3),
                                    out_file = f_pca13)
         files <- c(files, f_pca13)
-        plots[[paste0("pca_1_3", color_suffix)]] <- p13_noqc
+        plots[[paste0("pca_1_3", color_suffix, "_noQC")]] <- p13_noqc
       }
       
       # 3D PCA only for the first color variable, all-samples subset
@@ -327,7 +332,10 @@ build_norm_label <- function(norm_applied) {
 
 #' Build sample subsets for QC: all samples and (if QCs exist) without QC
 #'
-#' QC samples are identified by treatment == "QC" (case-insensitive) in metadata.
+#' QC samples are those with treatment == "QC" (case-insensitive) in metadata.
+#' When \code{condition_col} is given, samples that
+#' \code{filter_to_biological()} treats as technical (an \code{is_QC} flag, a
+#' QC/pool/blank group, a QC/Pool sample name) count as QC too.
 #' Returns a list of subset descriptors, each with: tag, label, expr_work,
 #' expr_filt, expr_log, meta.
 #'
@@ -336,9 +344,12 @@ build_norm_label <- function(norm_applied) {
 #' @param meta       Metadata data.frame.
 #' @param sample_col Column name for sample IDs.
 #' @param expr_log   Transform-only matrix (no scaling), used for DE. NULL if no scaling applied.
+#' @param condition_col Optional group column. NULL keeps the treatment-only rule.
+#' @param qc_flag_column Optional QC flag column, passed to \code{filter_to_biological()}.
 #' @return list of subset descriptors.
 
-build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col, expr_log = NULL) {
+build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col, expr_log = NULL,
+                             condition_col = NULL, qc_flag_column = NULL) {
   all_subset <- list(
     tag       = "",
     label     = "",
@@ -350,20 +361,31 @@ build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col, expr_log = 
 
   subsets <- list(all_subset)
 
-  # Identify QC samples via the treatment column
+  sample_ids <- as.character(meta[[sample_col]])
+  is_qc <- rep(FALSE, nrow(meta))
   if ("treatment" %in% colnames(meta)) {
-    is_qc <- tolower(trimws(as.character(meta$treatment))) == "qc"
-    if (any(is_qc) && !all(is_qc)) {
-      keep_ids <- as.character(meta[[sample_col]][!is_qc])
-      subsets[[2]] <- list(
-        tag       = "_noQC",
-        label     = " [excl. QC]",
-        expr_work = expr_work[, keep_ids, drop = FALSE],
-        expr_filt = expr_filt[, keep_ids, drop = FALSE],
-        expr_log  = if (!is.null(expr_log)) expr_log[, keep_ids, drop = FALSE] else NULL,
-        meta      = meta[!is_qc, , drop = FALSE]
-      )
-    }
+    is_qc <- tolower(trimws(as.character(meta$treatment))) %in% "qc"
+  }
+  # Metadata often marks pools only with is_QC or a "Pool" group and has no
+  # treatment column. Use the rule DE and clustering use, so the "without QC"
+  # plots leave out the same samples the statistics do.
+  if (!is.null(condition_col) && condition_col %in% colnames(meta)) {
+    bio <- filter_to_biological(expr_work, meta, condition_col, sample_col,
+                                label = "metabolomics QC plots",
+                                qc_flag_column = qc_flag_column)
+    is_qc <- is_qc | !(sample_ids %in% as.character(bio$meta[[sample_col]]))
+  }
+
+  if (any(is_qc) && !all(is_qc)) {
+    keep_ids <- sample_ids[!is_qc]
+    subsets[[2]] <- list(
+      tag       = "_noQC",
+      label     = " [excl. QC]",
+      expr_work = expr_work[, keep_ids, drop = FALSE],
+      expr_filt = expr_filt[, keep_ids, drop = FALSE],
+      expr_log  = if (!is.null(expr_log)) expr_log[, keep_ids, drop = FALSE] else NULL,
+      meta      = meta[!is_qc, , drop = FALSE]
+    )
   }
 
   subsets
