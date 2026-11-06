@@ -560,6 +560,9 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 #'   under a "P.Value" title.
 #' @param n_label Number of features to label on EACH side (up and down). 0
 #'   disables labelling. Defaults to `cfg$de$volcano_n_label`, else 0.
+#' @param xlim,ylim Optional axis ranges, e.g. from
+#'   \code{\link{volcano_axis_limits}}, so the volcanoes of several contrasts
+#'   share one scale. NULL leaves the axis to ggplot.
 #' @param ... Ignored
 #' @return ggplot object
 #'
@@ -573,17 +576,15 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 #' Xiao et al. (2014), Bioinformatics 30(6):801-807.
 
 plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pval"),
-                         n_label = NULL, ...) {
+                         n_label = NULL, xlim = NULL, ylim = NULL, ...) {
   pvalue_type <- match.arg(pvalue_type)
   n_label <- as.integer(n_label %||% cfg$de$volcano_n_label %||% 0L)
 
   # 1. Flexible Column Mapping
-  # Try to find the logFC column
-  lfc_col <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
-  # Try to find the Adjusted P-value column
-  padj_col <- intersect(c("padj", "adj.P.Val", "fdr"), colnames(de_tbl))[1]
-  # Try to find the raw P-value column
-  pval_col <- intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
+  cols <- .volcano_columns(de_tbl)
+  lfc_col <- cols$lfc
+  padj_col <- cols$padj
+  pval_col <- cols$pval
 
   # Validation check
   if (is.na(lfc_col) || is.na(padj_col)) {
@@ -695,7 +696,65 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pva
       seed = 42
     )
   }
+  if (!is.null(xlim) || !is.null(ylim)) {
+    p <- p + ggplot2::coord_cartesian(xlim = xlim, ylim = ylim)
+  }
   p
+}
+
+#' Volcano columns: log2 fold change, adjusted and raw p-value
+#'
+#' The one place that decides which columns a volcano reads, shared by
+#' \code{\link{plot_volcano}} and \code{\link{volcano_axis_limits}} so the
+#' shared scale is computed from the values that are drawn.
+#'
+#' @param de_tbl DE table for one contrast.
+#' @return List with \code{lfc}, \code{padj} and \code{pval}: column names, NA
+#'   when absent.
+#' @keywords internal
+.volcano_columns <- function(de_tbl) {
+  list(
+    lfc  = intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1],
+    padj = intersect(c("padj", "adj.P.Val", "fdr"), colnames(de_tbl))[1],
+    pval = intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
+  )
+}
+
+#' Axis ranges shared by the volcano plots of several contrasts
+#'
+#' With one range for all contrasts, effect sizes and significance can be
+#' compared by eye across panels. x is symmetric around 0; y starts at 0 and
+#' uses the same 1e-300 floor as \code{\link{plot_volcano}}.
+#'
+#' @param tables Named list of DE tables, one per contrast.
+#' @param pvalue_type \code{"padj"} or \code{"pval"}, as in
+#'   \code{\link{plot_volcano}}.
+#' @return List with numeric \code{x} and \code{y} ranges, or NULL when fewer
+#'   than two tables carry finite values.
+#' @examples
+#' t1 <- data.frame(logFC = c(-1, 2), adj.P.Val = c(0.5, 0.01))
+#' t2 <- data.frame(logFC = c(-3, 0.5), adj.P.Val = c(0.001, 0.2))
+#' volcano_axis_limits(list(a = t1, b = t2))
+volcano_axis_limits <- function(tables, pvalue_type = c("padj", "pval")) {
+  pvalue_type <- match.arg(pvalue_type)
+  xs <- list()
+  ys <- list()
+  for (tbl in tables) {
+    if (is.null(tbl) || nrow(tbl) == 0) next
+    cols <- .volcano_columns(tbl)
+    p_col <- if (pvalue_type == "padj") cols$padj else cols$pval
+    if (is.na(cols$lfc) || is.na(p_col)) next
+    x <- as.numeric(tbl[[cols$lfc]])
+    y <- -log10(pmax(as.numeric(tbl[[p_col]]), 1e-300))
+    x <- x[is.finite(x)]
+    y <- y[is.finite(y)]
+    if (length(x) == 0 || length(y) == 0) next
+    xs[[length(xs) + 1]] <- x
+    ys[[length(ys) + 1]] <- y
+  }
+  if (length(xs) < 2) return(NULL)
+  x_max <- max(abs(unlist(xs)))
+  list(x = c(-x_max, x_max), y = c(0, max(unlist(ys))))
 }
 
 #' Pick the features to label on a volcano plot
