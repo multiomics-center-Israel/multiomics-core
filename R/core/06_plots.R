@@ -543,10 +543,12 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 
 # R/plots/plot_de.R
 
-#' Shared and unique DE feature counts between contrasts
+#' Shared DE feature counts between contrasts
 #'
-#' Cell \code{[i, j]} counts the features DE in both contrast i and contrast j.
-#' The diagonal counts the features DE in that contrast and in no other.
+#' Cell \code{[i, j]} counts the features DE in both contrast i and contrast j,
+#' so the diagonal is the total DE count of each contrast and every row peaks
+#' on it -- the usual co-occurrence layout. Features DE in one contrast only
+#' are counted by \code{\link{de_unique_counts}}.
 #'
 #' @param gene_sets Named list of feature vectors, one per contrast.
 #' @return Integer matrix, contrasts on both dimensions, in input order.
@@ -558,14 +560,24 @@ de_overlap_matrix <- function(gene_sets) {
   m <- matrix(0L, k, k, dimnames = list(names(sets), names(sets)))
   for (i in seq_len(k)) {
     for (j in seq_len(k)) {
-      m[i, j] <- if (i == j) {
-        length(setdiff(sets[[i]], unlist(sets[-i])))
-      } else {
-        length(intersect(sets[[i]], sets[[j]]))
-      }
+      m[i, j] <- length(intersect(sets[[i]], sets[[j]]))
     }
   }
   m
+}
+
+#' DE features found in one contrast only
+#'
+#' @param gene_sets Named list of feature vectors, one per contrast.
+#' @return Named integer vector: per contrast, the features DE in it and in no
+#'   other contrast of \code{gene_sets}.
+#' @examples
+#' de_unique_counts(list(a = c("g1", "g2"), b = c("g2", "g3"), c = "g2"))
+de_unique_counts <- function(gene_sets) {
+  sets <- lapply(gene_sets, function(x) unique(as.character(x[!is.na(x)])))
+  out <- vapply(seq_along(sets), function(i) length(setdiff(sets[[i]], unlist(sets[-i]))),
+                integer(1))
+  stats::setNames(out, names(sets))
 }
 
 #' Heatmap of shared and unique DE features between contrasts
@@ -583,8 +595,7 @@ plot_de_overlap_matrix <- function(gene_sets, title = NULL, fill_high = "steelbl
                                    feature_label = "features") {
   m <- de_overlap_matrix(gene_sets)
   k <- nrow(m)
-  totals <- vapply(gene_sets, function(x) length(unique(x[!is.na(x)])), integer(1))
-  lab <- paste0(names(gene_sets), " (n = ", totals, ")")
+  lab <- paste0(rownames(m), " (n = ", diag(m), ", unique = ", de_unique_counts(gene_sets), ")")
   # as.vector() is column-major: the row index varies fastest.
   df <- data.frame(
     row = factor(rep(lab, times = k), levels = rev(lab)),
@@ -600,9 +611,8 @@ plot_de_overlap_matrix <- function(gene_sets, title = NULL, fill_high = "steelbl
     ggplot2::scale_fill_gradient(low = "white", high = fill_high, name = "Count") +
     ggplot2::labs(
       title = title, x = NULL, y = NULL,
-      caption = paste0("Diagonal (outlined): DE ", feature_label, " found only in that contrast. ",
-                       "Off-diagonal: DE in both contrasts. n = DE ", feature_label,
-                       " in the contrast.")
+      caption = paste0("Diagonal (outlined): all DE ", feature_label, " in that contrast. ",
+                       "Off-diagonal: DE in both contrasts. unique = DE in that contrast only.")
     ) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),

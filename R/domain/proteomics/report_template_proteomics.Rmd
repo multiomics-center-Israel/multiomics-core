@@ -1493,7 +1493,8 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
 cat("\n### Shared vs unique\n\n")
 cat("With more than five contrasts, the counts are also shown as a table:",
     "each off-diagonal cell is the number of proteins DE in both contrasts, and",
-    "each diagonal cell the number DE only in that contrast.\n\n")
+    "each diagonal cell the total DE in that contrast. The axis labels also give",
+    "the number DE in that contrast only (unique).\n\n")
 ```
 
 ```{r de-overlap-matrix, eval=length(contrast_names) > 5 && !is.null(de_data), fig.height=max(5, 0.5 * length(contrast_names) + 3), fig.width=10, results='asis'}
