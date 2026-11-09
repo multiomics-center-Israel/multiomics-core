@@ -2,6 +2,8 @@
 
 > Moved here from the top-level README; the stochasticity caveat has since been corrected to match the code. Back to the [docs index](README.md).
 
+> **Choose the engine explicitly.** With mummichog enabled, `engine` is required: `engine: metaboanalyst` (the MetaboAnalyst-compatible engine, ORA + GSEA with joint mixed polarity — what the template selects for new configs; [below](#metaboanalyst-compatible-engine-joint-mixed-polarity)) or `engine: python` (the legacy pinned mummichog engine described in the next sections). Configs written before the `engine` key ran the python engine; an enabled config without `engine` now stops with a message instead of switching engines, and nothing (polarity, model, ion list) is used to guess. **To keep earlier results, add `engine: python`.** A disabled config needs no engine.
+
 The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
 
 ## One-time setup
@@ -83,6 +85,74 @@ mummichog runs **one ionization mode per run** and matches every submitted m/z a
 Each contrast is then run **once per polarity**: the positive-ion features in `positive_mode`, the negative-ion features in `negative`, each with **only its own polarity's features** as background and significant list. Polarity is read per feature from `polarity_column` — an ion label ending in its charge sign (`[M+H]+1`, `[M-H]-1`, `[M-2H]2-`, `[M]+`) or the word `positive`/`negative`. A missing column, or any feature whose polarity cannot be read, **stops the stage**; no polarity is assumed. A polarity with no features is skipped with a message and the other still runs.
 
 Each run is its own unit, labelled `<contrast>, positive ions` / `<contrast>, negative ions`: its own directory (`mummichog_pinned/<contrast>_positive_ions/`), its own report tab and its own export suffix. The two runs' p-values are not combined. The identified-metabolite support shown in each tab is contrast-level (full dataset), not polarity-specific. Single-polarity modes (`pos_default`, `positive`, `negative`) behave exactly as before.
+
+This per-polarity behaviour is the **python engine's**. For one joint analysis of both polarities, as MetaboAnalyst runs it, use the MetaboAnalyst-compatible engine below.
+
+## MetaboAnalyst-compatible engine (joint mixed polarity)
+
+`engine: metaboanalyst` replaces the python subprocess with a native R reimplementation of the mummichog algorithm in MetaboAnalyst's MS Peaks-to-Pathways module. The reference is MetaboAnalystR at commit `398476ae2a0c996e390925fa62adc46b5ecde334`. Each step was ported from that commit's source and checked against that commit's own output on synthetic fixtures (`tests/testthat/fixtures/mummichog_ma_parity/`):
+
+- the compound library built from our model JSON;
+- peak preparation and per-polarity m/z matching;
+- empirical compounds;
+- permutations and pathway statistics.
+
+New configs select this engine (`engine: metaboanalyst`, as in the template). The python engine is untouched and selectable with `engine: python`.
+
+What only the python engine provides (lost if it is ever removed): the Pathway Evidence section (supporting features and annotation agreement), mummichog's modular/network analysis outputs and `result.html`, the `pos_default` ion list, the built-in `human_mfn` model, and its own GSEA variant on python mummichog's m/z-merged ECs.
+
+``` yaml
+        engine: metaboanalyst
+        ionization_mode: mixed             # or positive / negative
+        polarity_column: "Reference Ion"   # required for mixed
+        model_ref: { url: ..., sha256: ... }   # or model_json; required
+        # optional (MetaboAnalyst defaults): rt_frac: 0.02, min_pathway_size: 3
+```
+
+What differs from the python engine:
+
+| | python engine | `engine: metaboanalyst` |
+|---|---|---|
+| `mixed` | one run per polarity, each with its own background | **one joint run**: one peak list, one EC grouping, one background, one permutation null. Each feature is still matched only against its own polarity's ion forms, and a compound's positive- and negative-ion matches at similar retention time form one EC |
+| ion lists | `pos_default` (8) or `positive` (25); `negative` | MetaboAnalyst's: 25 positive, 16 negative (`pos_default` refused) |
+| significant features | `p < p_cutoff` | `p <= p_cutoff` (MetaboAnalyst's rule) |
+| headline pathway p | mummichog's empirical p-value | **FET** (Fisher's exact test), MetaboAnalyst's plotted p-value |
+| other pathway statistics | — | EASE, Gamma-adjusted, empirical (from permutations) |
+| adjusted p-values | none | **Holm** (`adj.p Holm *` columns), MetaboAnalyst's `p.adjust()` default — **not BH/FDR** |
+| permutation seeds | `params.seed` | `123 + i` for permutation `i` (MetaboAnalyst's own) |
+| model | built-in `human_mfn` or a custom JSON | a custom JSON (`model_ref` / `model_json`) is required |
+| GSEA | on python mummichog's ECs (m/z-merged scores) | MetaboAnalyst's peaks GSEA on the **same joint-polarity ECs and pathway sets as the ORA**; EC score = max of its features' signed DE statistic; `padj` is **BH** |
+| Pathway Evidence | yes | not produced (it reads the python engine's EC tables) |
+
+Reproduced on purpose, because MetaboAnalyst does it:
+
+- **Duplicate m/z across polarities:** a positive- and a negative-ion feature with the *same* m/z keep only the one with the smaller p-value.
+- **Gamma parameterization:** the Gamma p-value is `1 - pgamma(1 - FET, shape, rate = <scale estimate>)`, so the scale estimate is passed as the rate.
+- **Row order:** rows are ordered by Gamma as text.
+- **Rounding:** values are rounded to 5 significant digits before the Holm adjustment.
+- **fitdistrplus warnings:** these may concern the standard errors of the Gamma fit; the engine uses only the estimates.
+
+Outputs, per contrast, in `mummichog_pinned/<contrast>/metaboanalyst/`:
+
+- `ma_pathway_results.tsv`: the pathway table.
+- `mummichog_pathway_enrichment_mummichog.csv`: MetaboAnalyst's own result table, verbatim.
+- `ma_matched_features.tsv`: every match with its EC, feature id and polarity.
+- `ma_input.tsv`: the peak list the analysis was given.
+- `ma_gsea_results.tsv`: the GSEA table in MetaboAnalyst's order (raw p, BH `padj`, NES, leading edge, each pathway's ECs).
+- `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts.
+
+GSEA is optional: if it fails, the stage warns, the contrast's ORA is still written, and `ma_run_info.json` records the GSEA error. If a whole contrast fails, the stage warns and its earlier result files are replaced by `ma_failed.json`, which holds the error. That contrast gets no report section, and all of its earlier exports are cleared. If every contrast fails, the stage first clears every contrast's earlier exports and then stops.
+
+The report, its exports and the Shiny payload read these through the same targets as before. The report's ORA table adds the EASE, Gamma, empirical and Holm columns; its GSEA tab, scatter and GSEA table export show this engine's GSEA. Python GSEA never runs with this engine, so the two engines' results are never mixed in one report.
+
+GSEA reproduces `.compute.mummichog.RT.fgsea()` at the pinned commit, with two documented exceptions that change no statistic: MetaboAnalyst's result CSV attaches EC hits in library order to rows sorted by p-value (here each row carries its own pathway's ECs), and a single tested pathway stays a row. Validated end to end against that commit on the synthetic fixtures (`generate_gsea_reference.R`).
+
+Limits:
+
+- Retention time is required. MetaboAnalyst's no-RT, compound-level path is not reproduced.
+- In mixed mode, both polarities' retention times must be on one scale.
+- Pathway names must be unique in the model, because MetaboAnalyst identifies pathways by name. A model that repeats a name stops the stage.
+- MetaboAnalyst's custom-adduct and currency-customisation options are not offered. The default currency list is applied.
 
 ## Choosing a metabolic model
 

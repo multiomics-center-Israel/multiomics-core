@@ -2491,6 +2491,73 @@ ppm     <- mummi_cfg$tolerance_ppm  %||% 10
 n_perm  <- mummi_cfg$n_permutations %||% 100
 
 cat("## Methodology\n\n")
+# Described from the sections that were built, not from the config switch.
+mummi_engine <- unique(vapply(mummi_sections, function(s) s$engine %||% "python",
+                              character(1)))
+if (identical(mummi_engine, "metaboanalyst")) {
+  ma_infos <- Filter(Negate(is.null), lapply(mummi_sections, `[[`, "ma_info"))
+  ma1 <- if (length(ma_infos)) ma_infos[[1]] else list()
+  ma_p <- ma1$params %||% list()
+  ma_mode <- ma_p$ionization_mode %||% "?"
+  cat("**Mummichog pathway analysis (MetaboAnalyst-compatible engine).** Pathways were tested with a native R reimplementation of the mummichog algorithm of MetaboAnalyst's MS Peaks-to-Pathways module, MetaboAnalystR ", sprintf("`%s`", substr(ma1$reference$commit %||% "398476ae2a0c996e390925fa62adc46b5ecde334", 1, 10)), ". Each step was checked against that version's own output on synthetic reference data. It uses LC–MS features **without requiring a confident metabolite identity for every feature**: features are matched by m/z to candidate compounds of the metabolic model, grouped into **EmpiricalCompounds (ECs)**, and pathways are tested for over-representation of ECs supported by significant features. Each contrast is analysed independently.\n\n", sep = "")
+  if (identical(ma_mode, "mixed")) {
+    cat(sprintf("**Mixed-polarity data, analysed jointly.** Positive- and negative-ion features form **one** analysis per contrast, with each feature's polarity read from the `%s` column. Each feature is matched only against the ion forms of its own polarity (MetaboAnalyst's 25 positive and 16 negative forms). A compound's matches from either polarity at similar retention times form **one** EmpiricalCompound, so a compound seen in both polarities at similar retention times counts once. Significant features, the background of ECs and the permutation null are shared by both polarities. As in MetaboAnalyst, when a positive- and a negative-ion feature have exactly the same m/z, only the one with the smaller p-value is kept. Retention times of both polarities are compared on one scale.\n\n",
+                ma_p$polarity_column %||% "?"))
+  } else {
+    cat(sprintf("Every feature was read as a **%s** ion (MetaboAnalyst's %s ion forms).\n\n",
+                ma_mode, if (identical(ma_mode, "positive")) "25 positive" else "16 negative"))
+  }
+  cat(sprintf("**ORA.** Features with an **unadjusted DE p-value of at most %s (p <= %s)** are significant; an EC is significant when it holds at least one of them. Per pathway, over-representation of significant ECs among the pathway's ECs is tested with Fisher's exact test (**FET**, the `p.value` column and the plot's y axis, as in MetaboAnalyst's own plot) and with the EASE score. A **Gamma**-adjusted p-value is MetaboAnalyst's: a Gamma distribution fitted to the permutation p-values of all pathways, then applied to FET. An **empirical** p-value is the share of %s permutations, each drawing as many features at random from the whole peak list, whose pathway p-value is at most FET.\n\n",
+              p_cut, p_cut, n_perm))
+  cat("**Adjusted p-values are Holm, not Benjamini–Hochberg.** The `adj.p Holm` columns are MetaboAnalyst's own adjustment: `p.adjust()` with its default, Holm's family-wise method, over the reported pathways, applied to the rounded FET, EASE and Gamma values. They are not FDR values.\n\n")
+  cat(sprintf("Pathways with fewer than %s compounds in the model are not tested, and pathways with no significant EC are not reported.\n\n",
+              ma_p$min_pathway_size %||% 3))
+  ma_gseas <- Filter(Negate(is.null), lapply(mummi_sections, `[[`, "gsea"))
+  if (length(ma_gseas) > 0) {
+    g1 <- ma_gseas[[1]]
+    labels <- unique(vapply(ma_gseas, function(g) g$metric_label %||% "?", character(1)))
+    cat(sprintf("**GSEA.** MetaboAnalyst's peaks GSEA, on the **same** EmpiricalCompounds and pathway sets as the ORA, using the **complete ranked EC list without a significance cutoff**. Each feature is scored by the %s; an EC's score is the **maximum** over its member features, which in mixed mode can come from both polarities. A pathway's gene set is its ECs. The test is MetaboAnalyst's fixed-permutation fgsea variant (%s permutations, minimum set size %s, seed %s). It reports a raw permutation p-value (`P.Value`) and its **Benjamini–Hochberg FDR** (`padj`), computed over the pathways tested — GSEA is BH-adjusted, ORA Holm-adjusted, as in MetaboAnalyst. %s\n\n",
+                if (length(labels) == 1L) labels else paste0("statistic chosen per contrast (", paste(labels, collapse = "; "), ")"),
+                g1$params$n_perm %||% "?", g1$params$min_size %||% "?", g1$params$seed %||% "?",
+                g1$nes_note %||% ""))
+  } else {
+    cat("**GSEA** has no results in this report: either it was switched off (`gsea_enabled`), `fgsea` was unavailable, or no pathway passed its size filter. The console log for the run distinguishes them.\n\n")
+  }
+  cat("**Not produced by this engine:** the **Pathway Evidence** section, which reads the python engine's EmpiricalCompound tables.\n\n")
+  cat("**Mummichog is complementary to, not a replacement for, enrichment based on identified metabolites.** It provides pathway-level hypotheses from ambiguous LC–MS features; candidate metabolite assignments should not be interpreted as confirmed metabolite identifications.\n\n")
+  cat("**Parameters:**\n\n")
+  cat(sprintf("- Ionization mode: %s\n", ma_mode))
+  cat(sprintf("- Significant features: unadjusted DE p <= %s\n", p_cut))
+  cat(sprintf("- Mass tolerance: %s ppm\n", ma_p$tolerance_ppm %||% ppm))
+  cat(sprintf("- Primary-ion rule: %s\n",
+              if (isTRUE(ma_p$force_primary_ion)) "on (an EC needs at least one primary ion: M+H, M+Na, M-H2O+H, M-H, M-2H or M-H2O-H)" else "off"))
+  cat(sprintf("- Retention-time tolerance fraction: %s\n", ma_p$rt_frac %||% 0.02))
+  cat(sprintf("- Permutations: %s (permutation i seeded 123 + i, MetaboAnalyst's seeds)\n", ma_p$n_permutations %||% n_perm))
+  cat(sprintf("- Metabolic model: %s (version %s)\n\n", ma1$model$id %||% "?", ma1$model$version %||% "?"))
+  cat("<details><summary><strong>Technical details / Reproducibility</strong></summary>\n\n")
+  gamma_state <- vapply(names(ma_infos), function(n) {
+    g <- ma_infos[[n]]$gamma
+    if (isTRUE(g$fitted)) sprintf("%s: fitted (shape %.4g, scale %.4g)", n, g$shape, g$scale)
+    else sprintf("%s: not fitted (%s) — Gamma is NA", n, g$error %||% "too few hits")
+  }, character(1))
+  cat(sprintf("- Gamma fit per contrast: %s\n", paste(gamma_state, collapse = "; ")))
+  if (length(ma_gseas) > 0) {
+    devs <- unique(unlist(lapply(ma_gseas, `[[`, "deviations"), use.names = FALSE))
+    cat(sprintf("- GSEA engine: MetaboAnalystR peaks GSEA (%s @ `%s`), fgsea %s; adjustment %s\n",
+                g1$reference$repo %||% "?", substr(g1$reference$commit %||% "?", 1, 10),
+                g1$params$fgsea_version %||% "?", g1$adjustment %||% "BH"))
+    if (length(devs) > 0) {
+      cat(sprintf("- **GSEA deviations from the reference implementation:** %s\n",
+                  paste(devs, collapse = "; ")))
+    }
+  }
+  cat("- Gamma parameterization: MetaboAnalyst fits (scale, shape) and evaluates `1 - pgamma(1 - FET, shape, rate = <scale estimate>)`; this engine reproduces that exactly. fitdistrplus may warn about the standard errors of the fit; they are not used.\n")
+  cat(sprintf("- fitdistrplus %s\n", ma1$fitdistrplus_version %||% "?"))
+  cat("- Row order and rounding are MetaboAnalyst's: rows ordered by Gamma (by FET when Gamma is unavailable) as MetaboAnalyst orders them, values rounded to 5 significant digits.\n")
+  cat("- The full MetaboAnalyst-format table, the matched features and the run record are written per contrast under `mummichog_pinned/<contrast>/metaboanalyst/`.\n\n")
+  cat("</details>\n\n")
+  cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123. Pang Z, Chong J, Zhou G, et al. MetaboAnalyst 5.0. Nucleic Acids Res. 2021;49(W1):W388-W396.*\n\n")
+} else {
 cat("**Mummichog pathway analysis.** [Mummichog](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) complements pathway enrichment based on identified metabolites by using LC–MS features **without requiring a confident metabolite identity for every feature**.\n\n")
 cat("Mummichog groups compatible LC–MS signals into **EmpiricalCompounds (ECs)**, links them to possible metabolite identities and metabolic pathways, and tests whether particular pathways receive more support than expected by chance. Each contrast is analysed independently using that contrast's differential-abundance results.\n\n")
 # Described from the sections that were built, not from the config switch.
@@ -2583,6 +2650,7 @@ cat("Counts come at two grains. `ECs ...` counts EmpiricalCompounds by their rol
 cat(sprintf("**Summary join.** A Mummichog pathway is compared with enrichment based on identified metabolites through its exact pathway ID in the metabolic model, matched to the same ID in the identified-metabolite pathway library — never by pathway name. A method counts as support at FDR < %g.\n\n",
             .MMC_SUMMARY_FDR))
 cat("</details>\n\n")
+}
 ```
 
 ```{r mummichog-per-contrast, results='asis', fig.width=11, fig.height=8}
@@ -2592,9 +2660,12 @@ cat("</details>\n\n")
 # the report used to show is lost. The ORA bubble is never shown under a GSEA
 # heading -- a contrast without GSEA gets the explanation instead of a
 # substituted plot.
-ora_p_note <- "Mummichog ORA reports empirical raw pathway p-values; no adjusted pathway p-value is reported."
+ora_p_note_python <- "Mummichog ORA reports empirical raw pathway p-values; no adjusted pathway p-value is reported."
+ora_p_note_ma <- "ORA p.value is MetaboAnalyst's unadjusted Fisher exact test (FET) p-value; the full table also gives EASE, Gamma and empirical p-values and their Holm-adjusted values (Holm, not BH/FDR)."
 for (contrast in names(mummi_sections)) {
   s     <- mummi_sections[[contrast]]
+  is_ma_section <- identical(s$engine, "metaboanalyst")
+  ora_p_note <- if (is_ma_section) ora_p_note_ma else ora_p_note_python
   label <- gsub("_vs_", " vs ", contrast, fixed = TRUE)
   cat(sprintf("\n## %s {.tabset}\n\n", label))
 
@@ -2667,6 +2738,8 @@ for (contrast in names(mummi_sections)) {
       # found nothing when its table says otherwise.
       cat("GSEA ran for this contrast but its scatter could not be rendered. The results themselves are unaffected — see the full GSEA table under **Advanced / Downloads**.\n\n")
     }
+  } else if (is_ma_section) {
+    cat("No GSEA results for this contrast: either GSEA was switched off or unavailable, or no pathway passed its size filter. The ORA analysis for this contrast is shown under the **ORA plot** tab.\n\n")
   } else {
     # Same wording as the methodology block: a NULL result does not say which
     # of the two it was, so the tab names both.
