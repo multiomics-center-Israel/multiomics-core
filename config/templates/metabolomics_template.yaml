@@ -51,8 +51,9 @@ modes:
     #                the id used internally and in every output. If the data file
     #                has its own "feature_id" column, it is overwritten.
     #   original_id  the researcher's own id, copied from name_col. Shown in the
-    #                final Excel right after feature_id, and used as the feature
-    #                label in the HTML report. Added for processed_wide input
+    #                final Excel right after feature_id. The HTML report labels
+    #                features with a "Name" column if the data has one, and with
+    #                original_id otherwise. Added for processed_wide input
     #                (and multi_level with level_format processed_wide) only;
     #                cd_raw builds feature_id the same way but adds no original_id.
     #

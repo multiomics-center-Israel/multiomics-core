@@ -673,10 +673,11 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 #' is missing.
 #'
 #' The researcher's own ID is attached to the returned vector as the
-#' \code{original_id} attribute, taken from \code{feature_id_col} when that
-#' column is present, otherwise from \code{name_col}. A configured column that
-#' is absent from \code{data_df} is not an error: \code{original_id} falls back
-#' to \code{feature_N}.
+#' \code{original_id} attribute: from \code{feature_id_col} when that column is
+#' set and present (values copied as-is, \code{NA} kept); otherwise from
+#' \code{name_col}, with empty or \code{NA} names replaced by \code{feature_N};
+#' otherwise \code{feature_N} for every row. An absent configured column is
+#' never an error, it just moves to the next option.
 #'
 #' @param data_df Wide data.frame, one row per feature.
 #' @param id_cfg  The \code{id_columns} config block (\code{name_col},

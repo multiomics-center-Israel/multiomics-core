@@ -32,14 +32,16 @@ modes:
       metadata: "lipidomics/sample_metadata.csv"                 # Optional
 
     # ---- Feature ID construction ----
-    # Unlike metabolomics, the lipid feature_id IS the lipid name (no RT/MZ id).
+    # Unlike metabolomics, the lipid feature_id is normally taken from an id or
+    # name column; it is built from m/z and RT only as the last fallback.
     # "lipidsearch" and "processed_wide" take the first of these that exists:
-    #   1. feature_id_col  (duplicates made unique with "_" + a warning)
+    #   1. feature_id_col  values as-is (empty/NA kept); duplicates made unique
+    #                      with "_" + a warning
     #   2. "Molecule"      (always wins over name_col when the column exists)
     #   3. name_col
     #   4. lipid_N_mz<mz>_rt<rt>, built from mz_col / rt_col
-    # A configured column that is absent does NOT stop the run; the next option
-    # is used silently. Empty names become unknown_N.
+    # For 2 and 3, empty names become unknown_N. A configured column that is
+    # absent does NOT stop the run; the next option is used silently.
     # "translated_csv" uses feature_id_col if set, else name_col, and STOPS if
     # that column is missing.
     # With "lipidsearch", a custom feature_id_col must also be listed in
