@@ -195,7 +195,8 @@ mmc_ma_cpd_tree <- function(mz_mat) {
 #' reaction-derived membership the python engine and the evidence layer use.
 #' Pathway compounds missing from the compound table are dropped (they can
 #' never be matched); upstream's own library builder keeps only compounds of
-#' its table the same way.
+#' its table the same way. Pathway names must be unique (MetaboAnalyst keys
+#' pathways by name); a model with a repeated name stops.
 #'
 #' @param path Path to a model JSON in the Azimuth / metDataModel shape.
 #' @return The library list described above.
@@ -223,6 +224,19 @@ mmc_ma_library_from_model <- function(path) {
     x[x %in% cpd$id]
   })
   pw_names <- names(pw$pathways)
+  # MetaboAnalyst keys every pathway by its name (result rows, set lookups), so
+  # two pathways sharing a name would be indistinguishable downstream, and a
+  # name lookup would hand both the first one's set and statistics. Refuse
+  # rather than rename: a renamed pathway would no longer match the model.
+  dup <- unique(pw_names[duplicated(pw_names)])
+  if (length(dup) > 0L) {
+    .mmc_stop(length(dup), " pathway name(s) occur more than once in '", path,
+              "' (e.g. '", paste(utils::head(dup, 3), collapse = "', '"),
+              "'). The MetaboAnalyst-compatible engine identifies pathways by ",
+              "name, as MetaboAnalyst does, so each name must be unique. Give ",
+              "the duplicated pathways distinct names in the model, or use ",
+              "engine: python.")
+  }
   pw_ids   <- unname(pw$pathway_ids[pw_names])
 
   adducts <- list(positive = mmc_ma_adduct_matrix(cpd$mw, "positive"),

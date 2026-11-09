@@ -26,8 +26,10 @@
 #' Builds the library once from the configured model, then for each DE contrast
 #' assembles the peak list (DE p-value and logFC joined to the m/z, retention
 #' time and — in mixed mode — polarity of every feature), runs
-#' `mmc_ma_run_contrast()` and writes its results. A contrast that fails warns
-#' and is skipped; if every contrast fails the stage stops.
+#' `mmc_ma_run_contrast()` and writes its results. A contrast that fails warns,
+#' and its previous result files are replaced by a failure record
+#' (`ma_failed.json`); if every contrast fails the stage stops. A GSEA failure
+#' only warns: the contrast's ORA is still written.
 #'
 #' @param pre     Preprocessing results; uses `pre$row_data`.
 #' @param de_res  DE results; each table in `de_res$de_tables` (or
@@ -151,6 +153,7 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
   dirs <- make.unique(gsub("[^A-Za-z0-9]+", "_", labels), sep = "_")
   written <- vector("list", length(de_tables))
   errors  <- vector("list", length(de_tables))
+  failed  <- logical(length(de_tables))
   for (i in seq_along(de_tables)) {
     contrast <- labels[[i]]
     written[[i]] <- tryCatch({
@@ -202,6 +205,10 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
                                  rt_frac = rt_frac, min_lib = min_lib,
                                  gsea = if (gsea_on) c(gsea_settings,
                                    list(metric_label = rank$label)) else NULL)
+      if (!is.null(run$gsea_error)) {
+        warning("mummichog (metaboanalyst): contrast '", contrast, "': GSEA ",
+                "failed, ORA kept: ", run$gsea_error, call. = FALSE)
+      }
       write_mummichog_ma_results(
         run, peaks, file.path(mummi_dir, dirs[[i]], .MMC_MA_SUBDIR),
         info = c(list(contrast = contrast), info), pathway_ids = pathway_ids)
@@ -209,11 +216,19 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
       warning("mummichog (metaboanalyst): contrast '", contrast, "' failed: ",
               conditionMessage(e), call. = FALSE)
       errors[[i]] <<- conditionMessage(e)
+      failed[[i]] <<- TRUE
       character(0)
     })
   }
+  # A failed contrast's earlier results must not survive a rerun as if current:
+  # its result files are replaced by a failure record, which stays tracked so
+  # the export cleanup downstream still sees the contrast.
+  for (i in which(failed)) {
+    written[[i]] <- write_mummichog_ma_failure(
+      file.path(mummi_dir, dirs[[i]], .MMC_MA_SUBDIR), labels[[i]], errors[[i]])
+  }
   produced <- unlist(written, use.names = FALSE)
-  if (length(produced) == 0L) {
+  if (all(failed)) {
     first <- Filter(Negate(is.null), errors)
     .mmc_stop("every contrast failed in the MetaboAnalyst-compatible engine. ",
               "First error: ", if (length(first)) first[[1]] else "unknown")

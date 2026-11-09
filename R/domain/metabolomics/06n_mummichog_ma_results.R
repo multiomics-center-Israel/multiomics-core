@@ -70,6 +70,64 @@ mmc_engine <- function(config) {
 .MMC_MA_INPUT_FILE    <- "ma_input.tsv"
 .MMC_MA_INFO_FILE     <- "ma_run_info.json"
 .MMC_MA_GSEA_FILE     <- "ma_gsea_results.tsv"
+.MMC_MA_FAILED_FILE   <- "ma_failed.json"
+.MMC_MA_ALL_FILES     <- c(.MMC_MA_RESULTS_FILE, .MMC_MA_UPSTREAM_CSV,
+                           .MMC_MA_FEATURES_FILE, .MMC_MA_INPUT_FILE,
+                           .MMC_MA_INFO_FILE, .MMC_MA_GSEA_FILE,
+                           .MMC_MA_FAILED_FILE)
+
+#' Remove one contrast's MetaboAnalyst-compatible result files
+#'
+#' Removes exactly the engine's own file names (`.MMC_MA_ALL_FILES`) from
+#' `dir`, never a pattern, so nothing else there is touched. Every write of a
+#' contrast — a result or a failure record — starts here, so a rerun cannot
+#' leave the previous run's files reading as current.
+#'
+#' @param dir The contrast's `metaboanalyst/` directory.
+#' @return Character vector of the files removed (may be empty).
+#' @noRd
+.mmc_ma_clear_results <- function(dir) {
+  old <- file.path(dir, .MMC_MA_ALL_FILES)
+  old <- old[file.exists(old)]
+  unlink(old)
+  old
+}
+
+#' Record that one contrast failed in the MetaboAnalyst-compatible engine
+#'
+#' Clears the contrast's previous result files and writes `ma_failed.json`
+#' (contrast label and error message) in their place. The record keeps the
+#' contrast in the stage's tracked files, so the report layer still sees it:
+#' it gets no section (there is no result table), and
+#' `clear_orphan_mummichog_gsea_exports()` removes its earlier presentation
+#' exports instead of leaving them on disk looking current.
+#'
+#' @param dir      The contrast's `metaboanalyst/` directory (created if absent).
+#' @param contrast The DE contrast label.
+#' @param error    The error message.
+#' @return The path of the failure record.
+#' @examples
+#' \dontrun{
+#' write_mummichog_ma_failure(tempfile(), "A_vs_B", "no usable statistic")
+#' }
+write_mummichog_ma_failure <- function(dir, contrast, error) {
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  .mmc_ma_clear_results(dir)
+  path <- file.path(dir, .MMC_MA_FAILED_FILE)
+  jsonlite::write_json(list(engine = "metaboanalyst", contrast = contrast,
+                            failed = TRUE, error = error),
+                       path, auto_unbox = TRUE, pretty = TRUE)
+  path
+}
+
+#' Does a contrast's file list carry a failure record?
+#'
+#' @param files One contrast's files.
+#' @return TRUE when `ma_failed.json` is among them.
+#' @noRd
+.mmc_ma_contrast_failed <- function(files) {
+  any(basename(files) == .MMC_MA_FAILED_FILE)
+}
 
 #' Run the MetaboAnalyst-compatible mummichog analysis for one peak list
 #'
@@ -91,9 +149,12 @@ mmc_engine <- function(config) {
 #' @param gsea NULL to skip GSEA, or a list of `mmc_ma_gsea()` settings
 #'   (`n_perm`, `min_size`, `max_size`, `seed`, `metric_label`). It runs on the
 #'   same ECs and pathway sets as the ORA, after it, and changes nothing in it.
+#'   GSEA is optional: an error in it is caught and returned as `gsea_error`,
+#'   so the ORA result is kept.
 #' @return A list: `prep`, `input_mzlist`, `matched`, `ecs`, `pathways`,
-#'   `perms`, `stats`, `gsea` (NULL when skipped or nothing passed its size
-#'   filter).
+#'   `perms`, `stats`, `gsea` (NULL when skipped, failed, or nothing passed its
+#'   size filter) and `gsea_error` (the error message when GSEA failed, else
+#'   NULL).
 #' @examples
 #' \dontrun{
 #' run <- mmc_ma_run_contrast(peaks, lib, "mixed", ppm = 10, cutoff = 0.05)
@@ -110,9 +171,18 @@ mmc_ma_run_contrast <- function(peaks, lib, mode, ppm, cutoff, n_perm = 100,
   pw <- mmc_ma_pathway_ecs(lib, ecs, min_lib = min_lib)
   perms <- mmc_ma_permutations(prep, ecs, pw, sig, n_perm = n_perm)
   stats <- mmc_ma_pathway_stats(ecs, pw, perms)
-  g <- if (is.null(gsea)) NULL else do.call(mmc_ma_gsea, c(list(ecs, pw), gsea))
+  # GSEA is the optional half (as when fgsea is missing): its failure must not
+  # take the already-computed ORA down with it.
+  gsea_error <- NULL
+  g <- if (is.null(gsea)) NULL else tryCatch(
+    do.call(mmc_ma_gsea, c(list(ecs, pw), gsea)),
+    error = function(e) {
+      gsea_error <<- conditionMessage(e)
+      NULL
+    })
   list(prep = prep, input_mzlist = sig, matched = matched, ecs = ecs,
-       pathways = pw, perms = perms, stats = stats, gsea = g)
+       pathways = pw, perms = perms, stats = stats, gsea = g,
+       gsea_error = gsea_error)
 }
 
 #' Write one contrast's MetaboAnalyst-compatible results
@@ -132,9 +202,10 @@ mmc_ma_run_contrast <- function(peaks, lib, mode, ppm, cutoff, n_perm = 100,
 #'     and counts.}
 #' }
 #' and, when GSEA ran, `ma_gsea_results.tsv` (the GSEA table in
-#' MetaboAnalyst's order; its settings and provenance go into the run record).
-#' Only these six names are removed before writing, so nothing else in `dir`
-#' is touched.
+#' MetaboAnalyst's order; its settings and provenance go into the run record;
+#' when GSEA failed, the record says so with its error). Only the engine's own
+#' file names, including a previous failure record, are removed before writing,
+#' so nothing else in `dir` is touched.
 #'
 #' @param run  Output of `mmc_ma_run_contrast()`.
 #' @param peaks The peak list given to it.
@@ -153,8 +224,7 @@ write_mummichog_ma_results <- function(run, peaks, dir, info, pathway_ids) {
                             .MMC_MA_FEATURES_FILE, .MMC_MA_INPUT_FILE,
                             .MMC_MA_INFO_FILE))
   gsea_path <- file.path(dir, .MMC_MA_GSEA_FILE)
-  stale <- c(paths, gsea_path)
-  unlink(stale[file.exists(stale)])
+  .mmc_ma_clear_results(dir)
 
   st <- run$stats
   tbl <- st$table
@@ -207,7 +277,7 @@ write_mummichog_ma_results <- function(run, peaks, dir, info, pathway_ids) {
                       n_pathways = gs$n_pathways)
     paths <- c(paths, gsea_path)
   } else {
-    info$gsea <- list(ran = FALSE)
+    info$gsea <- list(ran = FALSE, error = run$gsea_error)
   }
   jsonlite::write_json(info, file.path(dir, .MMC_MA_INFO_FILE), auto_unbox = TRUE,
                        pretty = TRUE, digits = NA, null = "null")

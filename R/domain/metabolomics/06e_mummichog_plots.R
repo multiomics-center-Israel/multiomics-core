@@ -453,6 +453,10 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
 #' contrast should get a GSEA analysis at all is a separate question about the
 #' section contract, tracked rather than decided here.
 #'
+#' One exception widens it: a contrast the MetaboAnalyst-compatible engine
+#' recorded as failed (`ma_failed.json`, 06n) has no current result at all, so
+#' its ORA bubble and pathway table and its evidence exports are removed too.
+#'
 #' @param files    Flat character vector of every mummichog output file.
 #' @param sections The sections from `build_mummichog_report_sections()`.
 #' @param out_dir  Metabolomics mode output directory.
@@ -479,12 +483,25 @@ clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
   all_slugs <- make.unique(gsub("[^A-Za-z0-9]+", "_", names(groups)), sep = "_")
   orphans <- setdiff(all_slugs, live)
   if (length(orphans) == 0) return(character(0))
+  # A contrast the MetaboAnalyst-compatible engine recorded as FAILED this run
+  # (06n) has no current result of any kind, so every export of its slug is
+  # stale -- the ORA bubble and table and the evidence tables too, not only
+  # the GSEA and Summary files every orphan loses.
+  failed_slugs <- all_slugs[vapply(groups, .mmc_ma_contrast_failed, logical(1),
+                                   USE.NAMES = FALSE)]
 
   dest_dir <- file.path(out_dir, "mummichog_pinned")
   paths <- unlist(lapply(orphans, function(slug) c(
     file.path(dest_dir, paste0("mummichog_gsea_table_", slug, c(".tsv", ".csv"))),
     file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf"))),
-    file.path(dest_dir, paste0("mummichog_summary_", slug, c(".tsv", ".csv")))
+    file.path(dest_dir, paste0("mummichog_summary_", slug, c(".tsv", ".csv"))),
+    if (slug %in% failed_slugs) c(
+      file.path(dest_dir, paste0("mummichog_pathway_bubble_", slug, c(".png", ".pdf"))),
+      file.path(dest_dir, paste0("mummichog_pathway_table_", slug, c(".tsv", ".csv"))),
+      file.path(dest_dir, paste0(rep(c("mummichog_evidence_pathways_",
+                                       "mummichog_evidence_empirical_compounds_",
+                                       "mummichog_evidence_features_"), each = 2),
+                                 slug, c(".tsv", ".csv"))))
   )), use.names = FALSE)
 
   gone <- paths[file.exists(paths)]

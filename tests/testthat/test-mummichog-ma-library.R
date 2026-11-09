@@ -114,6 +114,12 @@ test_that("the converter refuses models it cannot build a library from", {
   expect_error(mmc_ma_library_from_model(ma_write_model(dup, list(a = "C90001"))),
                "unique")
 
+  # Two pathway ids sharing one name would be indistinguishable downstream.
+  expect_error(mmc_ma_library_from_model(ma_write_model(
+    ma_cpd, list(syn01 = "C90001", syn02 = "C90002", syn03 = "C90003"),
+    pathway_names = c("Same name", "Same name", "Other"))),
+    "occur more than once.*Same name")
+
   mcg2 <- tempfile(fileext = ".json")
   jsonlite::write_json(list(metabolic_pathways = list()), mcg2, auto_unbox = TRUE)
   expect_error(mmc_ma_library_from_model(mcg2), "list_of_compounds")

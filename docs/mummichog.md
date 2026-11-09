@@ -141,6 +141,8 @@ Outputs, per contrast, in `mummichog_pinned/<contrast>/metaboanalyst/`:
 - `ma_gsea_results.tsv`: the GSEA table in MetaboAnalyst's order (raw p, BH `padj`, NES, leading edge, each pathway's ECs).
 - `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts.
 
+GSEA is optional: if it fails, the stage warns, the contrast's ORA is still written, and `ma_run_info.json` records the GSEA error. If a whole contrast fails, the stage warns and its earlier result files are replaced by `ma_failed.json`, which holds the error. That contrast gets no report section, and all of its earlier exports are cleared. If every contrast fails, the stage stops.
+
 The report, its exports and the Shiny payload read these through the same targets as before. The report's ORA table adds the EASE, Gamma, empirical and Holm columns; its GSEA tab, scatter and GSEA table export show this engine's GSEA. Python GSEA never runs with this engine, so the two engines' results are never mixed in one report.
 
 GSEA reproduces `.compute.mummichog.RT.fgsea()` at the pinned commit, with two documented exceptions that change no statistic: MetaboAnalyst's result CSV attaches EC hits in library order to rows sorted by p-value (here each row carries its own pathway's ECs), and a single tested pathway stays a row. Validated end to end against that commit on the synthetic fixtures (`generate_gsea_reference.R`).
@@ -149,6 +151,7 @@ Limits:
 
 - Retention time is required. MetaboAnalyst's no-RT, compound-level path is not reproduced.
 - In mixed mode, both polarities' retention times must be on one scale.
+- Pathway names must be unique in the model, because MetaboAnalyst identifies pathways by name. A model that repeats a name stops the stage.
 - MetaboAnalyst's custom-adduct and currency-customisation options are not offered. The default currency list is applied.
 
 ## Choosing a metabolic model

@@ -220,6 +220,84 @@ test_that("the matched-feature table carries feature ids and polarity", {
   expect_true(any(both))
 })
 
+# ---- failures: GSEA is optional, a failed contrast leaves nothing stale ---------
+
+test_that("a GSEA failure keeps the contrast's ORA and records why", {
+  ref <- ma_int_ref()
+  skip_if_not_installed("fgsea")
+  # Sourced functions, not a package: stub by assignment in their environment.
+  target <- environment(mmc_ma_run_contrast)
+  orig <- get("mmc_ma_gsea", envir = target)
+  assign("mmc_ma_gsea", function(...) stop("synthetic GSEA failure"),
+         envir = target)
+  withr::defer(assign("mmc_ma_gsea", orig, envir = target))
+
+  si <- ma_stage_inputs(ref$inputs)
+  cfg <- ma_cfg(model_json = si$model)
+  out <- withr::local_tempdir()
+  expect_warning(
+    files <- mod_mummichog_metaboanalyst(si$pre, si$de_res, cfg, out),
+    "GSEA failed, ORA kept: synthetic GSEA failure")
+
+  expect_true("ma_pathway_results.tsv" %in% basename(files))
+  expect_false(any(basename(files) %in% c("ma_gsea_results.tsv", "ma_failed.json")))
+  tbl <- read_mummichog_pathways_by_contrast(files)[["HL_vs_LL"]]
+  expect_identical(tbl$pathway, rownames(ref$cases$mixed$mummi.resmat))
+  expect_null(attr(tbl, "ma_gsea"))
+  gi <- attr(tbl, "ma_info")$gsea
+  expect_false(gi$ran)
+  expect_identical(gi$error, "synthetic GSEA failure")
+})
+
+test_that("a failed contrast's earlier results and exports do not survive a rerun", {
+  ref <- ma_int_ref()
+  si <- ma_stage_inputs(ref$inputs)
+  cfg <- ma_cfg(model_json = si$model)
+  out <- withr::local_tempdir()
+  good <- si$de_res$de_tables$HL_vs_LL
+  run <- function(second) {
+    de_res <- list(de_tables = list(HL_vs_LL = good, LL_vs_DD = second))
+    suppressWarnings(mod_mummichog_metaboanalyst(si$pre, de_res, cfg, out))
+  }
+  dd_dir <- file.path(out, "mummichog_pinned", "LL_vs_DD", "metaboanalyst")
+
+  run(good)
+  expect_true(file.exists(file.path(dd_dir, "ma_pathway_results.tsv")))
+
+  # The rerun breaks LL_vs_DD only; the stage completes on HL_vs_LL.
+  broken <- good[, setdiff(names(good), "logFC")]
+  expect_warning(
+    files <- mod_mummichog_metaboanalyst(
+      si$pre, list(de_tables = list(HL_vs_LL = good, LL_vs_DD = broken)), cfg, out),
+    "contrast 'LL_vs_DD' failed")
+  expect_identical(list.files(dd_dir), "ma_failed.json")
+  expect_true(file.path(dd_dir, "ma_failed.json") %in% files)
+  rec <- jsonlite::fromJSON(file.path(dd_dir, "ma_failed.json"))
+  expect_identical(rec$contrast, "LL_vs_DD")
+  expect_match(rec$error, "logFC")
+  # It gets no report section; the healthy contrast is untouched.
+  expect_identical(names(read_mummichog_pathways_by_contrast(files)), "HL_vs_LL")
+
+  # The previous run's presentation exports of the failed contrast are all
+  # cleared -- ORA and evidence too -- and the healthy contrast's are kept.
+  dest <- file.path(out, "mummichog_pinned")
+  kinds <- c("mummichog_pathway_bubble_%s.png", "mummichog_pathway_table_%s.tsv",
+             "mummichog_evidence_pathways_%s.csv", "mummichog_gsea_table_%s.tsv",
+             "mummichog_summary_%s.tsv")
+  stale <- file.path(dest, sprintf(kinds, "LL_vs_DD"))
+  keep  <- file.path(dest, sprintf(kinds, "HL_vs_LL"))
+  file.create(c(stale, keep))
+  gone <- clear_orphan_mummichog_gsea_exports(
+    files, list(HL_vs_LL = list(slug = "HL_vs_LL")), out)
+  expect_setequal(gone, stale)
+  expect_true(all(file.exists(keep)))
+
+  # Once the contrast succeeds again, its failure record goes.
+  run(good)
+  expect_false(file.exists(file.path(dd_dir, "ma_failed.json")))
+  expect_true(file.exists(file.path(dd_dir, "ma_pathway_results.tsv")))
+})
+
 # ---- report sections and the Shiny contract --------------------------------------
 
 test_that("MA sections show FET with Holm columns, the MA GSEA, and no evidence", {
