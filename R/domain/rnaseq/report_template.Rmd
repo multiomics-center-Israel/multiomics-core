@@ -203,11 +203,22 @@ rna_norm_label <- if (identical(rna_norm_ran, "preprocessed")) "preprocessed inp
 # write_rnaseq_datasets_legacy() names the normalized table after the method
 # that ran (rna_norm_<method>.tsv). Read that exact name: a pattern match could
 # pick up a table left behind by an earlier run with another method. Without a
-# runtime record, fall back to whichever rna_norm_*.tsv is there.
+# runtime record, use the rna_norm_*.tsv only when there is exactly one: with
+# several (reruns with different methods) nothing says which one belongs to
+# these results, so show none rather than risk mislabelled values.
 rna_norm_file <- if (!is.null(rna_norm_ran)) {
     file.path(datasets_dir, sprintf("rna_norm_%s.tsv", rna_norm_ran))
 } else {
-    list.files(datasets_dir, pattern = "^rna_norm_.*\\.tsv$", full.names = TRUE)[1]
+    rna_norm_found <- list.files(datasets_dir, pattern = "^rna_norm_.*\\.tsv$", full.names = TRUE)
+    if (length(rna_norm_found) > 1) {
+        warning(sprintf(paste0(
+            "[report] %d normalized tables in %s (%s) and no record of which method ran; ",
+            "the normalized-expression sections are left out. Render with pre_info, or remove ",
+            "the tables from earlier runs."),
+            length(rna_norm_found), datasets_dir, paste(basename(rna_norm_found), collapse = ", ")),
+            call. = FALSE)
+        NA_character_
+    } else rna_norm_found[1]
 }
 
 # The transformation behind the QC plots, from the same resolver the QC module

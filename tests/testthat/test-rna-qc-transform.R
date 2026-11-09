@@ -390,6 +390,12 @@ test_that("the report reads the normalized table and label of the method that ra
 
     # No runtime record: fall back to the table that is there.
     expect_identical(resolve_for("VST", NULL, "rna_norm_VST.tsv")$file, "rna_norm_VST.tsv")
+    # ...but not when several are, since nothing says which one is current.
+    expect_warning(
+        ambiguous <- resolve_for("VST", NULL, c("rna_norm_VST.tsv", "rna_norm_TMMlogCPM.tsv")),
+        "no record of which method ran"
+    )
+    expect_true(is.na(ambiguous$file))
 })
 
 test_that("the report hard-codes no normalization method in labels or file names", {
