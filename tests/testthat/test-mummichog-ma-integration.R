@@ -298,6 +298,35 @@ test_that("a failed contrast's earlier results and exports do not survive a reru
   expect_true(file.exists(file.path(dd_dir, "ma_pathway_results.tsv")))
 })
 
+test_that("when every contrast fails, earlier exports are cleared before the stop", {
+  ref <- ma_int_ref()
+  si <- ma_stage_inputs(ref$inputs)
+  cfg <- ma_cfg(model_json = si$model)
+  out <- withr::local_tempdir()
+  suppressWarnings(mod_mummichog_metaboanalyst(si$pre, si$de_res, cfg, out))
+
+  # The stop below keeps the downstream exports target from running, so the
+  # stage itself must clear the previous run's exports.
+  dest <- file.path(out, "mummichog_pinned")
+  stale <- file.path(dest, c("mummichog_pathway_bubble_HL_vs_LL.pdf",
+                             "mummichog_pathway_table_HL_vs_LL.csv",
+                             "mummichog_evidence_features_HL_vs_LL.tsv",
+                             "mummichog_gsea_scatter_HL_vs_LL.png",
+                             "mummichog_summary_HL_vs_LL.tsv"))
+  keep <- file.path(dest, "mummichog_pathway_table_OTHER.tsv")
+  file.create(c(stale, keep))
+
+  good <- si$de_res$de_tables$HL_vs_LL
+  broken <- list(de_tables = list(HL_vs_LL = good[, setdiff(names(good), "logFC")]))
+  expect_error(suppressWarnings(
+    mod_mummichog_metaboanalyst(si$pre, broken, cfg, out)),
+    "every contrast failed")
+  expect_false(any(file.exists(stale)))
+  expect_true(file.exists(keep))
+  ma_dir <- file.path(dest, "HL_vs_LL", "metaboanalyst")
+  expect_identical(list.files(ma_dir), "ma_failed.json")
+})
+
 # ---- report sections and the Shiny contract --------------------------------------
 
 test_that("MA sections show FET with Holm columns, the MA GSEA, and no evidence", {

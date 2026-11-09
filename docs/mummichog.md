@@ -141,7 +141,7 @@ Outputs, per contrast, in `mummichog_pinned/<contrast>/metaboanalyst/`:
 - `ma_gsea_results.tsv`: the GSEA table in MetaboAnalyst's order (raw p, BH `padj`, NES, leading edge, each pathway's ECs).
 - `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts.
 
-GSEA is optional: if it fails, the stage warns, the contrast's ORA is still written, and `ma_run_info.json` records the GSEA error. If a whole contrast fails, the stage warns and its earlier result files are replaced by `ma_failed.json`, which holds the error. That contrast gets no report section, and all of its earlier exports are cleared. If every contrast fails, the stage stops.
+GSEA is optional: if it fails, the stage warns, the contrast's ORA is still written, and `ma_run_info.json` records the GSEA error. If a whole contrast fails, the stage warns and its earlier result files are replaced by `ma_failed.json`, which holds the error. That contrast gets no report section, and all of its earlier exports are cleared. If every contrast fails, the stage first clears every contrast's earlier exports and then stops.
 
 The report, its exports and the Shiny payload read these through the same targets as before. The report's ORA table adds the EASE, Gamma, empirical and Holm columns; its GSEA tab, scatter and GSEA table export show this engine's GSEA. Python GSEA never runs with this engine, so the two engines' results are never mixed in one report.
 

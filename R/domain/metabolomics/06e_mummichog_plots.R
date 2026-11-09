@@ -439,6 +439,31 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
   sections
 }
 
+#' The presentation export paths of one contrast slug
+#'
+#' The single list of the file names `save_mummichog_exports()` writes for a
+#' contrast, used wherever those exports are cleared without a section.
+#'
+#' @param dest_dir The `mummichog_pinned/` directory.
+#' @param slug     The contrast's export slug.
+#' @param all      FALSE for the GSEA and Summary exports only; TRUE adds the
+#'   ORA bubble and pathway table and the evidence tables.
+#' @return Character vector of paths (whether or not they exist).
+#' @noRd
+.mmc_contrast_export_paths <- function(dest_dir, slug, all = FALSE) {
+  stem <- function(s, ext) file.path(dest_dir, paste0(s, slug, ext))
+  c(stem("mummichog_gsea_table_", c(".tsv", ".csv")),
+    stem("mummichog_gsea_scatter_", c(".png", ".pdf")),
+    stem("mummichog_summary_", c(".tsv", ".csv")),
+    if (all) c(
+      stem("mummichog_pathway_bubble_", c(".png", ".pdf")),
+      stem("mummichog_pathway_table_", c(".tsv", ".csv")),
+      stem(rep(c("mummichog_evidence_pathways_",
+                 "mummichog_evidence_empirical_compounds_",
+                 "mummichog_evidence_features_"), each = 2),
+           c(".tsv", ".csv"))))
+}
+
 #' Clear GSEA and Summary exports belonging to contrasts with no report section
 #'
 #' `save_mummichog_exports()` clears a contrast's stale GSEA and Summary files
@@ -491,18 +516,9 @@ clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
                                    USE.NAMES = FALSE)]
 
   dest_dir <- file.path(out_dir, "mummichog_pinned")
-  paths <- unlist(lapply(orphans, function(slug) c(
-    file.path(dest_dir, paste0("mummichog_gsea_table_", slug, c(".tsv", ".csv"))),
-    file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf"))),
-    file.path(dest_dir, paste0("mummichog_summary_", slug, c(".tsv", ".csv"))),
-    if (slug %in% failed_slugs) c(
-      file.path(dest_dir, paste0("mummichog_pathway_bubble_", slug, c(".png", ".pdf"))),
-      file.path(dest_dir, paste0("mummichog_pathway_table_", slug, c(".tsv", ".csv"))),
-      file.path(dest_dir, paste0(rep(c("mummichog_evidence_pathways_",
-                                       "mummichog_evidence_empirical_compounds_",
-                                       "mummichog_evidence_features_"), each = 2),
-                                 slug, c(".tsv", ".csv"))))
-  )), use.names = FALSE)
+  paths <- unlist(lapply(orphans, function(slug) {
+    .mmc_contrast_export_paths(dest_dir, slug, all = slug %in% failed_slugs)
+  }), use.names = FALSE)
 
   gone <- paths[file.exists(paths)]
   unlink(gone)

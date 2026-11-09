@@ -229,6 +229,14 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
   }
   produced <- unlist(written, use.names = FALSE)
   if (all(failed)) {
+    # Stopping here means the downstream sections and exports targets never
+    # run, so their cleanup cannot catch this case: clear every contrast's
+    # earlier presentation exports now. The set of export slugs a full run
+    # writes is the set of contrast directory names (same sanitise and
+    # make.unique over every label), and every one of them is stale here.
+    old <- unlist(lapply(dirs, function(d) .mmc_contrast_export_paths(
+      mummi_dir, d, all = TRUE)), use.names = FALSE)
+    unlink(old[file.exists(old)])
     first <- Filter(Negate(is.null), errors)
     .mmc_stop("every contrast failed in the MetaboAnalyst-compatible engine. ",
               "First error: ", if (length(first)) first[[1]] else "unknown")
