@@ -45,8 +45,25 @@ modes:
       cd_sample_regex: null  # null = use default
 
     # ---- Feature ID + sample mapping ----
+    # Every feature (row) gets two ids:
+    #   feature_id   built by the pipeline as RT<rt>_MZ<mz> from rt_col and mz_col
+    #                (rounded to 2 decimals; "_dup" suffix if two collide). This is
+    #                the id used internally and in every output.
+    #   original_id  the researcher's own id, copied from name_col. Shown in the
+    #                final Excel right after feature_id, and used as the feature
+    #                label in the HTML report.
+    #
+    # name_col  column in the data file holding the researcher's unique feature
+    #           id (e.g. "Name", "NameID", "Compound"). If the column is missing
+    #           the run does NOT stop: original_id silently becomes feature_1..N.
+    #           Check colnames() of the data file before running.
+    # mz_col, rt_col  columns used to build feature_id. If either is missing,
+    #           feature_id falls back to the name_col value, then to feature_N.
+    #
+    # The KEGG column is not set here: it is detected by name
+    # (KEGG, KEGG_ID, "KEGG ID", kegg, kegg_id).
     id_columns:
-      name_col: "feature_id" # The original feature or name id that was delivered by the researcher (e.g: NameID/Name/...)
+      name_col: "Name"
       mz_col: "m/z"
       rt_col: "RT [min]"
 
