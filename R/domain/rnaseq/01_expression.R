@@ -144,6 +144,53 @@ compute_tmm_cpm <- function(counts) {
     edgeR::cpm(dge, log = FALSE)
 }
 
+#' Resolve the RNA-seq normalization to report
+#'
+#' The one reading of which normalization produced \code{expr_work}, shared by
+#' the HTML report, the pipeline summary, the PowerPoint and the commentary so
+#' that all of them describe the same run. Priority: preprocessed input (the
+#' pipeline normalized nothing), then the method recorded at runtime (a VST
+#' that fails falls back to TMMlogCPM, so the recorded method wins over the
+#' configured one), then the configured method when nothing was recorded.
+#'
+#' It reads only \code{info$expr_work_method} and \code{norm_cfg$method}. The
+#' QC-plot transformation (\code{resolve_rna_qc_transform()}) is derived from
+#' the method, never the other way round, so it is not consulted here.
+#'
+#' @param info The \code{info} list returned by \code{preprocess_rna()}, or any
+#'   list with \code{expr_work_method}; NULL when no runtime record exists.
+#' @param norm_cfg The \code{modes$rna$normalization} config list (may be NULL).
+#' @return A list with
+#'   \describe{
+#'     \item{method}{"TMMlogCPM", "VST" or "preprocessed"; the configured
+#'       method when nothing was recorded.}
+#'     \item{configured}{The configured method (default "TMMlogCPM").}
+#'     \item{recorded}{TRUE when \code{method} comes from the runtime record.}
+#'     \item{fell_back}{TRUE when VST was configured and TMMlogCPM ran.}
+#'     \item{label}{Reader-facing name: the method, or
+#'       "none (preprocessed input)".}
+#'   }
+#' @examples
+#' resolve_rna_norm_method(list(expr_work_method = "TMMlogCPM"), list(method = "VST"))$fell_back  # TRUE
+#' resolve_rna_norm_method(list(expr_work_method = "preprocessed"), list(method = "VST"))$label
+#' resolve_rna_norm_method(NULL, list(method = "VST"))$method  # "VST", from config
+resolve_rna_norm_method <- function(info, norm_cfg = NULL) {
+    configured <- norm_cfg$method %||% "TMMlogCPM"
+    ran <- info$expr_work_method
+    ran <- if (is.character(ran) && length(ran) == 1 && !is.na(ran)) ran else NA_character_
+
+    method <- if (identical(ran, "preprocessed") || ran %in% c("TMMlogCPM", "VST")) ran else configured
+    recorded <- !is.na(ran) && identical(method, ran)
+
+    list(
+        method     = method,
+        configured = configured,
+        recorded   = recorded,
+        fell_back  = recorded && identical(configured, "VST") && identical(method, "TMMlogCPM"),
+        label      = if (identical(method, "preprocessed")) "none (preprocessed input)" else method
+    )
+}
+
 #' Resolve the transformation used for RNA-seq QC plots
 #'
 #' The one reading of \code{qc$cpm_pseudocount}, shared by the QC module, the

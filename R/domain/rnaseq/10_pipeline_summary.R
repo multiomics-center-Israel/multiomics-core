@@ -194,10 +194,8 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
         pathway = list(total = n_pathways_total, up = n_pathways_up,
                        down = n_pathways_down),
         methods = list(
-            # What produced expr_work: a failed VST falls back to TMMlogCPM.
-            normalization = if (isTRUE(pre$info$expr_work_method %in% c("TMMlogCPM", "VST"))) {
-                pre$info$expr_work_method
-            } else rna_cfg$normalization$method %||% "TMM",
+            # What produced expr_work, from the shared resolver.
+            normalization = resolve_rna_norm_method(pre$info, rna_cfg$normalization),
             prior_count   = rna_cfg$normalization$prior.count %||% 1,
             qc_transform  = resolve_rna_qc_transform(pre$info, rna_cfg$qc),
             filtering = describe_rna_filtering(pre$info, rna_cfg$filtering),
@@ -295,7 +293,7 @@ generate_summary_with_claude <- function(stats, comment_cfg) {
         "3. 'Downstream Analysis' section (team badge 'Multi-omics Core', violet):\n",
         "   - Step 05 Gene Filtering (phase-filter, orange, emoji magnifier) — include stats-row with before/after gene counts; ",
         "describe the filter from stats.methods.filtering.methods and stats.methods.filtering.de_note only, adding no criterion or threshold not stated there\n",
-        "   - Step 06 Normalization (phase-norm, rose, emoji scales) — describe the normalization method from stats.methods\n",
+        "   - Step 06 Normalization (phase-norm, rose, emoji scales) — describe the normalization from stats.methods.normalization: name it by its label, say it was configured but failed when fell_back is true, and for method 'preprocessed' say the pipeline did not normalize the input\n",
         "   - Step 07 Differential Expression (phase-de, violet, emoji chart) — include stats-row with DE/up/down counts\n",
         "   - Step 08 Pathway Enrichment (phase-enrich, blue, emoji compass) — include stats-row with pathway counts\n",
         "   - Step 09 Report & Outputs (phase-out, green, emoji folder)\n\n",
@@ -485,7 +483,7 @@ generate_flowchart_html <- function(stats) {
     ))
 
     # --- Normalization ---
-    norm_detail <- esc(stats$methods$normalization)
+    norm_detail <- esc(stats$methods$normalization$label)
     parts <- c(parts, list(
         fc_node("\u2696\uFE0F", "Normalization", norm_detail, "fc-node-norm")
     ))
@@ -635,13 +633,20 @@ generate_summary_body_r <- function(stats) {
     step5 <- build_step_html(5, "\U0001F50D", "Gene Filtering", "phase-filter", "downstream", filt_desc, filt_tags, filt_stats)
 
     # Normalization
-    nm <- stats$methods$normalization
+    norm <- stats$methods$normalization
+    nm <- norm$method
     norm_desc <- switch(nm,
         "TMMlogCPM" = sprintf("TMM scaling factors (edgeR) correct library composition, then log2 CPM (prior count = %s) for stabilized values.", stats$methods$prior_count),
         "VST" = "Variance Stabilizing Transformation (DESeq2) stabilizes variance across expression range.",
+        "preprocessed" = "Not performed by the pipeline: the input was preprocessed upstream and is used as provided.",
         sprintf("Normalization via %s.", nm))
     norm_tags <- if (nm == "TMMlogCPM") c("TMM scaling", "log2 CPM", sprintf("prior.count = %s", stats$methods$prior_count))
-                 else if (nm == "VST") c("VST", "DESeq2") else nm
+                 else if (nm == "VST") c("VST", "DESeq2") else norm$label
+    if (isTRUE(norm$fell_back)) {
+        norm_desc <- paste(norm_desc, sprintf("(%s was configured but failed; %s was used instead.)",
+                                              norm$configured, nm))
+        norm_tags <- c(norm_tags, sprintf("%s fallback", norm$configured))
+    }
     qc_tr <- stats$methods$qc_transform
     if (isTRUE(qc_tr$applied)) {
         norm_desc <- paste(norm_desc, sprintf(

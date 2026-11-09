@@ -358,7 +358,8 @@ test_that("the report describes the normalization that ran, not a failed VST", {
     }
     expect_identical(method_for("VST", "TMMlogCPM"), "TMMlogCPM")
     expect_identical(method_for("VST", "VST"), "VST")
-    expect_identical(method_for("TMMlogCPM", "preprocessed"), "TMMlogCPM")
+    # Preprocessed input was not normalized here; the configured method must not stand in.
+    expect_identical(method_for("TMMlogCPM", "preprocessed"), "preprocessed")
     expect_identical(method_for("VST", NULL), "VST")
     expect_identical(method_for(NULL, NULL), "TMMlogCPM")
 })
@@ -411,4 +412,161 @@ test_that("the report hard-codes no normalization method in labels or file names
     expect_false(any(grepl("rna_norm_TMMlogCPM", src, fixed = TRUE)))
     expect_false(any(grepl("(TMMlogCPM)", src, fixed = TRUE)))
     expect_false(any(grepl("normalized_counts_TMMlogCPM", src, fixed = TRUE)))
+})
+
+# ---- resolve_rna_norm_method(): one reading of the normalization that ran ---------------
+
+test_that("resolve_rna_norm_method() puts preprocessed, then what ran, then config", {
+    res <- function(ran, configured) {
+        resolve_rna_norm_method(if (is.null(ran)) NULL else list(expr_work_method = ran),
+                                if (is.null(configured)) NULL else list(method = configured))
+    }
+
+    # Preprocessed input: nothing normalized, whatever the config says.
+    pre <- res("preprocessed", "VST")
+    expect_identical(pre$method, "preprocessed")
+    expect_identical(pre$label, "none (preprocessed input)")
+    expect_false(pre$fell_back)
+
+    # What ran wins over config: a VST that fell back reports TMMlogCPM.
+    fb <- res("TMMlogCPM", "VST")
+    expect_identical(fb$method, "TMMlogCPM")
+    expect_identical(fb$label, "TMMlogCPM")
+    expect_identical(fb$configured, "VST")
+    expect_true(fb$recorded)
+    expect_true(fb$fell_back)
+
+    expect_identical(res("VST", "VST")$method, "VST")
+    expect_false(res("VST", "VST")$fell_back)
+    expect_identical(res("TMMlogCPM", "TMMlogCPM")$method, "TMMlogCPM")
+    expect_false(res("TMMlogCPM", "TMMlogCPM")$fell_back)
+
+    # No usable record: the configured method, marked as not recorded.
+    for (ran in list(NULL, NA_character_, "norm", c("VST", "TMMlogCPM"))) {
+        r <- res(ran, "VST")
+        expect_identical(r$method, "VST")
+        expect_false(r$recorded)
+        expect_false(r$fell_back)
+    }
+
+    # No config either: the pipeline's default, TMMlogCPM (not "TMM").
+    expect_identical(res(NULL, NULL)$method, "TMMlogCPM")
+    expect_identical(res(NULL, NULL)$configured, "TMMlogCPM")
+})
+
+test_that("resolve_rna_norm_method() does not read the QC transformation", {
+    # The QC transform is derived from the method, never the reverse: the
+    # resolver takes no QC config and does not consult the QC resolver.
+    expect_identical(names(formals(resolve_rna_norm_method)), c("info", "norm_cfg"))
+    src <- paste(deparse(body(resolve_rna_norm_method)), collapse = "\n")
+    expect_no_match(src, "qc", ignore.case = TRUE)
+    expect_no_match(src, "cpm_pseudocount", fixed = TRUE)
+
+    # QC settings in info are ignored.
+    with_qc <- resolve_rna_norm_method(
+        list(expr_work_method = "VST", qc_transform = "log2(TMM CPM + 1)"),
+        list(method = "VST"))
+    expect_identical(with_qc$method, "VST")
+})
+
+# ---- every reader reports the same normalization ------------------------------------------
+
+# Each scenario: what was configured, what preprocess_rna() recorded.
+norm_scenarios <- list(
+    vst          = list(configured = "VST",       ran = "VST"),
+    vst_fallback = list(configured = "VST",       ran = "TMMlogCPM"),
+    tmm          = list(configured = "TMMlogCPM", ran = "TMMlogCPM"),
+    preprocessed = list(configured = "TMMlogCPM", ran = "preprocessed")
+)
+
+report_norm_for <- function(configured, ran) {
+    src <- readLines(rna_report_template(), warn = FALSE)
+    start <- grep("^rna_norm_ran <- ", src)
+    end <- grep("^rna_norm_label <- ", src)
+    stopifnot(length(start) == 1, length(end) == 1)
+    env <- new.env(parent = globalenv())
+    env$params <- list(rna_info = list(expr_work_method = ran))
+    env$rna_cfg <- list(normalization = list(method = configured))
+    env$datasets_dir <- withr::local_tempdir()
+    eval(parse(text = src[start:end]), envir = env)
+    env$rna_norm_res
+}
+
+test_that("summary, report and commentary report the same normalization", {
+    for (nm in names(norm_scenarios)) {
+        s <- norm_scenarios[[nm]]
+        expected <- resolve_rna_norm_method(list(expr_work_method = s$ran), list(method = s$configured))
+        config <- list(project = list(name = "P"),
+                       modes = list(rna = list(normalization = list(method = s$configured, prior.count = 1))))
+        pre <- list(info = list(expr_work_method = s$ran),
+                    expr_raw = matrix(1, 5, 2), expr_filt = matrix(1, 4, 2),
+                    meta = data.frame(Condition = c("A", "B")))
+
+        summary_norm <- collect_pipeline_stats(config, pre, de_res = list())$methods$normalization
+        report_norm <- report_norm_for(s$configured, s$ran)
+        commentary_norm <- build_extra_data(list(), list(expr_work_method = s$ran), config)$norm_method
+
+        expect_identical(summary_norm, expected, info = nm)
+        expect_identical(report_norm, expected, info = nm)
+        expect_identical(commentary_norm, expected$label, info = nm)
+    }
+})
+
+test_that("the pipeline summary text matches the resolved normalization", {
+    body_for <- function(s) {
+        config <- list(project = list(name = "P"),
+                       modes = list(rna = list(normalization = list(method = s$configured, prior.count = 1))))
+        pre <- list(info = list(expr_work_method = s$ran),
+                    expr_raw = matrix(1, 5, 2), expr_filt = matrix(1, 4, 2),
+                    meta = data.frame(Condition = c("A", "B")))
+        generate_summary_body_r(collect_pipeline_stats(config, pre, de_res = list()))
+    }
+
+    pre_body <- body_for(norm_scenarios$preprocessed)
+    expect_match(pre_body, "Not performed by the pipeline", fixed = TRUE)
+    expect_no_match(pre_body, "TMM scaling factors", fixed = TRUE)
+
+    fb_body <- body_for(norm_scenarios$vst_fallback)
+    expect_match(fb_body, "VST was configured but failed; TMMlogCPM was used instead.", fixed = TRUE)
+    expect_no_match(fb_body, "Variance Stabilizing", fixed = TRUE)
+
+    expect_match(body_for(norm_scenarios$vst), "Variance Stabilizing", fixed = TRUE)
+})
+
+test_that("the report's methods text does not claim normalization for preprocessed input", {
+    src <- readLines(rna_report_template(), warn = FALSE)
+    start <- grep("^norm_desc <- ", src)
+    end <- grep("^norm_sentence <- ", src)
+    end <- end + which(src[(end + 1):length(src)] == "}")[1]
+    sentence_for <- function(method) {
+        env <- new.env(parent = globalenv())
+        env$norm_method <- method
+        env$prior_ct <- 1
+        eval(parse(text = src[start:end]), envir = env)
+        env$norm_sentence
+    }
+    expect_match(sentence_for("preprocessed"), "was not normalized by the pipeline", fixed = TRUE)
+    expect_no_match(sentence_for("preprocessed"), "edgeR", fixed = TRUE)
+    expect_match(sentence_for("VST"), "variance-stabilizing", fixed = TRUE)
+    expect_match(sentence_for("TMMlogCPM"), "edgeR TMM", fixed = TRUE)
+})
+
+test_that("no reader resolves the normalization on its own", {
+    # The PowerPoint builder needs officer and a full run to call, so check its
+    # source: it must take the method from the shared resolver.
+    pptx_src <- paste(deparse(generate_rnaseq_pptx), collapse = "\n")
+    expect_match(pptx_src, "resolve_rna_norm_method(pre$info, norm_cfg)$label", fixed = TRUE)
+
+    # No consumer re-implements "what ran, else config" inline.
+    readers <- file.path(root_dir, c(
+        "R/domain/rnaseq/10_pipeline_summary.R",
+        "R/domain/rnaseq/11_powerpoint.R",
+        "R/modules/rnaseq/06_mod_commentary.R",
+        "R/domain/rnaseq/report_template.Rmd"))
+    for (f in readers) {
+        src <- paste(readLines(f, warn = FALSE), collapse = "\n")
+        expect_no_match(src, 'expr_work_method %in% c("TMMlogCPM", "VST")', fixed = TRUE, info = f)
+        expect_no_match(src, 'rna_norm_ran %in% c("TMMlogCPM", "VST")', fixed = TRUE, info = f)
+        expect_no_match(src, 'norm_ran %in% c("TMMlogCPM", "VST")', fixed = TRUE, info = f)
+    }
 })
