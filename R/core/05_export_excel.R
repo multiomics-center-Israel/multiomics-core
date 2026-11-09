@@ -250,6 +250,7 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
                 "linearFC.imputs.<contrast>",
                 "pvalue.imputs.<contrast>",
                 "padj.imputs.<contrast>",
+                "imputed_above_measured.<contrast>",
                 "upDown.imputs.<contrast>"
             ),
             Meaning = c(
@@ -273,6 +274,7 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
                 fc_rule,
                 "Quantile across imputation runs of the moderated t-test p-value.",
                 "Quantile across imputation runs of the Benjamini-Hochberg adjusted p-value.",
+                "TRUE when, across the samples of this contrast's two groups, the imputed .norm values average higher than the measured ones. Imputation here assumes a missing value is low, so a TRUE row has a fold change and p-value resting on filled-in numbers that contradict that assumption (a protein not detected in one group can even come out higher there). A hint for filtering, not part of the significance call. Blank when the contrast's samples hold no imputed or no measured value.",
                 "Direction, filled only for features that pass the consensus rule (see the Cutoffs sheet)."
             ),
             stringsAsFactors = FALSE
@@ -571,7 +573,7 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         # list is not matched by a shorter one that happens to prefix it
         # ("linearFC" cannot claim "linearFC_from_raw.", which has "_" there).
         # Anything unmatched is treated as an annotation column.
-        de_col_pattern <- "^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC_from_raw|linearFC|pvalue|padj|upDown)\\."
+        de_col_pattern <- "^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC_from_raw|linearFC|pvalue|padj|imputed_above_measured|upDown)\\."
         de_col_indices <- grep(de_col_pattern, colnames(df_out))
         contrast_groups <- list()
         if (length(de_col_indices) > 0) {
@@ -830,7 +832,7 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         # listed there for the same reason. Anything not matched here is
         # treated as an annotation column and lands next to the ID instead of
         # with the DE stats.
-        de_stat_cols <- grep("^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC_from_raw|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
+        de_stat_cols <- grep("^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC_from_raw|linearFC|pvalue|padj|imputed_above_measured|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
               "Binary_Pattern", "Binary_Corr"),
@@ -940,6 +942,7 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             p      = paste0("pvalue.imputs.", contrast),
             padj   = paste0("padj.imputs.", contrast),
             pass   = paste0("pass.imputs.", contrast),
+            imp_flag = paste0("imputed_above_measured.", contrast),
             updown = paste0("upDown.imputs.", contrast),
             manual = paste0("manual_cutoffs.", contrast)
         )
@@ -1337,6 +1340,12 @@ compute_group_stat_columns <- function(expr, sample_meta, sample_id_col,
 #'   \code{linearFC} column rather than before it. Proteomics keeps
 #'   \code{log2FC.imputs} adjacent to \code{linearFC.imputs} (a pinned
 #'   contract) and groups the model-free estimates after the pair.
+#' @param imputation_flag Optional feature-indexed data.frame with one logical
+#'   column per contrast (named by \code{Contrast_name}, e.g. from
+#'   \code{flag_imputed_above_measured_proteomics()}). Emitted as
+#'   \code{imputed_above_measured.<contrast>} after the adjusted p-value. Only
+#'   modes whose \code{\link{get_contrast_cols}} entry names that column emit
+#'   it; today that is proteomics.
 #'
 #' @return data.frame with ID, annotations, expression, [normalized expression],
 #'   [Mean.<group>], [CV.<group>], DE stats, pass_any_contrast
@@ -1357,7 +1366,8 @@ build_final_results_generic <- function(
   naive_log2fc = NULL,
   raw_stat_cols = NULL,
   raw_log2fc = NULL,
-  naive_after_fc = FALSE
+  naive_after_fc = FALSE,
+  imputation_flag = NULL
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -1651,6 +1661,14 @@ build_final_results_generic <- function(
         }
         base[[cols$p]] <- summary_df[[cols$p]][m]
         base[[cols$padj]] <- summary_df[[cols$padj]][m]
+
+        # A reading hint next to the p-values it qualifies; it never feeds pass
+        # or upDown below.
+        if (!is.null(imputation_flag) && !is.null(cols$imp_flag) &&
+            cn %in% colnames(imputation_flag)) {
+            base[[cols$imp_flag]] <- imputation_flag[[cn]][
+                match(base[[feature_id_col]], rownames(imputation_flag))]
+        }
 
         # ============================================================
         # DETERMINE UP/DOWN DIRECTION
