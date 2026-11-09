@@ -177,8 +177,15 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
     #     the Mean. columns come from imputations[[1]] alone. On a partially
     #     measured feature those are NOT the same number, and log2FC_from_means
     #     is what makes the gap visible instead of leaving it unstated.
+    # Written as a readable label rather than TRUE/FALSE: the column is read by
+    # people scanning a spreadsheet, and a blank cell reads as "nothing to note".
     imputation_flag <- flag_imputed_above_measured_proteomics(
         pre, expr_for_model, contrasts_df, config)
+    if (!is.null(imputation_flag)) {
+        imputation_flag[] <- lapply(imputation_flag, function(x) {
+            ifelse(!is.na(x) & x, IMPUTED_ABOVE_MEASURED_LABEL, "")
+        })
+    }
 
     multi_imp <- config$modes$proteomics$imputation$multi_imputation %||% TRUE
     naive_log2fc <- if (isFALSE(multi_imp)) {
@@ -214,6 +221,9 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         imputation_flag = imputation_flag
     )
 }
+
+#' Label written in imputed_above_measured.<contrast> for flagged rows
+IMPUTED_ABOVE_MEASURED_LABEL <- "FLAG: Imputation value higher than measured"
 
 #' Flag features whose imputed values sit above their measured ones
 #'

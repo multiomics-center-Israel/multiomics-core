@@ -134,9 +134,10 @@ test_that("final results carry the flag between padj and upDown", {
     expect_equal(nm[which(nm == "imputed_above_measured.S_vs_NS") + 1L],
                  "upDown.imputs.S_vs_NS")
 
+    # The exported column is a readable label: the flag text or blank.
     flag <- setNames(fr$imputed_above_measured.S_vs_NS, fr$FeatureID)
-    expect_identical(unname(flag[c("p_high", "p_low")]), c(TRUE, FALSE))
-    expect_true(is.na(flag[["p_full"]]))
+    expect_identical(unname(flag["p_high"]), "FLAG: Imputation value higher than measured")
+    expect_identical(unname(flag[c("p_low", "p_full")]), c("", ""))
 })
 
 test_that("the flag does not change the significance call", {

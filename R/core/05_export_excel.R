@@ -274,7 +274,7 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
                 fc_rule,
                 "Quantile across imputation runs of the moderated t-test p-value.",
                 "Quantile across imputation runs of the Benjamini-Hochberg adjusted p-value.",
-                "TRUE when, across the samples of this contrast's two groups, the imputed .norm values average higher than the measured ones. Imputation here assumes a missing value is low, so a TRUE row has a fold change and p-value resting on filled-in numbers that contradict that assumption (a protein not detected in one group can even come out higher there). A hint for filtering, not part of the significance call. Blank when the contrast's samples hold no imputed or no measured value.",
+                "Reads \"FLAG: Imputation value higher than measured\" when, across the samples of this contrast's two groups, the imputed .norm values average higher than the measured ones; blank otherwise. Imputation here assumes a missing value is low, so a flagged row has a fold change and p-value resting on filled-in numbers that contradict that assumption (a protein not detected in one group can even come out higher there). A hint for filtering, not part of the significance call. Also blank when the contrast's samples hold no imputed or no measured value.",
                 "Direction, filled only for features that pass the consensus rule (see the Cutoffs sheet)."
             ),
             stringsAsFactors = FALSE
@@ -1340,7 +1340,7 @@ compute_group_stat_columns <- function(expr, sample_meta, sample_id_col,
 #'   \code{linearFC} column rather than before it. Proteomics keeps
 #'   \code{log2FC.imputs} adjacent to \code{linearFC.imputs} (a pinned
 #'   contract) and groups the model-free estimates after the pair.
-#' @param imputation_flag Optional feature-indexed data.frame with one logical
+#' @param imputation_flag Optional feature-indexed data.frame with one
 #'   column per contrast (named by \code{Contrast_name}, e.g. from
 #'   \code{flag_imputed_above_measured_proteomics()}). Emitted as
 #'   \code{imputed_above_measured.<contrast>} after the adjusted p-value. Only
