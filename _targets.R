@@ -121,6 +121,9 @@ list(
   ),
 
   # Write execution metadata (run info, config snapshot, etc.)
+  # cue "always": the files record the code and time of THIS run. Keyed on the
+  # config alone, a code-only rerun kept the previous run's git_commit.txt and
+  # timestamp.txt, so the folder named code that did not produce it.
   tar_target(
     execution_info_files,
     write_execution_info(
@@ -129,7 +132,8 @@ list(
       config_path  = config_file,
       targets_file = "_targets.R"
     ),
-    format = "file"
+    format = "file",
+    cue = tar_cue(mode = "always")
   ),
 
   # Mode-specific pipelines — only included when the mode is present in config.
