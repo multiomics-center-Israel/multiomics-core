@@ -611,7 +611,7 @@ methods_pooled_enrichment_sentences <- function(pooled_dir, txt) {
 #'
 #' The top-level branch is \code{de_method == "precomputed"}:
 #' \code{mod_proteomics_de()} returns that before any internal imputation or
-#' model fitting, so in that mode no internal test, no fdrtool correction and no
+#' model fitting, so in that mode no internal test and no
 #' multi-imputation consensus may be described.
 #'
 #' @param config Full pipeline config, as written to \code{config_used.yaml}.
@@ -781,14 +781,6 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
         m <- tolower(as.character(de_method))
         de_txt <- methods_de_phrase(de_cfg, de_method,
                                     batch_col = if (batch_in_model) bc$batch_col)
-        # fdrtool is implemented in run_limma_proteomics() and
-        # run_limma_percontrast_proteomics() only; the flag being TRUE does not
-        # mean a t-test or ANOVA run applied it.
-        if (isTRUE(de_cfg$fdrtool_correction) && m %in% c("limma", "limma_percontrast")) {
-            de_txt <- paste(de_txt, paste0(
-                "Before adjustment, p-values were re-estimated from the moderated t-statistics ",
-                "against an empirical null distribution (*fdrtool*)."))
-        }
         # ANOVA states its own adjustment, because the values being adjusted are
         # Tukey's rather than the raw per-protein p-values.
         #

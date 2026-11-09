@@ -403,15 +403,11 @@ test_that("the adjustment procedure is read from config, never hard-coded", {
     expect_false(grepl("Benjamini-Hochberg", txt, fixed = TRUE))
 })
 
-test_that("fdrtool is claimed only where the implementation applies it", {
-    # run_limma_proteomics() and run_limma_percontrast_proteomics() apply it;
-    # the t-test and ANOVA paths never read the flag.
-    on <- blocks_for(de = list(method = "limma", fdrtool_correction = TRUE,
-                               p_cutoff = 0.05, linear_fc_cutoff = 1.5))$differential
-    expect_match(on, "empirical null distribution", fixed = TRUE)
-
-    for (m in c("ttest", "welch", "anova")) {
-        txt <- blocks_for(de = list(method = m, fdrtool_correction = TRUE,
+test_that("the methods text never claims an empirical-null correction", {
+    # de$fdrtool_correction was removed; a leftover false in an old config must
+    # not bring the sentence back.
+    for (m in c("limma", "limma_percontrast", "ttest", "welch", "anova")) {
+        txt <- blocks_for(de = list(method = m, fdrtool_correction = FALSE,
                                     p_cutoff = 0.05, linear_fc_cutoff = 1.5),
                           de_method = m)$differential
         expect_false(grepl("empirical null", txt, fixed = TRUE))

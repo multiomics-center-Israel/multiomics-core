@@ -577,19 +577,6 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
 
     fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast_matrix))
 
-    # Optional fdrtool empirical null correction (matching DEP::test_diff)
-    if (isTRUE(p_cfg$de$fdrtool_correction)) {
-        if (!requireNamespace("fdrtool", quietly = TRUE))
-            stop("fdrtool_correction is enabled but 'fdrtool' package is not installed.\n",
-                 "Install with: install.packages('fdrtool')")
-        for (i in seq_len(ncol(fit2$t))) {
-            fdr_res <- fdrtool::fdrtool(fit2$t[, i], statistic = "normal",
-                                         plot = FALSE, verbose = FALSE)
-            fit2$p.value[, i] <- fdr_res$pval
-        }
-        message("Applied fdrtool empirical null correction to t-statistics.")
-    }
-
     ann <- align_annotations_to_expr(expr_imp, prot_tbl, protein_id_col, annot_cols)
     feature_id <- ann[[protein_id_col]]
     annot_out <- setdiff(annot_cols, protein_id_col)
@@ -723,16 +710,6 @@ run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts
     target_id_col <- de_table_cfg$id_col %||% "FeatureID"
     adj_method <- p_cfg$de$p_adjust_method %||% "BH"
 
-    # Optional fdrtool empirical-null correction, matching run_limma_proteomics().
-    # The shared config permits this option for any method, so honour it here too:
-    # each contrast's moderated t-statistics are re-calibrated before adjustment.
-    # Check the package once, up front, rather than failing partway through.
-    fdrtool_correction <- isTRUE(p_cfg$de$fdrtool_correction)
-    if (fdrtool_correction && !requireNamespace("fdrtool", quietly = TRUE)) {
-        stop("fdrtool_correction is enabled but 'fdrtool' package is not installed.\n",
-             "Install with: install.packages('fdrtool')")
-    }
-
     result_cols <- c("logFC", "AveExpr", "t", "P.Value", "adj.P.Val", "B")
     groups <- as.character(meta_aligned[[group_col]])
     n_prot <- nrow(expr_imp)
@@ -802,15 +779,6 @@ run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts
         cmat <- limma::makeContrasts(test - control, levels = design)
 
         fit2 <- limma::eBayes(limma::contrasts.fit(limma::lmFit(sub_expr, design), cmat))
-
-        # Replace the moderated p-values with fdrtool's empirical-null p-values
-        # before BH adjustment, so topTable() below adjusts the corrected values -
-        # exactly as run_limma_proteomics() does for the pooled fit.
-        if (fdrtool_correction) {
-            fdr_res <- fdrtool::fdrtool(fit2$t[, 1], statistic = "normal",
-                                        plot = FALSE, verbose = FALSE)
-            fit2$p.value[, 1] <- fdr_res$pval
-        }
 
         tt <- limma::topTable(fit2, coef = 1, adjust.method = adj_method,
                               sort.by = "none", number = Inf)
