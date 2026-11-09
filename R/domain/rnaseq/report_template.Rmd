@@ -196,6 +196,20 @@ rna_norm_ran <- params$rna_info$expr_work_method
 rna_norm_cfg <- rna_cfg$normalization$method %||% "TMMlogCPM"
 rna_norm_method <- if (isTRUE(rna_norm_ran %in% c("TMMlogCPM", "VST"))) rna_norm_ran else rna_norm_cfg
 
+# Label for the values in expr_work (axis titles, captions). Preprocessed input
+# was not normalized here, so it must not borrow the configured method's name.
+rna_norm_label <- if (identical(rna_norm_ran, "preprocessed")) "preprocessed input" else rna_norm_method
+
+# write_rnaseq_datasets_legacy() names the normalized table after the method
+# that ran (rna_norm_<method>.tsv). Read that exact name: a pattern match could
+# pick up a table left behind by an earlier run with another method. Without a
+# runtime record, fall back to whichever rna_norm_*.tsv is there.
+rna_norm_file <- if (!is.null(rna_norm_ran)) {
+    file.path(datasets_dir, sprintf("rna_norm_%s.tsv", rna_norm_ran))
+} else {
+    list.files(datasets_dir, pattern = "^rna_norm_.*\\.tsv$", full.names = TRUE)[1]
+}
+
 # The transformation behind the QC plots, from the same resolver the QC module
 # used, read against what ran (params$rna_info), not the configured method.
 rna_qc_tr <- if (is.null(params$rna_info)) NULL else resolve_rna_qc_transform(params$rna_info, rna_cfg$qc)
@@ -806,15 +820,47 @@ figure_legend("Distribution of mean log2(CPM + 1) expression per gene after low-
 
 ## Expression Distributions {.tabset}
 
-**Normalization method: TMMlogCPM**
-
-TMMlogCPM is a two-step normalization approach commonly used in RNA-seq analysis:
-
-1. **TMM (Trimmed Mean of M-values)**: A normalization method from the edgeR package that calculates scaling factors to account for differences in library composition between samples. TMM trims the most extreme log-fold-changes and absolute expression values before computing a weighted mean, making it robust to outliers and genes with very high/low expression.
-
-2. **logCPM (log2 Counts Per Million)**: After TMM scaling, counts are converted to CPM (counts per million) to normalize for sequencing depth, then log2-transformed to stabilize variance and make the data more normally distributed.
-
-The resulting **TMMlogCPM** values are suitable for visualization, clustering, and downstream analysis, providing comparable expression levels across samples regardless of library size or composition differences.
+```{r norm-method-intro, results='asis', echo=FALSE}
+# Describes the method that produced expr_work (rna_norm_method), so a VST run,
+# or a VST that fell back to TMMlogCPM, is described as what actually ran.
+if (identical(rna_norm_ran, "preprocessed")) {
+    cat(paste0(
+        "**Normalization method: none (preprocessed input)**\n\n",
+        "The input table was already processed upstream, so the pipeline did not normalize it. ",
+        "The plots below show the values as provided, after gene filtering.\n"
+    ))
+} else if (identical(rna_norm_method, "VST")) {
+    cat(paste0(
+        "**Normalization method: VST**\n\n",
+        "VST (variance-stabilizing transformation) is the DESeq2 transformation for RNA-seq counts:\n\n",
+        "1. **Library correction**: DESeq2 corrects the counts for sequencing depth and library composition ",
+        "(per-sample size factors; for tximport input, the transcript-length offsets).\n\n",
+        "2. **Variance stabilization**: the size-factor-corrected counts are transformed to a log2-like scale ",
+        "on which the variance no longer depends strongly on the mean, so low-count genes are not ",
+        "dominated by noise. The transformation was run blind to the experimental design.\n\n",
+        "The resulting **VST** values are used for visualization, clustering and the exported normalized ",
+        "table. Differential expression is tested on the counts, not on these values.\n"
+    ))
+} else {
+    cat(paste0(
+        "**Normalization method: TMMlogCPM**\n\n",
+        "TMMlogCPM is a two-step normalization approach commonly used in RNA-seq analysis:\n\n",
+        "1. **TMM (Trimmed Mean of M-values)**: A normalization method from the edgeR package that calculates ",
+        "scaling factors to account for differences in library composition between samples. TMM trims the most ",
+        "extreme log-fold-changes and absolute expression values before computing a weighted mean, making it ",
+        "robust to outliers and genes with very high/low expression.\n\n",
+        "2. **logCPM (log2 Counts Per Million)**: After TMM scaling, counts are converted to CPM (counts per ",
+        "million) to normalize for sequencing depth, then log2-transformed to stabilize variance and make the ",
+        "data more normally distributed.\n\n",
+        "The resulting **TMMlogCPM** values are suitable for visualization, clustering, and downstream analysis, ",
+        "providing comparable expression levels across samples regardless of library size or composition differences.\n"
+    ))
+}
+if (!identical(rna_norm_method, rna_norm_cfg) && !identical(rna_norm_ran, "preprocessed")) {
+    cat(sprintf("\n*%s was configured but failed; the pipeline fell back to %s.*\n",
+                rna_norm_cfg, rna_norm_method))
+}
+```
 
 ### Before Normalization
 
@@ -2015,9 +2061,9 @@ explorer_ready <- FALSE
 explorer_json_str <- "{}"
 
 # Load normalized expression matrix
-norm_expr_file_exp <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
+norm_expr_file_exp <- rna_norm_file
 norm_expr_exp <- NULL
-if (file.exists(norm_expr_file_exp)) {
+if (isTRUE(file.exists(norm_expr_file_exp))) {
     norm_expr_exp <- read.delim(norm_expr_file_exp, stringsAsFactors = FALSE,
                                  row.names = 1, check.names = FALSE)
 }
@@ -2103,6 +2149,7 @@ cat('<script>\nvar geneExprData = ')
 cat(explorer_json_str)
 cat(';\n')
 cat(sprintf('var bpGroupLabel = "%s";\n', group_col_exp))
+cat('var bpExprLabel = ', jsonlite::toJSON(rna_norm_label, auto_unbox = TRUE), ';\n', sep = '')
 cat('
 var boxplotAcIndex = -1;
 var selectedGenes = [];  // array of {name, idx}
@@ -2246,7 +2293,7 @@ function renderMultiBoxplot() {
         });
         var layout = {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
-            yaxis: { title: "Expression (TMMlogCPM)" },
+            yaxis: { title: "Expression (" + bpExprLabel + ")" },
             xaxis: { title: bpGroupLabel },
             showlegend: false,
             margin: { t: 50, b: 80, l: 70, r: 30 },
@@ -2284,7 +2331,7 @@ function renderMultiBoxplot() {
         var geneNames = selectedGenes.map(function(sg) { return sg.name; });
         var layout = {
             title: { text: "Gene Expression Comparison", font: { size: 16 } },
-            yaxis: { title: "Expression (TMMlogCPM)" },
+            yaxis: { title: "Expression (" + bpExprLabel + ")" },
             xaxis: { title: "Gene", categoryorder: "array", categoryarray: geneNames },
             showlegend: true,
             legend: { title: { text: bpGroupLabel } },
@@ -2302,7 +2349,7 @@ function renderMultiBoxplot() {
     var infoLines = selectedGenes.map(function(sg) {
         var vals = geneExprData.expr[sg.idx].filter(function(v) { return !isNaN(v); });
         var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
-        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " TMMlogCPM (" + vals.length + " samples)";
+        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " " + bpExprLabel + " (" + vals.length + " samples)";
     });
     document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
     document.getElementById("boxplot_export_bar").style.display = "flex";
@@ -2357,11 +2404,11 @@ cat("*Gene expression explorer requires normalized expression data and metadata.
 
 ## Normalized Counts
 
-Download the full normalized expression matrix (TMMlogCPM) for all genes that passed filtering. Use the search box to find specific genes.
+Download the full normalized expression matrix (`r rna_norm_label`) for all genes that passed filtering. Use the search box to find specific genes.
 
 ```{r norm-counts-table}
-norm_counts_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
-if (file.exists(norm_counts_file)) {
+norm_counts_file <- rna_norm_file
+if (isTRUE(file.exists(norm_counts_file))) {
     norm_counts_df <- read.delim(norm_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
 
     # Add gene names from annotation if available
@@ -2386,7 +2433,7 @@ if (file.exists(norm_counts_file)) {
 
     DT::datatable(
         norm_counts_df,
-        caption = paste0("Normalized expression (TMMlogCPM) — ",
+        caption = paste0("Normalized expression (", rna_norm_label, ") — ",
                          format(nrow(norm_counts_df), big.mark = ","), " genes"),
         extensions = 'Buttons',
         options = list(
@@ -2394,8 +2441,8 @@ if (file.exists(norm_counts_file)) {
             pageLength = 15,
             dom = 'Bfrtip',
             buttons = list(
-                list(extend = 'csv', filename = 'normalized_counts_TMMlogCPM'),
-                list(extend = 'excel', filename = 'normalized_counts_TMMlogCPM')
+                list(extend = 'csv', filename = sub("\\.tsv$", "", sub("^rna_norm_", "normalized_counts_", basename(norm_counts_file)))),
+                list(extend = 'excel', filename = sub("\\.tsv$", "", sub("^rna_norm_", "normalized_counts_", basename(norm_counts_file))))
             ),
             search = list(regex = TRUE, caseInsensitive = TRUE)
         ),
@@ -2413,10 +2460,10 @@ Expression heatmap of top differentially expressed genes. Select the number of g
 
 ```{r top-de-heatmap-prep, include=FALSE}
 # Load normalized expression data
-norm_expr_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
+norm_expr_file <- rna_norm_file
 norm_expr <- NULL
 # Load expression matrix regardless of de_summary_full — we can fall back to de_data
-if (file.exists(norm_expr_file)) {
+if (isTRUE(file.exists(norm_expr_file))) {
     norm_expr <- read.delim(norm_expr_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE)
 }
 
@@ -3046,7 +3093,7 @@ files_tbl <- data.frame(
     "Datasets/deseq2_summary_p0.05.tsv",
     "Datasets/de_summary_counts.tsv",
     "Datasets/rna_counts_filtered.tsv",
-    "Datasets/rna_norm_TMMlogCPM.tsv"
+    if (isTRUE(file.exists(rna_norm_file))) file.path("Datasets", basename(rna_norm_file)) else "Datasets/rna_norm_<method>.tsv"
   ),
   Description = c(
     "Excel workbook with all genes and DE statistics (p < 0.05)",
@@ -3055,7 +3102,7 @@ files_tbl <- data.frame(
     "DESeq2 summary for significant genes",
     "DE gene counts per contrast (up/down/total)",
     "Raw counts matrix after gene filtering",
-    "TMMlogCPM-normalized expression matrix"
+    sprintf("Normalized expression matrix (%s)", rna_norm_label)
   ),
   stringsAsFactors = FALSE
 )

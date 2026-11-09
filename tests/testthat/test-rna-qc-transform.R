@@ -361,3 +361,40 @@ test_that("the report describes the normalization that ran, not a failed VST", {
     expect_identical(method_for("VST", NULL), "VST")
     expect_identical(method_for(NULL, NULL), "TMMlogCPM")
 })
+
+test_that("the report reads the normalized table and label of the method that ran", {
+    src <- readLines(rna_report_template(), warn = FALSE)
+    file_start <- grep("^rna_norm_file <- ", src)
+    stopifnot(length(file_start) == 1)
+    file_end <- file_start + which(src[(file_start + 1):length(src)] == "}")[1]
+    lines <- src[grep("^rna_norm_ran <- ", src):file_end]
+    resolve_for <- function(configured, ran, files = character(0)) {
+        ds <- withr::local_tempdir()
+        for (f in files) writeLines("gene", file.path(ds, f))
+        env <- new.env(parent = globalenv())
+        env$params <- list(rna_info = if (is.null(ran)) NULL else list(expr_work_method = ran))
+        env$rna_cfg <- list(normalization = list(method = configured))
+        env$datasets_dir <- ds
+        eval(parse(text = lines), envir = env)
+        list(label = env$rna_norm_label, file = basename(env$rna_norm_file))
+    }
+
+    # A VST run reads rna_norm_VST.tsv, even beside a TMM table from an earlier run.
+    vst <- resolve_for("VST", "VST", c("rna_norm_VST.tsv", "rna_norm_TMMlogCPM.tsv"))
+    expect_identical(vst, list(label = "VST", file = "rna_norm_VST.tsv"))
+    expect_identical(resolve_for("VST", "TMMlogCPM")$file, "rna_norm_TMMlogCPM.tsv")
+    expect_identical(resolve_for("VST", "TMMlogCPM")$label, "TMMlogCPM")
+
+    pre <- resolve_for("TMMlogCPM", "preprocessed")
+    expect_identical(pre, list(label = "preprocessed input", file = "rna_norm_preprocessed.tsv"))
+
+    # No runtime record: fall back to the table that is there.
+    expect_identical(resolve_for("VST", NULL, "rna_norm_VST.tsv")$file, "rna_norm_VST.tsv")
+})
+
+test_that("the report hard-codes no normalization method in labels or file names", {
+    src <- readLines(rna_report_template(), warn = FALSE)
+    expect_false(any(grepl("rna_norm_TMMlogCPM", src, fixed = TRUE)))
+    expect_false(any(grepl("(TMMlogCPM)", src, fixed = TRUE)))
+    expect_false(any(grepl("normalized_counts_TMMlogCPM", src, fixed = TRUE)))
+})
