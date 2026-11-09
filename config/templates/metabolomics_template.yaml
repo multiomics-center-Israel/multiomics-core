@@ -65,10 +65,10 @@ modes:
     # mz_col, rt_col  columns used to build feature_id. If either is missing,
     #           feature_id falls back to the name_col value, then to feature_N.
     #
-    # The KEGG column is not set here. Identified-metabolite enrichment and the
-    # mummichog evidence tables detect it by name (KEGG, KEGG_ID, "KEGG ID",
-    # kegg, kegg_id); the metabolite network (run_network) and the report's KEGG
-    # pathway mapping need a column named exactly "KEGG".
+    # The KEGG column is not set here; it is detected by name. KEGG, KEGG_ID,
+    # "KEGG ID", kegg and kegg_id are all read as KEGG compound ids. If there is
+    # no KEGG column, the first of the others is renamed to KEGG; any further
+    # ones fill its empty cells, and a differing value is reported, not used.
     id_columns:
       name_col: "feature_id"
       mz_col: "m/z"

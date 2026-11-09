@@ -118,9 +118,16 @@ test_that("mod_met_raw cleans the KEGG column before and after the HMDB fill", {
     clean_at <- grep("clean_kegg_chemspider\\(", code)
     fill_at  <- grep("add_kegg_from_hmdb\\(", code)
 
+    canon_at <- grep("canonicalize_kegg_column\\(", code)
+
     expect_length(fill_at, 1L)
+    expect_length(canon_at, 1L)
     expect_true(any(clean_at < fill_at))
     expect_true(any(clean_at > fill_at))
+    # Canonicalize after the first clean (cells are bare ids) and before the
+    # fill (so the fill completes KEGG instead of creating a second column).
+    expect_true(any(clean_at < canon_at))
+    expect_true(canon_at < fill_at)
 })
 
 test_that("clean_kegg_chemspider rejects a KEGG-like id with too many digits", {
@@ -193,4 +200,114 @@ test_that("clean_kegg_chemspider cleans KEGG and an alternative column together"
     # F3 keeps its curated value.
     expect_equal(out$ChemSpider, c("CSID900022", "CSID900021", "CSID900099"))
     expect_setequal(colnames(out), colnames(row_data))
+})
+
+# ---- canonicalize_kegg_column() (#384) --------------------------------------
+# Every downstream consumer (HMDB fill, enrichment, network, report) reads a
+# column named exactly `KEGG`; these pin how the accepted spellings get there.
+
+test_that("canonicalize_kegg_column renames the first alias when KEGG is absent", {
+    row_data <- data.frame(
+        feature_id = c("F1", "F2"),
+        KEGG_ID    = c("C00031", NA),
+        Name       = c("m1", "m2"),
+        stringsAsFactors = FALSE
+    )
+    expect_message(out <- canonicalize_kegg_column(row_data), "renamed 'KEGG_ID'")
+
+    expect_equal(colnames(out), c("feature_id", "KEGG", "Name"))   # same position
+    expect_equal(out$KEGG, c("C00031", NA))
+    expect_equal(out$Name, row_data$Name)
+})
+
+test_that("canonicalize_kegg_column fills from later aliases and keeps them", {
+    row_data <- data.frame(
+        feature_id = c("F1", "F2", "F3"),
+        KEGG_ID    = c("C00031", NA, NA),
+        `KEGG ID`  = c(NA, "C00022", NA),
+        check.names = FALSE, stringsAsFactors = FALSE
+    )
+    out <- suppressMessages(canonicalize_kegg_column(row_data))
+
+    # KEGG_ID (first in order) became KEGG; "KEGG ID" filled its empty cell.
+    expect_equal(out$KEGG, c("C00031", "C00022", NA))
+    expect_false("KEGG_ID" %in% colnames(out))
+    # The remaining source column is not deleted.
+    expect_equal(out[["KEGG ID"]], row_data[["KEGG ID"]])
+})
+
+test_that("canonicalize_kegg_column keeps KEGG, fills its gaps and reports conflicts", {
+    row_data <- data.frame(
+        feature_id = c("F1", "F2", "F3", "F4"),
+        KEGG       = c("C00031", NA,       "C00267", NA),
+        KEGG_ID    = c("C00031", "C00022", "C00158", NA),
+        stringsAsFactors = FALSE
+    )
+    expect_warning(
+        out <- suppressMessages(canonicalize_kegg_column(row_data)),
+        "1 feature\\(s\\) have a KEGG id that differs from 'KEGG_ID'.*F3")
+
+    # F1 agrees; F2 filled; F3 conflicts and keeps its KEGG value; F4 stays empty.
+    expect_equal(out$KEGG, c("C00031", "C00022", "C00267", NA))
+    # The alias column is left exactly as it was.
+    expect_equal(out$KEGG_ID, row_data$KEGG_ID)
+    expect_setequal(colnames(out), colnames(row_data))
+})
+
+test_that("canonicalize_kegg_column is silent when there is nothing to resolve", {
+    only_kegg <- data.frame(feature_id = "F1", KEGG = "C00031",
+                            stringsAsFactors = FALSE)
+    expect_identical(canonicalize_kegg_column(only_kegg), only_kegg)
+
+    none <- data.frame(feature_id = "F1", Name = "m1", stringsAsFactors = FALSE)
+    expect_identical(canonicalize_kegg_column(none), none)
+    expect_null(canonicalize_kegg_column(NULL))
+
+    agree <- data.frame(feature_id = "F1", KEGG = "C00031", kegg_id = "C00031",
+                        stringsAsFactors = FALSE)
+    expect_silent(canonicalize_kegg_column(agree))
+})
+
+test_that("the HMDB fill completes the KEGG_ID column instead of shadowing it", {
+    skip_if_not_installed("readr")
+    map_file <- tempfile(fileext = ".tsv")
+    on.exit(unlink(map_file), add = TRUE)
+    writeLines(c("HMDB\tKEGG", "HMDB0000002\tC00022"), map_file)
+
+    # F1 has a KEGG_ID; F2 only an HMDB id the mapping knows.
+    row_data <- data.frame(
+        feature_id = c("F1", "F2"),
+        HMDB       = c(NA, "HMDB0000002"),
+        KEGG_ID    = c("C00031", NA),
+        stringsAsFactors = FALSE
+    )
+
+    # The order mod_met_raw() uses: clean, canonicalize, fill, clean.
+    out <- suppressMessages(clean_kegg_chemspider(add_kegg_from_hmdb(
+        canonicalize_kegg_column(clean_kegg_chemspider(row_data)), map_file)))
+    expect_equal(out$KEGG, c("C00031", "C00022"))
+
+    # Without canonicalizing, the fill invents a KEGG column holding only the
+    # HMDB lookup, and enrichment (which reads KEGG) loses F1's KEGG_ID.
+    shadowed <- suppressMessages(clean_kegg_chemspider(
+        add_kegg_from_hmdb(clean_kegg_chemspider(row_data), map_file)))
+    expect_equal(shadowed$KEGG, c(NA, "C00022"))
+})
+
+test_that("enrichment reads KEGG ids that arrived as KEGG_ID", {
+    expr <- matrix(seq_len(6), nrow = 2,
+                   dimnames = list(c("f1", "f2"), paste0("S", 1:3)))
+    row_data <- data.frame(
+        feature_id = c("f1", "f2"),
+        Name       = c("Glucose", "Citrate"),
+        `KEGG ID`  = c("C00031", NA),
+        check.names = FALSE, stringsAsFactors = FALSE
+    )
+    canon <- suppressMessages(canonicalize_kegg_column(
+        suppressMessages(clean_kegg_chemspider(row_data))))
+    res <- suppressMessages(
+        map_compounds_for_enrichment(canon, expr, annotated_only = FALSE))
+
+    expect_equal(unname(res$feature_map["f1"]), "C00031")
+    expect_equal(unname(res$feature_map["f2"]), "Citrate")
 })
