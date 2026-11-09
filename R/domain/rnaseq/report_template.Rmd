@@ -189,11 +189,10 @@ rna_cfg <- cfg$modes$rna
 # filtering config keys.
 rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
 
-# The normalization that produced expr_work, as recorded at runtime: a VST that
-# fails falls back to TMMlogCPM, so the configured method can be wrong. Other
-# recorded values (preprocessed input, or no record) keep the configured wording.
+# The normalization that produced expr_work, as recorded at runtime. Which
+# method to report is decided by resolve_rna_norm_method() below, the resolver
+# the pipeline summary, PowerPoint and commentary also use.
 rna_norm_ran <- params$rna_info$expr_work_method
-rna_norm_cfg <- rna_cfg$normalization$method %||% "TMMlogCPM"
 
 # write_rnaseq_datasets_legacy() names the normalized table after the method
 # that produced expr_work (rna_norm_<method>.tsv), so without params$rna_info a
@@ -215,11 +214,13 @@ if (is.null(rna_norm_ran)) {
             length(rna_norm_found), paste(rna_norm_found, collapse = ", "))
     }
 }
-rna_norm_method <- if (isTRUE(rna_norm_ran %in% c("TMMlogCPM", "VST"))) rna_norm_ran else rna_norm_cfg
+rna_norm_res <- resolve_rna_norm_method(list(expr_work_method = rna_norm_ran), rna_cfg$normalization)
+rna_norm_cfg <- rna_norm_res$configured
+rna_norm_method <- rna_norm_res$method
 
 # Label for the values in expr_work (axis titles, captions). Preprocessed input
 # was not normalized here, so it must not borrow the configured method's name.
-rna_norm_label <- if (identical(rna_norm_ran, "preprocessed")) "preprocessed input" else rna_norm_method
+rna_norm_label <- if (identical(rna_norm_method, "preprocessed")) "preprocessed input" else rna_norm_method
 
 # Read that exact name: a pattern match could pick up a table left behind by an
 # earlier run with another method.
@@ -379,15 +380,21 @@ norm_desc <- if (identical(norm_method, "VST")) {
     sprintf(paste0("edgeR TMM scaling with log2-CPM transformation ",
                    "(prior.count = %s, in read units scaled by library size)"), prior_ct)
 }
+# Preprocessed input was not normalized here, so no method is claimed for it.
+norm_sentence <- if (identical(norm_method, "preprocessed")) {
+    "The input was preprocessed upstream and was not normalized by the pipeline."
+} else {
+    sprintf("Normalization was performed using %s.", norm_desc)
+}
 
 cat(sprintf(
     paste0(
-        "%s Normalization was performed using %s. ",
+        "%s %s ",
         "Differential expression was tested using %s (%s test, %s mode). ",
         "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
     ),
     rna_filt$methods,
-    norm_desc,
+    norm_sentence,
     toupper(de_method), "Wald", deseq_mode,
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
@@ -490,10 +497,12 @@ settings <- data.frame(
     "Clustering Enabled"
   ),
   Value = c(
-    if (!identical(rna_norm_method, rna_norm_cfg)) {
+    if (isTRUE(rna_norm_res$fell_back)) {
         sprintf("%s (%s was configured and failed)", rna_norm_method, rna_norm_cfg)
-    } else rna_cfg$normalization$method %||% "N/A",
-    if (identical(rna_norm_method, "VST")) "not used (VST)" else prior_count,
+    } else rna_norm_res$label,
+    if (identical(rna_norm_method, "VST")) "not used (VST)"
+    else if (identical(rna_norm_method, "preprocessed")) "not used (preprocessed input)"
+    else prior_count,
     rna_filt$short,
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
@@ -842,7 +851,7 @@ figure_legend("Distribution of mean log2(CPM + 1) expression per gene after low-
 ```{r norm-method-intro, results='asis', echo=FALSE}
 # Describes the method that produced expr_work (rna_norm_method), so a VST run,
 # or a VST that fell back to TMMlogCPM, is described as what actually ran.
-if (identical(rna_norm_ran, "preprocessed")) {
+if (identical(rna_norm_method, "preprocessed")) {
     cat(paste0(
         "**Normalization method: none (preprocessed input)**\n\n",
         "The input table was already processed upstream, so the pipeline did not normalize it. ",
@@ -876,7 +885,7 @@ if (identical(rna_norm_ran, "preprocessed")) {
         "providing comparable expression levels across samples regardless of library size or composition differences.\n"
     ))
 }
-if (!identical(rna_norm_method, rna_norm_cfg) && !identical(rna_norm_ran, "preprocessed")) {
+if (isTRUE(rna_norm_res$fell_back)) {
     cat(sprintf("\n*%s was configured but failed; the pipeline fell back to %s.*\n",
                 rna_norm_cfg, rna_norm_method))
 }
@@ -3216,10 +3225,7 @@ n_samples
 
 cat(rna_filt$methods, " ")
 
-cat(sprintf(
-"Expression values were normalized using %s. ",
-norm_desc
-))
+cat(norm_sentence, " ")
 
 cat(sprintf(
 "Differential expression analysis was performed using %s with default parameters. ",
@@ -3243,8 +3249,8 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). %s",
-rna_filt$methods, norm_desc, de_method, padj_cut, lfc_cut, pathway_methods_text
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s %s Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). %s",
+rna_filt$methods, norm_sentence, de_method, padj_cut, lfc_cut, pathway_methods_text
 ))
 
 cat("\n</div>\n")
