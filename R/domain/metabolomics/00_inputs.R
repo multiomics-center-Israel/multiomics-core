@@ -666,15 +666,24 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 
 #' Build feature IDs from config rules
 #'
-#' Constructs IDs in the form \code{RT[rt]_MZ[mz]} using the raw (unrounded)
-#' numeric values from \code{rt_col} and \code{mz_col}.  Per-row fallback to
-#' \code{name_col} or a generic index when either coordinate is missing.
+#' Constructs IDs in the form \code{RT[rt]_MZ[mz]} from the \code{rt_col} and
+#' \code{mz_col} values, each rounded to 2 decimals; IDs that collide after
+#' rounding are made unique with a \code{_dup} suffix. Per-row fallback to
+#' \code{name_col} or a generic \code{feature_N} index when either coordinate
+#' is missing.
 #'
-#' When \code{feature_id_col} is present the unmodified source string is
-#' attached as an attribute on the returned vector:
-#' \describe{
-#'   \item{\code{original_id}}{Character vector of the raw source strings.}
-#' }
+#' The researcher's own ID is attached to the returned vector as the
+#' \code{original_id} attribute: from \code{feature_id_col} when that column is
+#' set and present (values copied as-is, \code{NA} kept); otherwise from
+#' \code{name_col}, with empty or \code{NA} names replaced by \code{feature_N};
+#' otherwise \code{feature_N} for every row. An absent configured column is
+#' never an error, it just moves to the next option.
+#'
+#' @param data_df Wide data.frame, one row per feature.
+#' @param id_cfg  The \code{id_columns} config block (\code{name_col},
+#'   \code{mz_col}, \code{rt_col}, optional \code{feature_id_col}).
+#' @return Character vector of unique feature IDs, one per row of
+#'   \code{data_df}, with attribute \code{original_id}.
 build_feature_ids <- function(data_df, id_cfg) {
   name_col <- id_cfg$name_col %||% "Name"
   mz_col   <- id_cfg$mz_col   %||% "m/z"
