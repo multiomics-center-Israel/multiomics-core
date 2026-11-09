@@ -328,7 +328,10 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         objects = objs,
         # Kept at top level: build_shiny_payload_rnaseq() reads them from here
         norm_log_counts_pca = pca_obj,
-        pca_scores = assert_pca_scores(scores, context = "rnaseq QC")
+        pca_scores = assert_pca_scores(scores, context = "rnaseq QC"),
+        # What produced expr_work (a failed VST falls back to TMMlogCPM), so
+        # mod_rnaseq_commentary() describes the plots by what ran, not the config.
+        expr_work_method = pre$info$expr_work_method
     )
 }
 

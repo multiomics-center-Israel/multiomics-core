@@ -117,7 +117,14 @@ build_extra_data <- function(de_res, qc_pre_obj = NULL, config) {
     })
 
     # --- Normalization and DE methods ---
-    extra$norm_method <- rna_cfg$normalization$method %||% "TMM"
+    # What produced expr_work, as recorded at runtime: a VST that fails falls
+    # back to TMMlogCPM. Same resolution as the PowerPoint and pipeline summary.
+    norm_ran <- qc_pre_obj$expr_work_method
+    extra$norm_method <- if (isTRUE(norm_ran %in% c("TMMlogCPM", "VST"))) {
+        norm_ran
+    } else if (identical(norm_ran, "preprocessed")) {
+        "none (preprocessed input)"
+    } else rna_cfg$normalization$method %||% "TMMlogCPM"
     extra$de_method <- paste0("DESeq2 (", rna_cfg$de$deseq_mode %||% "Wald", ")")
     extra$de_cutoffs <- list(
         p_cutoff  = rna_cfg$de$p_cutoff %||% 0.05,

@@ -352,6 +352,7 @@ test_that("the report describes the normalization that ran, not a failed VST", {
         env <- new.env(parent = globalenv())
         env$params <- list(rna_info = if (is.null(ran)) NULL else list(expr_work_method = ran))
         env$rna_cfg <- list(normalization = list(method = configured))
+        env$datasets_dir <- withr::local_tempdir()  # no tables: the config decides
         eval(parse(text = lines), envir = env)
         env$rna_norm_method
     }
@@ -360,4 +361,54 @@ test_that("the report describes the normalization that ran, not a failed VST", {
     expect_identical(method_for("TMMlogCPM", "preprocessed"), "TMMlogCPM")
     expect_identical(method_for("VST", NULL), "VST")
     expect_identical(method_for(NULL, NULL), "TMMlogCPM")
+})
+
+test_that("the report reads the normalized table and label of the method that ran", {
+    src <- readLines(rna_report_template(), warn = FALSE)
+    file_start <- grep("^rna_norm_file <- ", src)
+    stopifnot(length(file_start) == 1)
+    file_end <- file_start + which(src[(file_start + 1):length(src)] == "}")[1]
+    lines <- src[grep("^rna_norm_ran <- ", src):file_end]
+    resolve_for <- function(configured, ran, files = character(0)) {
+        ds <- withr::local_tempdir()
+        for (f in files) writeLines("gene", file.path(ds, f))
+        env <- new.env(parent = globalenv())
+        env$params <- list(rna_info = if (is.null(ran)) NULL else list(expr_work_method = ran))
+        env$rna_cfg <- list(normalization = list(method = configured))
+        env$datasets_dir <- ds
+        eval(parse(text = lines), envir = env)
+        list(label = env$rna_norm_label, file = basename(env$rna_norm_file),
+             method = env$rna_norm_method, notice = env$rna_norm_notice)
+    }
+
+    # A VST run reads rna_norm_VST.tsv, even beside a TMM table from an earlier run.
+    vst <- resolve_for("VST", "VST", c("rna_norm_VST.tsv", "rna_norm_TMMlogCPM.tsv"))
+    expect_identical(vst$label, "VST")
+    expect_identical(vst$file, "rna_norm_VST.tsv")
+    expect_identical(resolve_for("VST", "TMMlogCPM")$file, "rna_norm_TMMlogCPM.tsv")
+    expect_identical(resolve_for("VST", "TMMlogCPM")$label, "TMMlogCPM")
+
+    pre <- resolve_for("TMMlogCPM", "preprocessed")
+    expect_identical(pre$label, "preprocessed input")
+    expect_identical(pre$file, "rna_norm_preprocessed.tsv")
+
+    # No runtime record: the sole table's name is the record, so a VST that
+    # fell back to TMM is labelled, described and read as TMMlogCPM.
+    fell_back <- resolve_for("VST", NULL, "rna_norm_TMMlogCPM.tsv")
+    expect_identical(fell_back$file, "rna_norm_TMMlogCPM.tsv")
+    expect_identical(fell_back$label, "TMMlogCPM")
+    expect_identical(fell_back$method, "TMMlogCPM")
+    expect_null(fell_back$notice)
+
+    # Several tables and no record: none is read, and the report says why.
+    ambiguous <- resolve_for("VST", NULL, c("rna_norm_VST.tsv", "rna_norm_TMMlogCPM.tsv"))
+    expect_true(is.na(ambiguous$file))
+    expect_match(ambiguous$notice, "no record of which normalization", fixed = TRUE)
+})
+
+test_that("the report hard-codes no normalization method in labels or file names", {
+    src <- readLines(rna_report_template(), warn = FALSE)
+    expect_false(any(grepl("rna_norm_TMMlogCPM", src, fixed = TRUE)))
+    expect_false(any(grepl("(TMMlogCPM)", src, fixed = TRUE)))
+    expect_false(any(grepl("normalized_counts_TMMlogCPM", src, fixed = TRUE)))
 })
