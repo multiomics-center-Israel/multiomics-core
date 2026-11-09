@@ -158,6 +158,24 @@ discover_figures <- function(out_dir, config = NULL) {
 # Context building — enriched with experiment data
 # --------------------------------------------------------------------------
 
+#' Did the pipeline leave the plotted values unnormalized?
+#'
+#' Callers record a run with no normalization step as a \code{norm_method}
+#' starting with "none": "none" (metabolomics, lipidomics, proteomics) or
+#' "none (preprocessed input)" (RNA-seq). Commentary for such values must not
+#' claim that normalization removed technical variation.
+#'
+#' @param context Figure context from \code{build_figure_context()}.
+#' @return \code{TRUE} when \code{context$norm_method} starts with "none",
+#'   otherwise \code{FALSE} (including when no method is recorded).
+#' @examples
+#' commentary_values_unnormalized(list(norm_method = "none (preprocessed input)"))  # TRUE
+#' commentary_values_unnormalized(list(norm_method = "VST"))                        # FALSE
+commentary_values_unnormalized <- function(context) {
+    nm <- context$norm_method
+    is.character(nm) && length(nm) == 1 && !is.na(nm) && startsWith(nm, "none")
+}
+
 #' Build rich context information for a figure
 #'
 #' @param fig         Row from figures_tbl
@@ -315,6 +333,15 @@ build_figure_guidance <- function(context) {
                 "\n- These raw differences should be corrected after normalization."
             ))
         }
+        if (commentary_values_unnormalized(context)) {
+            return(paste0(
+                "INTERPRETATION GUIDANCE FOR EXPRESSION BOXPLOT:", norm_info,
+                "\n- The pipeline did NOT normalize these values; they are shown as supplied.",
+                "\n- Do not state that normalization succeeded or that technical variation was removed.",
+                "\n- Differences in median or spread may be technical as well as biological.",
+                "\n- Samples with notably different distributions may be outliers."
+            ))
+        }
         return(paste0(
             "INTERPRETATION GUIDANCE FOR NORMALIZED EXPRESSION BOXPLOT:", norm_info,
             "\n- After normalization, all sample boxes should have similar median and interquartile range.",
@@ -328,7 +355,9 @@ build_figure_guidance <- function(context) {
         return(paste0(
             "INTERPRETATION GUIDANCE FOR EXPRESSION DENSITY PLOT:",
             "\n- Each curve represents one sample's expression distribution.",
-            "\n- After normalization, curves should largely overlap.",
+            if (commentary_values_unnormalized(context)) {
+                "\n- The pipeline did NOT normalize these values; do not state that normalization succeeded."
+            } else "\n- After normalization, curves should largely overlap.",
             "\n- Bimodal distributions are common (low/no expression peak + expressed ", feature_term, " peak).",
             "\n- Samples with shifted or differently shaped curves may indicate quality issues or biological differences."
         ))
@@ -924,6 +953,24 @@ generate_fallback_commentary <- function(fig, context, de_summary = NULL) {
         commentary$next_steps <- list()
 
     # --- Normalized boxplot ---
+    } else if (pt == "boxplot" && commentary_values_unnormalized(context)) {
+        # The pipeline did not normalize these values, so it cannot vouch that
+        # technical variation was removed; describe the matrix as supplied.
+        commentary$what_is_this <- sprintf("Per-sample boxplots of the expression values used for analysis (%s).",
+                                           context$norm_method)
+        commentary$biological_interpretation <- paste0(
+            "The pipeline did not normalize these values; they are shown as supplied. ",
+            "Any normalization was done before the data reached the pipeline, so differences in median or spread ",
+            "between samples may reflect technical as well as biological variation."
+        )
+        commentary$observations <- list(
+            "Compare medians and interquartile ranges across samples"
+        )
+        commentary$issues_checks <- list(
+            "Samples with notably different distributions may need investigation or upstream normalization"
+        )
+        commentary$next_steps <- list()
+
     } else if (pt == "boxplot") {
         # No recorded method: say nothing about which one rather than guess TMM.
         norm_str <- if (!is.null(context$norm_method)) context$norm_method else "method not recorded"
@@ -943,6 +990,21 @@ generate_fallback_commentary <- function(fig, context, de_summary = NULL) {
         commentary$next_steps <- list()
 
     # --- Density ---
+    } else if (pt == "density" && commentary_values_unnormalized(context)) {
+        commentary$what_is_this <- sprintf(
+            "Per-sample density curves of the expression values used for analysis (%s).", context$norm_method)
+        commentary$biological_interpretation <- paste0(
+            "The pipeline did not normalize these values; they are shown as supplied. ",
+            "Shifted or differently shaped curves may reflect technical as well as biological differences between samples."
+        )
+        commentary$observations <- list(
+            "Each curve represents one sample's expression distribution"
+        )
+        commentary$issues_checks <- list(
+            "Samples with shifted or differently shaped curves may indicate quality issues"
+        )
+        commentary$next_steps <- list()
+
     } else if (pt == "density") {
         commentary$what_is_this <- "Per-sample expression density curves showing the distribution of normalized gene expression values."
         commentary$biological_interpretation <- paste0(

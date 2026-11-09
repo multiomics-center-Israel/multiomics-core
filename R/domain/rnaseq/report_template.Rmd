@@ -827,7 +827,8 @@ if (identical(rna_norm_ran, "preprocessed")) {
     cat(paste0(
         "**Normalization method: none (preprocessed input)**\n\n",
         "The input table was already processed upstream, so the pipeline did not normalize it. ",
-        "The plots below show the values as provided, after gene filtering.\n"
+        "The plots below show the values as provided, with every gene retained ",
+        "(preprocessed input is not filtered).\n"
     ))
 } else if (identical(rna_norm_method, "VST")) {
     cat(paste0(

@@ -99,7 +99,8 @@ modes:
       # Cutoff units: CPM (counts per million) for a count matrix,
       # TPM for tximport (salmon/kallisto) input.
 
-      # Used only when mode: "fixed". Default 1.0 (= 1 CPM).
+      # Used only when mode: "fixed". Default 1.0, in the units above
+      # (1 CPM for a count matrix, 1 TPM for tximport input).
       # fixed_threshold: 1.0
 
       # Used only when mode: "adaptive":
