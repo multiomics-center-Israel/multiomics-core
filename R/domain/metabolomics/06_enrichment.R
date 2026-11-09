@@ -160,14 +160,15 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
     # inconsistently across software. Applied AFTER the HMDB->KEGG step so a
     # direct KEGG ID wins over a lookup. Cells may hold "C00031", "cpd:C00031"
     # or "C00031;C00267" — take the first KEGG compound ID present.
-    kegg_col <- intersect(c("KEGG", "KEGG_ID", "KEGG ID", "kegg", "kegg_id"),
-                          colnames(row_data))[1]
-    if (!is.na(kegg_col)) {
-        kegg_raw <- as.character(row_data[[kegg_col]])
+    # mod_met_raw() resolves every accepted spelling (KEGG_ID, "KEGG ID", ...)
+    # into `KEGG` with canonicalize_kegg_column(), so `KEGG` is the only column
+    # read here.
+    if ("KEGG" %in% colnames(row_data)) {
+        kegg_raw <- as.character(row_data$KEGG)
         has_kegg <- grepl("C[0-9]{5}", kegg_raw)
         kegg_id  <- sub(".*?(C[0-9]{5}).*", "\\1", kegg_raw, perl = TRUE)
         compound_names[has_kegg] <- kegg_id[has_kegg]
-        message("enrichment: using KEGG IDs from '", kegg_col, "' for ",
+        message("enrichment: using KEGG IDs from 'KEGG' for ",
                 sum(has_kegg), " features")
     }
 

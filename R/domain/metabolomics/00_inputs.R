@@ -793,10 +793,11 @@ add_kegg_from_hmdb <- function(row_data, mapping_file) {
 #' column is preserved (routed ids only fill gaps).
 #'
 #' The same cleaning applies, in place and under its own name, to each
-#' alternative KEGG column that \code{map_compounds_for_enrichment()} accepts
-#' (\code{KEGG_ID}, \code{KEGG ID}, \code{kegg}, \code{kegg_id}). No column is
-#' renamed. When several are present, a feature's CSID is routed from the
-#' first of them, in that order, that carries one.
+#' alternative KEGG column in \code{.METAB_KEGG_ALIASES} (\code{KEGG_ID},
+#' \code{KEGG ID}, \code{kegg}, \code{kegg_id}). No column is renamed here;
+#' \code{canonicalize_kegg_column()} does that afterwards. When several are
+#' present, a feature's CSID is routed from the first of them, in that order,
+#' that carries one.
 #'
 #' @param row_data data.frame of feature annotations (may lack a KEGG column).
 #' @return \code{row_data} with its KEGG column(s) cleaned and a
@@ -804,9 +805,7 @@ add_kegg_from_hmdb <- function(row_data, mapping_file) {
 #'   supported KEGG column is present.
 clean_kegg_chemspider <- function(row_data) {
     if (is.null(row_data)) return(row_data)
-    # Same names, in the same order, as map_compounds_for_enrichment().
-    kegg_cols <- intersect(c("KEGG", "KEGG_ID", "KEGG ID", "kegg", "kegg_id"),
-                           colnames(row_data))
+    kegg_cols <- intersect(c("KEGG", .METAB_KEGG_ALIASES), colnames(row_data))
     if (length(kegg_cols) == 0) return(row_data)
 
     # Valid KEGG compound id embedded anywhere in the cell; take the first match.
@@ -861,6 +860,87 @@ clean_kegg_chemspider <- function(row_data) {
     message(sprintf(
         "clean_kegg_chemspider: %d valid KEGG, %d ChemSpider routed, %d other dropped (%s)",
         n_valid, n_routed, n_other, paste(kegg_cols, collapse = ", ")))
+    row_data
+}
+
+
+#' Column names read as the KEGG compound column besides \code{KEGG} itself
+#'
+#' The one list of accepted spellings, in preference order. Read by
+#' \code{clean_kegg_chemspider()} and \code{canonicalize_kegg_column()}; every
+#' other consumer reads the canonical \code{KEGG} column.
+#' @noRd
+.METAB_KEGG_ALIASES <- c("KEGG_ID", "KEGG ID", "kegg", "kegg_id")
+
+
+#' Resolve the accepted KEGG column spellings into one \code{KEGG} column
+#'
+#' Input tables name the KEGG compound column in several ways, but the HMDB
+#' fill, enrichment, the metabolite network and the report's KEGG mapping all
+#' read \code{KEGG}. This makes that column the single source:
+#' \itemize{
+#'   \item With no \code{KEGG} column, the first alias present (in
+#'     \code{.METAB_KEGG_ALIASES} order) is renamed to \code{KEGG}.
+#'   \item Every remaining alias then fills \code{KEGG} cells that are empty,
+#'     in the same order. A non-empty \code{KEGG} value is never overwritten.
+#'   \item Where \code{KEGG} and an alias both hold a value and they differ,
+#'     \code{KEGG} is kept and the conflict is reported in one warning per
+#'     alias.
+#' }
+#' Remaining alias columns are left in place: they still carry the source
+#' values, and nothing downstream is assumed not to read them.
+#'
+#' Values are compared as text, so run this after
+#' \code{clean_kegg_chemspider()}, which reduces every KEGG-like cell to a bare
+#' \code{C#####} id or \code{NA}; otherwise \code{"cpd:C00031"} and
+#' \code{"C00031"} would be reported as a conflict.
+#'
+#' @param row_data data.frame of feature annotations (may have no KEGG column).
+#' @return \code{row_data} with a \code{KEGG} column when any accepted KEGG
+#'   column was present; unchanged otherwise.
+#' @examples
+#' rd <- data.frame(feature_id = c("F1", "F2"), KEGG_ID = c("C00031", NA))
+#' canonicalize_kegg_column(rd)
+canonicalize_kegg_column <- function(row_data) {
+    if (is.null(row_data)) return(row_data)
+    aliases <- intersect(.METAB_KEGG_ALIASES, colnames(row_data))
+    if (length(aliases) == 0) return(row_data)
+
+    if (!"KEGG" %in% colnames(row_data)) {
+        colnames(row_data)[colnames(row_data) == aliases[1]] <- "KEGG"
+        message("canonicalize_kegg_column: renamed '", aliases[1], "' to 'KEGG'")
+        aliases <- aliases[-1]
+    }
+    if (length(aliases) == 0) return(row_data)
+
+    is_blank <- function(x) is.na(x) | x %in% c("", "NA")
+    kegg <- trimws(as.character(row_data$KEGG))
+    ids  <- if ("feature_id" %in% colnames(row_data))
+        as.character(row_data$feature_id) else as.character(seq_len(nrow(row_data)))
+
+    for (col in aliases) {
+        alt   <- trimws(as.character(row_data[[col]]))
+        fill  <- is_blank(kegg) & !is_blank(alt)
+        clash <- !is_blank(kegg) & !is_blank(alt) & kegg != alt
+
+        if (any(clash)) {
+            shown <- utils::head(which(clash), 5)
+            warning(sprintf(
+                "canonicalize_kegg_column: %d feature(s) have a KEGG id that differs from '%s'; kept the KEGG value. e.g. %s",
+                sum(clash), col,
+                paste0(ids[shown], " (KEGG ", kegg[shown], " vs ", alt[shown], ")",
+                       collapse = "; ")),
+                call. = FALSE)
+        }
+        if (any(fill)) {
+            kegg[fill] <- alt[fill]
+            message(sprintf("canonicalize_kegg_column: filled %d empty KEGG cell(s) from '%s'",
+                            sum(fill), col))
+        }
+    }
+
+    kegg[is_blank(kegg)] <- NA_character_
+    row_data$KEGG <- kegg
     row_data
 }
 

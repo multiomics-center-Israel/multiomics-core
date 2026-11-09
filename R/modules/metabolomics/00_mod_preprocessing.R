@@ -146,6 +146,12 @@ mod_met_raw <- function(inp, config) {
   # would block the lookup and the cell would end up empty after routing.
   row_data <- clean_kegg_chemspider(row_data)
 
+  # Resolve KEGG_ID / "KEGG ID" / kegg / kegg_id into the one `KEGG` column that
+  # every downstream consumer reads. Before the HMDB fill, so the fill completes
+  # that column instead of creating a second, HMDB-only `KEGG` beside KEGG_ID.
+  # After the clean, so every cell is a bare C##### id and values compare exactly.
+  row_data <- canonicalize_kegg_column(row_data)
+
   # Populate KEGG column from HMDB → KEGG mapping so downstream modules
   # (network, etc.) can use a uniform row_data$KEGG without re-reading the file.
   row_data <- add_kegg_from_hmdb(row_data,
