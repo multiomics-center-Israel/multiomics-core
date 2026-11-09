@@ -56,32 +56,49 @@ modes:
       method: "TMMlogCPM"   # "TMMlogCPM" | "VST"
       prior.count: 1
 
-    # Feature filtering (applied before normalization and downstream QC/PCA)
+    # --------------------------------------------------------
+    # Gene filtering: removes lowly expressed genes BEFORE normalization.
+    # This is not normalization; it only decides which genes are kept.
+    # --------------------------------------------------------
     filtering:
-      # Choose one:
-      #   adaptive    - data-driven threshold (default): 2^v, where v is the first valley
-      #                 right of the lowest peak in a density of log2(CPM + 0.1) over all
-      #                 genes and samples, clamped to [auto_filter$min, auto_filter$max].
-      #                 With fewer than two peaks or no valley, auto_filter$fallback is
-      #                 used as given (not clamped).
-      #   fixed       - threshold = fixed_threshold.
-      #   deseq2_only - removes only genes whose raw counts are zero in every sample.
-      #   none        - keeps every gene.
-      # Any other value runs as adaptive. Preprocessed input skips filtering whatever
-      # the mode.
+      # mode - how the expression cutoff is chosen:
+      #
+      #   "adaptive"    (default, recommended) The pipeline picks the cutoff from
+      #                 your data. Most RNA-seq data have a peak of near-zero
+      #                 "noise" genes and a peak of expressed genes; the cutoff is
+      #                 placed in the dip between them, then kept within
+      #                 auto_filter min..max (below). If the dip can't be found,
+      #                 auto_filter fallback is used instead.
+      #                 Check the result in <paths.out>/rnaseq/filtering_threshold_qc.png
+      #                 (red line = the cutoff used).
+      #   "fixed"       You set the cutoff yourself with fixed_threshold.
+      #   "deseq2_only" No expression cutoff; only genes with zero reads in every
+      #                 sample are removed.
+      #   "none"        Keep every gene.
+      #
+      # A misspelled mode runs as "adaptive". Preprocessed input (already
+      # normalized upstream) is never filtered, whatever the mode.
       mode: "adaptive"
-      # adaptive/fixed: a gene is kept if, in at least one group of group_col, at least
-      # half (rounded up) of the samples with a non-missing value reach the threshold.
-      # Choose the grouping variable to match the biological design.
+
+      # Which genes pass ("adaptive" and "fixed"): a gene is kept if, in at least
+      # ONE group, at least half of that group's samples (rounded up) are at or
+      # above the cutoff. Example: group of 5 samples -> 3 must pass.
+      # Set group_col to the metadata column that defines your biological groups,
+      # so a gene expressed in only one condition is not thrown away.
+      # If omitted: de_table.group_col, then the first effects.color column.
       group_col: "line"
-      # Units: CPM for count matrices, TPM (abundance) for tximport input.
-      # Used only when mode: "fixed" (default if omitted: 1.0).
+
+      # Cutoff units: CPM (counts per million) for a count matrix,
+      # TPM for tximport (salmon/kallisto) input.
+
+      # Used only when mode: "fixed". Default 1.0 (= 1 CPM).
       # fixed_threshold: 1.0
-      # Used only when mode: "adaptive".
+
+      # Used only when mode: "adaptive":
       auto_filter:
-        min: 0.5
-        max: 2.0
-        fallback: 1.0
+        min: 0.5       # the cutoff is never set lower than this
+        max: 2.0       # ...or higher than this
+        fallback: 1.0  # used when no dip is found (used as is, not limited to min..max)
 
     # Optional sample filtering by metadata (if you support it in code)
     # sample_filter:
