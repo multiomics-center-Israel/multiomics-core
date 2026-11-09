@@ -42,6 +42,9 @@ modes:
     # is used silently. Empty names become unknown_N.
     # "translated_csv" uses feature_id_col if set, else name_col, and STOPS if
     # that column is missing.
+    # With "lipidsearch", a custom feature_id_col must also be listed in
+    # annotation_cols; otherwise, when no metadata restricts the samples, it is
+    # read as a sample column.
     id_columns:
       # If set and exists in data, use this column directly as feature_id
       feature_id_col: null
