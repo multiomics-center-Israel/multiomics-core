@@ -194,31 +194,39 @@ rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
 # recorded values (preprocessed input, or no record) keep the configured wording.
 rna_norm_ran <- params$rna_info$expr_work_method
 rna_norm_cfg <- rna_cfg$normalization$method %||% "TMMlogCPM"
+
+# write_rnaseq_datasets_legacy() names the normalized table after the method
+# that produced expr_work (rna_norm_<method>.tsv), so without params$rna_info a
+# sole table's name is the runtime record: read the method from it, so the
+# method, the labels and the values shown all come from the same run. With
+# several tables (reruns with different methods) nothing says which belongs to
+# these results; show none, and say why in the report (setup-chunk warnings are
+# not rendered).
+rna_norm_notice <- NULL
+if (is.null(rna_norm_ran)) {
+    rna_norm_found <- list.files(datasets_dir, pattern = "^rna_norm_.*\\.tsv$")
+    if (length(rna_norm_found) == 1) {
+        rna_norm_ran <- sub("^rna_norm_(.*)\\.tsv$", "\\1", rna_norm_found)
+    } else if (length(rna_norm_found) > 1) {
+        rna_norm_notice <- sprintf(paste0(
+            "Normalized expression is not shown: Datasets/ holds %d normalized tables (%s) ",
+            "and this report has no record of which normalization produced these results. ",
+            "Re-render the report from the pipeline, or remove the tables from earlier runs."),
+            length(rna_norm_found), paste(rna_norm_found, collapse = ", "))
+    }
+}
 rna_norm_method <- if (isTRUE(rna_norm_ran %in% c("TMMlogCPM", "VST"))) rna_norm_ran else rna_norm_cfg
 
 # Label for the values in expr_work (axis titles, captions). Preprocessed input
 # was not normalized here, so it must not borrow the configured method's name.
 rna_norm_label <- if (identical(rna_norm_ran, "preprocessed")) "preprocessed input" else rna_norm_method
 
-# write_rnaseq_datasets_legacy() names the normalized table after the method
-# that ran (rna_norm_<method>.tsv). Read that exact name: a pattern match could
-# pick up a table left behind by an earlier run with another method. Without a
-# runtime record, use the rna_norm_*.tsv only when there is exactly one: with
-# several (reruns with different methods) nothing says which one belongs to
-# these results, so show none rather than risk mislabelled values.
+# Read that exact name: a pattern match could pick up a table left behind by an
+# earlier run with another method.
 rna_norm_file <- if (!is.null(rna_norm_ran)) {
     file.path(datasets_dir, sprintf("rna_norm_%s.tsv", rna_norm_ran))
 } else {
-    rna_norm_found <- list.files(datasets_dir, pattern = "^rna_norm_.*\\.tsv$", full.names = TRUE)
-    if (length(rna_norm_found) > 1) {
-        warning(sprintf(paste0(
-            "[report] %d normalized tables in %s (%s) and no record of which method ran; ",
-            "the normalized-expression sections are left out. Render with pre_info, or remove ",
-            "the tables from earlier runs."),
-            length(rna_norm_found), datasets_dir, paste(basename(rna_norm_found), collapse = ", ")),
-            call. = FALSE)
-        NA_character_
-    } else rna_norm_found[1]
+    NA_character_
 }
 
 # The transformation behind the QC plots, from the same resolver the QC module
@@ -2411,7 +2419,7 @@ document.addEventListener("click", function(e) {
 ```
 
 ```{r gene-explorer-fallback, eval=!explorer_ready, results='asis', echo=FALSE}
-cat("*Gene expression explorer requires normalized expression data and metadata.*\n")
+cat("*", rna_norm_notice %||% "Gene expression explorer requires normalized expression data and metadata.", "*\n", sep = "")
 ```
 
 ## Normalized Counts
@@ -2462,7 +2470,7 @@ if (isTRUE(file.exists(norm_counts_file))) {
         filter = 'top'
     ) |> DT::formatRound(columns = num_cols_nc, digits = 3)
 } else {
-    cat("Normalized counts file not found.\n")
+    cat(rna_norm_notice %||% "Normalized counts file not found.", "\n")
 }
 ```
 
@@ -2579,7 +2587,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source) && nrow(heatmap_de_source
         if (!is.null(hm)) print(hm)
     }, error = function(e) cat("Heatmap error:", e$message))
 } else {
-    cat("Expression matrix or DE results not available.")
+    cat(rna_norm_notice %||% "Expression matrix or DE results not available.")
 }
 ```
 
