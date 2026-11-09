@@ -39,7 +39,8 @@ modes:
     #                      with "_" + a warning
     #   2. "Molecule"      (always wins over name_col when the column exists)
     #   3. name_col
-    #   4. lipid_N_mz<mz>_rt<rt>, built from mz_col / rt_col
+    #   4. lipid_N, plus _mz<mz> and/or _rt<rt> for each of mz_col / rt_col
+    #      that exists (so lipid_N, lipid_N_mz…, lipid_N_rt… or both)
     # For 2 and 3, empty names become unknown_N. A configured column that is
     # absent does NOT stop the run; the next option is used silently.
     # "translated_csv" uses feature_id_col if set, else name_col, and STOPS if
