@@ -165,6 +165,14 @@ modes:
       linear_fc_cutoff: 1.5
       p_adjust_method: "BH"     # "BH" | "bonferroni" | "holm" | "BY"
       fdrtool_correction: false  # true = empirical null correction on t-stats (DEP-style)
+      # true = per contrast, leave untested the proteins whose imputed values
+      # (in that contrast's two groups) average above their measured values --
+      # the rule behind imputed_above_measured.<contrast>. The model fit is
+      # unchanged; in each imputation run the flagged proteins
+      # lose their p-value in that contrast only and the adjustment is
+      # recomputed over the rest. Proteins left untested in every run also
+      # leave that contrast's enrichment ranking and ORA background.
+      exclude_imputed_above_measured: false
       paired: false           # relevant for t-test
       pairing_col: null          # metadata column for paired test (e.g. "Subject")
 

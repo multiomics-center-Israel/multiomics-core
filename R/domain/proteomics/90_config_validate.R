@@ -178,6 +178,8 @@ validate_proteomics_config <- function(cfg) {
             warning("de$use_fdr_for_pass1 is deprecated; it is read as ",
                     "de$use_adj_for_pass1. Rename the key.", call. = FALSE)
         }
+        assert_scalar_bool(cfg$de[["exclude_imputed_above_measured"]],
+                           "de$exclude_imputed_above_measured", allow_null = TRUE)
     }
 
     # 4a. Batch in the DE model. The resolver aborts on an unknown de_mode and
@@ -187,6 +189,15 @@ validate_proteomics_config <- function(cfg) {
     bc <- get_proteomics_batch_config(cfg)
     de_tables <- unlist(cfg$files$de_table)
     precomputed <- length(de_tables) > 0 && all(nzchar(de_tables))
+    if (precomputed && de_excludes_imputed_above_measured(cfg$de, "proteomics")) {
+        # The exclusion narrows the pipeline's own tests; precomputed tables are
+        # loaded as they are, so the Methods text and the Excel notes would
+        # describe an exclusion that never happened.
+        stop("de$exclude_imputed_above_measured is true but files$de_table supplies ",
+             "precomputed DE results, so no test is run here that it could narrow.\n",
+             "  Set de$exclude_imputed_above_measured: false, or remove files$de_table.",
+             call. = FALSE)
+    }
     if (precomputed) {
         # No model is fitted, so a resolved default means nothing; only an
         # explicit request to model batch is a contradiction.

@@ -61,7 +61,10 @@ auto_generate_control_contrasts <- function(meta, group_col, control) {
 #' @param inputs  output of load_proteomics_inputs()
 #' @param config  full config
 #' @param verbose logical
-#' @return list(method, runs, runs_de_tables, summary_df, de_model)
+#' @return list(method, runs, runs_de_tables, summary_df, de_model). With
+#'   \code{de.exclude_imputed_above_measured} on, also
+#'   \code{imputed_above_measured_excluded} (see
+#'   \code{exclude_imputed_above_measured_proteomics()}).
 mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
     assert_pre_contract(pre, stage = "proteomics")
 
@@ -121,6 +124,44 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
         verbose  = verbose
     )
 
+    # Shared by every method below: collect the per-run tables, leave the
+    # imputed-above-measured rows untested per contrast when that is on (each
+    # run against its own imputed matrix, before the runs are summarised), and
+    # summarise. Reads contrasts_df when called, so the limma_percontrast
+    # branch's generated contrasts are the ones used.
+    summarise_runs <- function(runs) {
+        runs_de_tables <- lapply(runs, function(x) x$de_tables)
+        excluded <- NULL
+        if (de_excludes_imputed_above_measured(cfg$de, "proteomics")) {
+            ex <- exclude_imputed_above_measured_proteomics(
+                runs_de_tables = runs_de_tables,
+                imputations    = imputations,
+                pre            = pre,
+                contrasts_df   = contrasts_df,
+                config         = config
+            )
+            runs_de_tables <- ex$runs_de_tables
+            excluded <- ex$excluded
+            # Keep each run's own tables in step with runs_de_tables.
+            for (i in seq_along(runs)) runs[[i]]$de_tables <- runs_de_tables[[i]]
+        }
+        list(
+            runs = runs,
+            runs_de_tables = runs_de_tables,
+            summary_df = summarize_limma_mult_imputation(
+                runs_de_tables = runs_de_tables,
+                config         = config
+            ),
+            excluded = excluded
+        )
+    }
+    # Added to the result only when the exclusion ran, so a run with the option
+    # off returns exactly the object it returned before the option existed.
+    with_exclusion <- function(out, s) {
+        out$imputed_above_measured_excluded <- s$excluded
+        out
+    }
+
     if (identical(method, "limma")) {
         # Run limma on imputations
         runs <- run_limma_multimp(
@@ -132,12 +173,7 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             verbose      = verbose
         )
 
-        runs_de_tables <- lapply(runs, function(x) x$de_tables)
-
-        summary_df <- summarize_limma_mult_imputation(
-            runs_de_tables = runs_de_tables,
-            config         = config
-        )
+        s <- summarise_runs(runs)
 
         # The design depends on the metadata only, so run 1 speaks for every
         # run; warning per run would repeat the same text no_repetitions times.
@@ -149,15 +185,15 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             for (n in notes) warning("Batch design: ", n, call. = FALSE)
         }
 
-        return(list(
+        return(with_exclusion(list(
             method = "limma",
             imputations = imputations,
-            runs = runs,
-            runs_de_tables = runs_de_tables,
-            summary_df = summary_df,
+            runs = s$runs,
+            runs_de_tables = s$runs_de_tables,
+            summary_df = s$summary_df,
             de_model = runs[[1]]$fit2,
             batch_design = batch_design
-        ))
+        ), s))
     }
 
     if (identical(method, "limma_percontrast")) {
@@ -189,21 +225,16 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             )
         })
 
-        runs_de_tables <- lapply(runs, function(x) x$de_tables)
+        s <- summarise_runs(runs)
 
-        summary_df <- summarize_limma_mult_imputation(
-            runs_de_tables = runs_de_tables,
-            config         = config
-        )
-
-        return(list(
+        return(with_exclusion(list(
             method = "limma_percontrast",
             imputations = imputations,
-            runs = runs,
-            runs_de_tables = runs_de_tables,
-            summary_df = summary_df,
+            runs = s$runs,
+            runs_de_tables = s$runs_de_tables,
+            summary_df = s$summary_df,
             de_model = NULL
-        ))
+        ), s))
     }
 
     if (identical(method, "ttest") || identical(method, "welch")) {
@@ -220,21 +251,16 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             )
         })
 
-        runs_de_tables <- lapply(runs, function(x) x$de_tables)
+        s <- summarise_runs(runs)
 
-        summary_df <- summarize_limma_mult_imputation(
-            runs_de_tables = runs_de_tables,
-            config         = config
-        )
-
-        return(list(
+        return(with_exclusion(list(
             method = method,
             imputations = imputations,
-            runs = runs,
-            runs_de_tables = runs_de_tables,
-            summary_df = summary_df,
+            runs = s$runs,
+            runs_de_tables = s$runs_de_tables,
+            summary_df = s$summary_df,
             de_model = NULL
-        ))
+        ), s))
     }
 
     if (identical(method, "anova")) {
@@ -249,21 +275,16 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             )
         })
 
-        runs_de_tables <- lapply(runs, function(x) x$de_tables)
+        s <- summarise_runs(runs)
 
-        summary_df <- summarize_limma_mult_imputation(
-            runs_de_tables = runs_de_tables,
-            config         = config
-        )
-
-        return(list(
+        return(with_exclusion(list(
             method = "anova",
             imputations = imputations,
-            runs = runs,
-            runs_de_tables = runs_de_tables,
-            summary_df = summary_df,
+            runs = s$runs,
+            runs_de_tables = s$runs_de_tables,
+            summary_df = s$summary_df,
             de_model = NULL
-        ))
+        ), s))
     }
 
     stop("Unsupported proteomics DE method: ", method)

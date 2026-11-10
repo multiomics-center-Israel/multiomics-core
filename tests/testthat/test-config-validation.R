@@ -80,6 +80,27 @@ test_that("validate_proteomics_config errors on p_cutoff < 0", {
     expect_error(validate_proteomics_config(cfg))
 })
 
+test_that("de$exclude_imputed_above_measured accepts TRUE/FALSE/absent and rejects the rest", {
+    cfg <- create_mock_proteomics_config()
+    for (v in list(TRUE, FALSE)) {
+        cfg$de$exclude_imputed_above_measured <- v
+        expect_true(validate_proteomics_config(cfg))
+    }
+    for (v in list("yes", NA, c(TRUE, FALSE))) {
+        cfg$de$exclude_imputed_above_measured <- v
+        expect_error(validate_proteomics_config(cfg), "exclude_imputed_above_measured")
+    }
+})
+
+test_that("de$exclude_imputed_above_measured is refused with precomputed DE tables", {
+    cfg <- create_mock_proteomics_config()
+    cfg$files$de_table <- "precomputed_de.csv"
+    cfg$de$exclude_imputed_above_measured <- TRUE
+    expect_error(validate_proteomics_config(cfg), "precomputed")
+    cfg$de$exclude_imputed_above_measured <- FALSE
+    expect_true(validate_proteomics_config(cfg))
+})
+
 test_that("validate_proteomics_config passes with valid PPI config", {
     cfg <- create_mock_proteomics_config()
     expect_true(validate_proteomics_config(cfg))

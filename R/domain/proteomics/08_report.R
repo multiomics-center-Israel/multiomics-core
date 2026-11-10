@@ -809,6 +809,19 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
         } else {
             sprintf("P-values were adjusted with the %s procedure.", p_adjust)
         })
+        # mod_proteomics_de() applies the exclusion to every internal method,
+        # through the same resolver; precomputed tables never reach this branch
+        # (and the validator refuses the option with them).
+        if (de_excludes_imputed_above_measured(de_cfg, "proteomics")) {
+            de_txt <- paste(de_txt, sprintf(paste0(
+                "In each contrast, proteins whose imputed values in that contrast's two ",
+                "groups averaged above their measured values were left untested: the model fit ",
+                "itself was unchanged, but those proteins received no p-value in ",
+                "that contrast%s%s."),
+                if (p_adjust_none) "" else
+                    ", and the adjusted p-values were recomputed over the remaining proteins",
+                if (multi_on) ", with the rule applied separately in each imputation run" else ""))
+        }
         # Only a single-run analysis is decided by one threshold pair. Under
         # multiple imputation the rule is a vote: mark_pass1() applies both
         # cutoffs inside each run (05_de_summary.R:209), the call needs
