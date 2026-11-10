@@ -90,6 +90,33 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
     de_tbl
 }
 
+#' Drop the rows the DE step left untested in this contrast
+#'
+#' When \code{de.exclude_imputed_above_measured} ran, a protein left untested
+#' in every imputation run has no p-value in this contrast, so it is neither
+#' ranked nor counted: removing it from the table takes it out of the fGSEA
+#' ranking, the ORA significant lists and the ORA background together, all
+#' built from this table by \code{run_pathway_analysis()}. Read from the DE
+#' result rather than the config, so the table changes only when the exclusion
+#' actually happened.
+#'
+#' @param de_tbl Per-contrast table from \code{extract_de_table_for_pathway()},
+#'   still keyed by protein ID.
+#' @param de_res Proteomics DE result (\code{imputed_above_measured_excluded}
+#'   is read when present).
+#' @param contrast Contrast name.
+#' @return \code{de_tbl}, without the excluded rows.
+drop_imputed_above_measured_rows <- function(de_tbl, de_res, contrast) {
+    drop_ids <- imputed_above_measured_excluded_ids(
+        de_res$imputed_above_measured_excluded, contrast)
+    if (length(drop_ids) == 0L) return(de_tbl)
+    keep <- !as.character(de_tbl$FeatureID) %in% drop_ids
+    message(sprintf("  %s: %d protein(s) left untested by the imputed-above-measured ",
+                    contrast, sum(!keep)),
+            "rule are left out of this contrast's ranking and ORA background.")
+    de_tbl[keep, , drop = FALSE]
+}
+
 # ==============================================================================
 # PROTEIN-TO-GENE MAPPING
 # ==============================================================================
@@ -290,6 +317,7 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     skip_symbol_remap <- isTRUE((cfg$annotation %||% list())$skip_annotation)
     de_tables <- lapply(setNames(contrasts, contrasts), function(cn) {
         tbl <- extract_de_table_for_pathway(summary_df, cn, config)
+        tbl <- drop_imputed_above_measured_rows(tbl, de_res, cn)
         if (skip_symbol_remap) tbl else map_proteins_to_gene_symbols(tbl, summary_df, config)
     })
 

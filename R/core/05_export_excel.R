@@ -57,6 +57,24 @@ de_uses_adjusted_p <- function(de_cfg, mode = "proteomics") {
     default
 }
 
+#' Does this mode's DE step leave imputed-above-measured rows untested?
+#'
+#' The single resolver of \code{de.exclude_imputed_above_measured}: the
+#' proteomics DE module, the Methods text and the Excel "How to read" sheet all
+#' call it, so none of them can describe a different rule from the one that
+#' ran. Only proteomics implements the exclusion; every other mode resolves to
+#' FALSE. Absent means off, so existing configs behave as before.
+#' \code{validate_proteomics_config()} rejects the option together with
+#' precomputed DE tables, where no test is run that it could narrow.
+#'
+#' @param de_cfg The \code{de} config list for the mode (may be NULL).
+#' @param mode Mode string, e.g. "proteomics".
+#' @return TRUE when flagged rows are left untested per contrast, else FALSE.
+de_excludes_imputed_above_measured <- function(de_cfg, mode = "proteomics") {
+    identical(mode, "proteomics") &&
+        isTRUE((de_cfg %||% list())[["exclude_imputed_above_measured"]])
+}
+
 #' Drop worksheet relationships for parts openxlsx never writes
 #'
 #' \code{openxlsx::addWorksheet()} registers a drawing relationship, a
@@ -184,9 +202,14 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
 #'   columns come from the first run while log2FC.imputs is the consensus across
 #'   all of them, so the reconciliation the notes describe is different. Ignored
 #'   for other modes.
+#' @param exclude_imputed_above_measured Logical; whether this run left the
+#'   rows flagged in \code{imputed_above_measured.<contrast>} untested
+#'   (\code{\link{de_excludes_imputed_above_measured}}). Changes that column's
+#'   glossary entry only. Ignored for other modes.
 #' @return List with \code{glossary} (data.frame: Column, Meaning) and
 #'   \code{notes} (character vector, one paragraph per element).
-build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
+build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE,
+                                   exclude_imputed_above_measured = FALSE) {
     fc_rule <- paste(
         "linearFC = 2^log2FC when log2FC is at least 0, and -1 / 2^log2FC when it is negative.",
         "It is a signed linear fold change, not a log: linearFC = -1.61 means 1.61-fold lower in the numerator group."
@@ -274,7 +297,17 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
                 fc_rule,
                 "Quantile across imputation runs of the moderated t-test p-value.",
                 "Quantile across imputation runs of the Benjamini-Hochberg adjusted p-value.",
-                "Reads \"FLAG: Imputation value higher than measured\" when, across the samples of this contrast's two groups, the imputed .norm values average higher than the measured ones; blank otherwise. Imputation here assumes a missing value is low, so a flagged row has a fold change and p-value resting on filled-in numbers that contradict that assumption (a protein not detected in one group can even come out higher there). A hint for filtering, not part of the significance call. Also blank when the contrast's samples hold no imputed or no measured value.",
+                if (!isTRUE(exclude_imputed_above_measured)) {
+                    "Reads \"FLAG: Imputation value higher than measured\" when, across the samples of this contrast's two groups, the imputed .norm values average higher than the measured ones; blank otherwise. Imputation here assumes a missing value is low, so a flagged row has a fold change and p-value resting on filled-in numbers that contradict that assumption (a protein not detected in one group can even come out higher there). A hint for filtering, not part of the significance call. Also blank when the contrast's samples hold no imputed or no measured value."
+                } else paste(
+                    "Reads \"FLAG: Imputation value higher than measured\" when, across the samples of this contrast's two groups, the imputed .norm values average higher than the measured ones; blank otherwise. Imputation here assumes a missing value is low, so a flagged row has a fold change resting on filled-in numbers that contradict that assumption (a protein not detected in one group can even come out higher there).",
+                    if (multi_imp) {
+                        "This run excluded such rows from testing: in each imputation run, a row flagged on that run's values got no p-value in this contrast; the other rows kept the adjusted p-values computed over all rows. A run that left a row untested counts as a run it did not pass and enters the row's pvalue.imputs and padj.imputs quantiles as p = 1; a row left untested in every run has no p-value. This column describes the first run (the .norm block); a row flagged here may still carry p-values from runs in which it was not flagged."
+                    } else {
+                        "This run excluded flagged rows from testing: they have no p-value in this contrast and cannot pass; the other rows keep the adjusted p-values computed over all rows. The fold change is still reported."
+                    },
+                    "Also blank when the contrast's samples hold no imputed or no measured value."
+                ),
                 "Direction, filled only for features that pass the consensus rule (see the Cutoffs sheet)."
             ),
             stringsAsFactors = FALSE
@@ -349,12 +382,17 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
 #' @param sheet Sheet name (default "How to read").
 #' @param multi_imputation Logical; passed to \code{\link{build_provenance_notes}}
 #'   so the reconciliation notes match how many times this run imputed.
+#' @param exclude_imputed_above_measured Logical; passed to
+#'   \code{\link{build_provenance_notes}}.
 #' @return TRUE, invisibly.
 add_provenance_sheet <- function(wb, mode = "rna", sheet = "How to read",
-                                 multi_imputation = TRUE) {
+                                 multi_imputation = TRUE,
+                                 exclude_imputed_above_measured = FALSE) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
 
-    info <- build_provenance_notes(mode, multi_imputation = multi_imputation)
+    info <- build_provenance_notes(
+        mode, multi_imputation = multi_imputation,
+        exclude_imputed_above_measured = exclude_imputed_above_measured)
 
     if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)
     openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = FALSE)
@@ -722,7 +760,9 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             # assuming the default.
             add_provenance_sheet(
                 wb, mode = mode,
-                multi_imputation = config$modes[[mode]]$imputation$multi_imputation %||% TRUE
+                multi_imputation = config$modes[[mode]]$imputation$multi_imputation %||% TRUE,
+                exclude_imputed_above_measured = de_excludes_imputed_above_measured(
+                    config$modes[[mode]]$de, mode)
             )
         }
         if (!is.null(de_reconciliation) && is.data.frame(de_reconciliation) &&

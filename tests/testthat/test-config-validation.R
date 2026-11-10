@@ -80,6 +80,45 @@ test_that("validate_proteomics_config errors on p_cutoff < 0", {
     expect_error(validate_proteomics_config(cfg))
 })
 
+test_that("de$exclude_imputed_above_measured accepts TRUE/FALSE/absent and rejects the rest", {
+    cfg <- create_mock_proteomics_config()
+    for (v in list(TRUE, FALSE)) {
+        cfg$de$exclude_imputed_above_measured <- v
+        expect_true(validate_proteomics_config(cfg))
+    }
+    for (v in list("yes", NA, c(TRUE, FALSE))) {
+        cfg$de$exclude_imputed_above_measured <- v
+        expect_error(validate_proteomics_config(cfg), "exclude_imputed_above_measured")
+    }
+})
+
+test_that("de$exclude_imputed_above_measured needs plain model p-values with BH", {
+    cfg <- create_mock_proteomics_config()
+    cfg$de$exclude_imputed_above_measured <- TRUE
+    cfg$de$fdrtool_correction <- TRUE
+    expect_error(validate_proteomics_config(cfg), "fdrtool_correction")
+    cfg$de$fdrtool_correction <- FALSE
+    expect_true(validate_proteomics_config(cfg))
+    cfg$de$p_adjust_method <- "bonferroni"
+    expect_error(validate_proteomics_config(cfg), "BH")
+    cfg$de$p_adjust_method <- NULL
+    expect_true(validate_proteomics_config(cfg))
+    # Off: the other settings stay free.
+    cfg$de$exclude_imputed_above_measured <- FALSE
+    cfg$de$fdrtool_correction <- TRUE
+    cfg$de$p_adjust_method <- "holm"
+    expect_true(validate_proteomics_config(cfg))
+})
+
+test_that("de$exclude_imputed_above_measured is refused with precomputed DE tables", {
+    cfg <- create_mock_proteomics_config()
+    cfg$files$de_table <- "precomputed_de.csv"
+    cfg$de$exclude_imputed_above_measured <- TRUE
+    expect_error(validate_proteomics_config(cfg), "precomputed")
+    cfg$de$exclude_imputed_above_measured <- FALSE
+    expect_true(validate_proteomics_config(cfg))
+})
+
 test_that("validate_proteomics_config passes with valid PPI config", {
     cfg <- create_mock_proteomics_config()
     expect_true(validate_proteomics_config(cfg))
