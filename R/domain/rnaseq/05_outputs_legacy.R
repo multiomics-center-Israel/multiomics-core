@@ -52,6 +52,12 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
 
     files <- c(files, save_tsv(summary_df, dirs$datasets, sprintf("deseq2_summary_p%s.tsv", p_tag_generic(config, "rna"))))
 
+    # 2a) The DE design that was fitted -- the evidence the Methods text reads.
+    # Absent for precomputed DE, where no model is fitted.
+    if (!is.null(de_res$design)) {
+        files <- c(files, save_tsv(de_res$design, dirs$datasets, "de_design.tsv"))
+    }
+
     # 2b) DE summary counts table (up/down/any per contrast)
     if (!is.null(inputs$contrasts)) {
         summary_counts <- build_de_summary_counts(summary_df, inputs$contrasts)
