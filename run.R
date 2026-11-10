@@ -2561,7 +2561,19 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     }
   }
   cat("  Starting pipeline...\n\n")
-  targets::tar_make()
+  # execution_info is written at the start of tar_make() and marked "started".
+  # Only here is it known whether the run finished, so record that outcome;
+  # a failed run otherwise leaves earlier outputs under this run's commit.
+  source(file.path(getwd(), "R", "core", "04_config.R"), local = TRUE)
+  record_status <- function(status) {
+    rd <- tryCatch(targets::tar_read(run_dir), error = function(e) NULL)
+    if (!is.null(rd)) write_run_status(rd, status, only_from = "started")
+  }
+  tryCatch(targets::tar_make(), error = function(e) {
+    record_status("failed")
+    stop(e)
+  })
+  record_status("completed")
   # Find the reports
   cfg <- yaml::read_yaml(config_path)
   run_dir_name <- sprintf("Results_%s_%s",
