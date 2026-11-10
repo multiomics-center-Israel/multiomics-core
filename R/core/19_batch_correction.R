@@ -22,6 +22,19 @@
 #'
 #' These functions are pure: matrix in, matrix out, no file I/O.
 
+#' Drop factor levels that no sample carries
+#'
+#' A level left over from subsetting the samples becomes an all-zero column in
+#' `model.matrix()`, which the rank check would read as confounding.
+#'
+#' @param x A factor, a data.frame (its factor columns are dropped), a
+#'   character vector or `NULL`.
+#' @return `x` without unused factor levels.
+#' @noRd
+drop_unused_levels <- function(x) {
+  if (is.factor(x) || is.data.frame(x)) droplevels(x) else x
+}
+
 #' Build the model matrix that carries the biology to keep
 #'
 #' @param group_var Factor of group labels per sample, or `NULL`.
@@ -32,6 +45,8 @@
 #' @noRd
 batch_keep_design <- function(group_var = NULL, covariates = NULL) {
   if (is.null(group_var) && is.null(covariates)) return(NULL)
+  group_var <- drop_unused_levels(group_var)
+  covariates <- drop_unused_levels(covariates)
   n <- if (!is.null(group_var)) length(group_var) else nrow(covariates)
   md <- data.frame(.row = seq_len(n))
   if (!is.null(group_var)) md[[".group"]] <- group_var
@@ -63,7 +78,7 @@ assert_batch_not_confounded <- function(batch_var, group_var = NULL,
   if (is.null(keep)) keep <- matrix(1, nrow = length(batch_var), ncol = 1)
 
   batch_cols <- function(b) {
-    b <- as.factor(b)
+    b <- droplevels(as.factor(b))
     if (nlevels(b) < 2) return(NULL)
     stats::model.matrix(~b)[, -1, drop = FALSE]
   }
@@ -71,7 +86,7 @@ assert_batch_not_confounded <- function(batch_var, group_var = NULL,
 
   if (qr(x)$rank < ncol(x)) {
     per_batch <- if (!is.null(group_var)) {
-      tab <- table(as.factor(batch_var), as.factor(group_var))
+      tab <- table(droplevels(as.factor(batch_var)), droplevels(as.factor(group_var)))
       paste(vapply(rownames(tab), function(b) {
         sprintf("%s: %s", b, paste(colnames(tab)[tab[b, ] > 0], collapse = ", "))
       }, character(1)), collapse = "; ")
@@ -114,6 +129,9 @@ assert_batch_input_finite <- function(expr, method) {
 #' @param mean_only Logical, passed to ComBat as `mean.only`. `TRUE` adjusts
 #'   only the batch means, not their spread; use it when batches are small
 #'   (e.g. two samples per batch), where the per-batch spread is unreliable.
+#'   A batch with a single sample requires `TRUE`: ComBat would otherwise
+#'   switch to mean-only on its own, and the caller (and the report) would
+#'   describe a correction that did not run, so this stops instead.
 #' @param seed Integer seed passed through `withr::with_seed()`.
 #' @return Corrected numeric matrix with the same dim/dimnames as `expr`.
 #' @examples
@@ -133,6 +151,15 @@ correct_batch_combat <- function(expr, batch_var, group_var = NULL,
     ))
   }
   assert_batch_input_finite(expr, "ComBat")
+  batch_var <- droplevels(as.factor(batch_var))
+
+  singletons <- names(which(table(batch_var) == 1))
+  if (!isTRUE(mean_only) && length(singletons) > 0) {
+    cli::cli_abort(c(
+      "ComBat cannot adjust the spread of a batch with a single sample: {.val {singletons}}.",
+      "i" = "Turn on mean-only correction (combat_mean_only), use the limma method, or merge that sample into another batch."
+    ))
+  }
 
   mod <- if (isTRUE(preserve_group)) batch_keep_design(group_var, covariates)
   if (!is.null(mod)) {
@@ -177,6 +204,8 @@ correct_batch_combat <- function(expr, batch_var, group_var = NULL,
 correct_batch_limma <- function(expr, batch_var, batch2 = NULL,
                                 group_var = NULL, covariates = NULL) {
   assert_batch_input_finite(expr, "limma")
+  batch_var <- droplevels(as.factor(batch_var))
+  if (!is.null(batch2)) batch2 <- droplevels(as.factor(batch2))
   assert_batch_not_confounded(batch_var, group_var = group_var,
                               batch2 = batch2, covariates = covariates)
 

@@ -115,7 +115,8 @@ modes:
       covariates: null
       # ComBat only. true = adjust the batch means only, not their spread.
       # Use when batches are small (e.g. 2 samples per batch), where the
-      # per-batch spread cannot be estimated reliably.
+      # per-batch spread cannot be estimated reliably. Required when a
+      # batch has a single sample; without it the run stops.
       combat_mean_only: false
 
       # --- 2. Batch in differential expression (de_mode) ---

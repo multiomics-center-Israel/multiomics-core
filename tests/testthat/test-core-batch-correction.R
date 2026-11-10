@@ -52,6 +52,22 @@ test_that("assert_batch_not_confounded stops when the second batch repeats the f
                  "confounded")
 })
 
+test_that("unused factor levels are not read as confounding", {
+    # A level left over from subsetting samples would be an all-zero column.
+    fx <- make_batch_fixture(layout = "unbalanced", batch_shift = 2)
+    group <- factor(as.character(fx$group), levels = c("Ctrl", "Treat", "Dropped"))
+    batch <- factor(as.character(fx$batch), levels = c("B1", "B2", "B9"))
+    covs <- data.frame(Sex = factor(rep(c("F", "M"), 4), levels = c("F", "M", "X")))
+
+    expect_true(assert_batch_not_confounded(batch, group, covariates = covs))
+    out <- correct_batch_limma(fx$expr, batch, group_var = group, covariates = covs)
+    # The shift of 2 is removed; what is left between the batches is the
+    # 3-vs-1 Treat composition, 4 * (3/4 - 1/4) = 2.
+    expect_equal(batch_diff(fx$expr, fx$batch), 4, tolerance = 1e-8)
+    expect_equal(batch_diff(out, fx$batch), 2, tolerance = 1e-8)
+    expect_equal(group_diff(out, fx$group), 4, tolerance = 1e-8)
+})
+
 # --- limma backend -----------------------------------------------------------
 
 test_that("correct_batch_limma removes an additive batch shift", {
@@ -139,6 +155,20 @@ test_that("correct_batch_combat with mean_only shifts batches without rescaling 
 
     expect_equal(sd_in_b2(mean_only), sd_in_b2(fx$expr), tolerance = 1e-8)
     expect_false(isTRUE(all.equal(sd_in_b2(full), sd_in_b2(fx$expr))))
+})
+
+test_that("correct_batch_combat needs mean_only for a single-sample batch", {
+    # sva::ComBat switches to mean-only by itself when a batch has one sample;
+    # refusing instead keeps the configured flag equal to what ran.
+    skip_if_not_installed("sva")
+    fx <- make_batch_fixture(noise = 0.3)
+    batch <- factor(c("B1", "B1", "B1", "B1", "B2", "B2", "B2", "B3"))
+
+    expect_error(correct_batch_combat(fx$expr, batch, fx$group, mean_only = FALSE),
+                 "single sample")
+    out <- suppressMessages(
+        correct_batch_combat(fx$expr, batch, fx$group, mean_only = TRUE, seed = 1))
+    expect_equal(dim(out), dim(fx$expr))
 })
 
 test_that("correct_batch_combat stops on a confounded design", {
