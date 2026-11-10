@@ -820,7 +820,10 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                 "that contrast%s%s."),
                 if (p_adjust_none) "" else
                     ", and the adjusted p-values were recomputed over the remaining proteins",
-                if (multi_on) ", with the rule applied separately in each imputation run" else ""))
+                if (multi_on) paste0(
+                    ", with the rule applied separately in each imputation run and a run ",
+                    "that left a protein untested counted as p = 1 in its summarised p-values ",
+                    "unless every run left it untested") else ""))
         }
         # Only a single-run analysis is decided by one threshold pair. Under
         # multiple imputation the rule is a vote: mark_pass1() applies both

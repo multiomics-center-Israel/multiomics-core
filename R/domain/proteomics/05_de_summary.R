@@ -92,6 +92,20 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         p_mat <- per_run_matrix(function(n) runs_de_tables[[n]][[cn]][["P.Value"]])
         padj_mat <- per_run_matrix(function(n) runs_de_tables[[n]][[cn]][["adj.P.Val"]])
 
+        # de.exclude_imputed_above_measured: a run that left a row untested
+        # counts as p = 1 in that row's quantiles (conservative), unless every
+        # run left it untested -- then it was never tested and stays NA, which
+        # is also the single-draw result. Only the quantile inputs change: the
+        # per-run tables keep NA, so mark_pass1() below still reads a non-pass.
+        if (IMPUTED_ABOVE_MEASURED_EXCLUDED_COL %in% colnames(runs_de_tables[[1]][[cn]])) {
+            excl_mat <- per_run_matrix(function(n) {
+                runs_de_tables[[n]][[cn]][[IMPUTED_ABOVE_MEASURED_EXCLUDED_COL]] %in% TRUE
+            })
+            partly <- excl_mat & (rowSums(excl_mat) < NO_REPETITIONS)
+            p_mat[partly] <- 1
+            padj_mat[partly] <- 1
+        }
+
         pass1_mat <- per_run_matrix(function(n) {
             mark_pass1(runs_de_tables[[n]][[cn]],
                 p_cutoff    = p_cutoff,

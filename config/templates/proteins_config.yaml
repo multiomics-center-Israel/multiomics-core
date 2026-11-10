@@ -170,8 +170,10 @@ modes:
       # the rule behind imputed_above_measured.<contrast>. The model fit is
       # unchanged; in each imputation run the flagged proteins
       # lose their p-value in that contrast only and the adjustment is
-      # recomputed over the rest. Proteins left untested in every run also
-      # leave that contrast's enrichment ranking and ORA background.
+      # recomputed over the rest. In the summary across runs an excluded run
+      # counts as p = 1 (no p-value if excluded in every run). Proteins left
+      # untested in every run leave that contrast's enrichment ranking and ORA
+      # background; the pooled ranking drops those excluded in any run.
       exclude_imputed_above_measured: false
       paired: false           # relevant for t-test
       pairing_col: null          # metadata column for paired test (e.g. "Subject")

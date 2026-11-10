@@ -104,6 +104,9 @@ flag_imputed_above_measured_proteomics <- function(pre, expr_model, contrasts_df
     out
 }
 
+#' Column marking, in a per-run DE table, the rows the exclusion left untested
+IMPUTED_ABOVE_MEASURED_EXCLUDED_COL <- "imputed_above_measured_excluded"
+
 #' Leave rows flagged by the imputed-above-measured rule untested, per contrast
 #'
 #' Called by \code{mod_proteomics_de()} between the per-run model fits and
@@ -120,9 +123,13 @@ flag_imputed_above_measured_proteomics <- function(pre, expr_model, contrasts_df
 #' other columns are left as fitted.
 #'
 #' Because this runs before the summary, a run in which a row was excluded
-#' counts as a run in which it did not pass, and the summarised p-values are
-#' quantiles over the runs that tested it. With one imputation run this is the
-#' plain rule: flagged rows have no p-value and cannot pass.
+#' counts as a run in which it did not pass. Each table also gets a logical
+#' column \code{imputed_above_measured_excluded}, from which
+#' \code{\link{summarize_limma_mult_imputation}} counts an excluded run as
+#' \code{P.Value} = \code{adj.P.Val} = 1 in the summarised quantiles, unless
+#' the row was excluded in every run: then it has no summarised p-value. With
+#' one imputation run this is the plain rule: flagged rows have no p-value and
+#' cannot pass.
 #'
 #' @param runs_de_tables List over imputation runs of named lists of
 #'   per-contrast DE tables (each with the feature ID column, \code{P.Value}
@@ -135,7 +142,8 @@ flag_imputed_above_measured_proteomics <- function(pre, expr_model, contrasts_df
 #' @param config Full pipeline config (feature ID column, p-value adjustment
 #'   method, sample-ID column).
 #' @return A list with \code{runs_de_tables} (the input with the flagged rows'
-#'   p-values removed and the adjusted p-values recomputed) and \code{excluded}:
+#'   p-values removed, the adjusted p-values recomputed and the
+#'   \code{imputed_above_measured_excluded} column added) and \code{excluded}:
 #'   a list holding \code{n_runs} and \code{n_excluded}, an integer matrix
 #'   (features x contrasts, named by feature ID and contrast) counting the runs
 #'   in which each row was left untested.
@@ -191,8 +199,11 @@ exclude_imputed_above_measured_proteomics <- function(runs_de_tables, imputation
                 # non-missing values, so this is the adjustment over the rows of
                 # this contrast that are still tested.
                 tab$adj.P.Val <- stats::p.adjust(tab$P.Value, method = adj_method)
-                runs_de_tables[[i]][[cn]] <- tab
             }
+            # Read by summarize_limma_mult_imputation(), which has to tell an
+            # excluded run apart from a row the method itself left untested.
+            tab[[IMPUTED_ABOVE_MEASURED_EXCLUDED_COL]] <- hit
+            runs_de_tables[[i]][[cn]] <- tab
             row_at <- match(ids, ref_ids)
             n_excluded[row_at[hit], cn] <- n_excluded[row_at[hit], cn] + 1L
         }
@@ -202,24 +213,30 @@ exclude_imputed_above_measured_proteomics <- function(runs_de_tables, imputation
          excluded = list(n_runs = length(runs_de_tables), n_excluded = n_excluded))
 }
 
-#' Rows left untested in a contrast in every imputation run
+#' Rows the exclusion left untested in a contrast
 #'
 #' The rows enrichment drops from a contrast when
-#' \code{de.exclude_imputed_above_measured} is on: those with no p-value left in
-#' any run, which are exactly the rows whose summarised p-value the exclusion
-#' removed. A row excluded in only some runs still has a summarised p-value and
-#' stays.
+#' \code{de.exclude_imputed_above_measured} is on. The legacy enrichment
+#' (\code{in_every_run = TRUE}) drops the rows excluded in every run, which are
+#' exactly the rows left with no summarised p-value; a row excluded in only some
+#' runs keeps a summarised p-value (its excluded runs counted as p = 1) and
+#' stays. The pooled-ranking enrichment (\code{in_every_run = FALSE}) drops a
+#' row excluded in any run, because Rubin pooling averages every draw's fit and
+#' has no way to count a draw as untested.
 #'
 #' @param excluded The \code{imputed_above_measured_excluded} element of the
 #'   proteomics DE result (\code{excluded} from
 #'   \code{\link{exclude_imputed_above_measured_proteomics}}), or NULL.
 #' @param contrast Contrast name as it appears in the summary columns.
+#' @param in_every_run TRUE for rows excluded in every run, FALSE for rows
+#'   excluded in at least one.
 #' @return Character vector of feature IDs; empty when nothing was excluded or
 #'   the exclusion did not run.
-imputed_above_measured_excluded_ids <- function(excluded, contrast) {
+imputed_above_measured_excluded_ids <- function(excluded, contrast, in_every_run = TRUE) {
     if (is.null(excluded) || is.null(excluded$n_excluded)) return(character(0))
     m <- excluded$n_excluded
     col <- match(normalize_contrast_name(contrast), normalize_contrast_name(colnames(m)))
     if (is.na(col)) return(character(0))
-    rownames(m)[m[, col] >= excluded$n_runs]
+    need <- if (isTRUE(in_every_run)) excluded$n_runs else 1L
+    rownames(m)[m[, col] >= need]
 }

@@ -57,6 +57,21 @@ build_pooled_ranking_tables <- function(de_res, pre, config) {
 
     tables <- lapply(contrasts, function(cn) {
         pooled <- pool_limma_imputations(runs, cn, observed = observed)
+        # de.exclude_imputed_above_measured: drop the rows excluded in any run.
+        # The pooled z averages every draw's fit, including the draws that left
+        # the row untested, so a partly excluded row cannot be pooled only over
+        # the draws that tested it without changing m row by row. Dropping it is
+        # the conservative choice; it is stricter than the legacy enrichment,
+        # which keeps such a row with its excluded runs counted as p = 1.
+        drop_ids <- imputed_above_measured_excluded_ids(
+            de_res$imputed_above_measured_excluded, cn, in_every_run = FALSE)
+        if (length(drop_ids) > 0L) {
+            keep <- !as.character(pooled$FeatureID) %in% drop_ids
+            message(sprintf("  %s: %d protein(s) left untested in at least one run by ",
+                            cn, sum(!keep)),
+                    "the imputed-above-measured rule are left out of the pooled ranking.")
+            pooled <- pooled[keep, , drop = FALSE]
+        }
         pooled$stat <- pooled$z_pooled
         pooled$log2FoldChange <- pooled$pooled_logFC
 

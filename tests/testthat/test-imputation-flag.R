@@ -219,8 +219,11 @@ test_that("a flagged row loses its p-values in its own contrast only", {
     expect_true(is.na(s$adj.P.Val[s$FeatureID == "p_high"]))
     # The fold change is still the fitted one.
     expect_identical(s$logFC, runs[[1]]$S_vs_NS$logFC)
-    # Not flagged in X_vs_NS: that table is untouched.
-    expect_identical(x, runs[[1]]$X_vs_NS)
+    # Not flagged in X_vs_NS: that table keeps its values, and only gains the
+    # all-FALSE exclusion marker the summary reads.
+    expect_identical(x[names(runs[[1]]$X_vs_NS)], runs[[1]]$X_vs_NS)
+    expect_identical(x$imputed_above_measured_excluded, c(FALSE, FALSE, FALSE))
+    expect_identical(s$imputed_above_measured_excluded, c(TRUE, FALSE, FALSE))
 
     expect_identical(out$excluded$n_runs, 1L)
     expect_identical(unname(out$excluded$n_excluded["p_high", ]), c(1L, 0L))
@@ -283,26 +286,45 @@ test_that("under multiple imputation each run is judged on its own draw", {
     out <- exclude_imputed_above_measured_proteomics(
         runs, list(fx$model, model2), fx$pre, fx$contrasts, flag_config())
     expect_true(is.na(out$runs_de_tables[[1]]$S_vs_NS$P.Value[1]))
-    expect_identical(out$runs_de_tables[[2]]$S_vs_NS, runs[[2]]$S_vs_NS)
+    t2 <- out$runs_de_tables[[2]]$S_vs_NS
+    expect_identical(t2[names(runs[[2]]$S_vs_NS)], runs[[2]]$S_vs_NS)
     expect_identical(out$excluded$n_runs, 2L)
     expect_identical(out$excluded$n_excluded["p_high", "S_vs_NS"], 1L)
 
-    # Applied before the summary: the quantile is over the run that tested it,
-    # and the run that did not test it counts as not passing.
+    # Applied before the summary: the run that did not test it counts as a
+    # non-pass, and enters the quantiles as p = 1 (conservative).
     cfg <- flag_config()
     cfg$modes$proteomics$imputation <- list(multi_imputation = TRUE,
                                             no_repetitions = 2, min_no_passed = 1)
     sm <- summarize_limma_mult_imputation(out$runs_de_tables, cfg)
     r <- sm$FeatureID == "p_high"
-    expect_equal(sm$pvalue.imputs.S_vs_NS[r], 0.003)
+    q <- 1 / 2
+    padj2 <- p.adjust(p2$S_vs_NS, method = "BH")[1]
+    expect_equal(sm$pvalue.imputs.S_vs_NS[r], unname(quantile(c(1, 0.003), q)))
+    expect_equal(sm$padj.imputs.S_vs_NS[r], unname(quantile(c(1, padj2), q)))
     expect_identical(sm$sum.pass.S_vs_NS[r], 1)
+    # The vote alone would pass it; the p = 1 run holds the summarised padj
+    # above the cutoff, so the consensus call is not made.
+    expect_true(is.na(sm$pass.imputs.S_vs_NS[r]))
+    # Rows that were not excluded are summarised as before.
+    base <- summarize_limma_mult_imputation(runs, cfg)
+    expect_equal(sm$padj.imputs.S_vs_NS[!r], base$padj.imputs.S_vs_NS[!r])
+    expect_equal(sm[, grep("X_vs_NS", names(sm))], base[, grep("X_vs_NS", names(base))])
 
     # Excluded in one of two runs: it keeps a summarised p-value, so enrichment
     # keeps it. Excluded in both: it goes.
     expect_length(imputed_above_measured_excluded_ids(out$excluded, "S_vs_NS"), 0L)
+    expect_identical(imputed_above_measured_excluded_ids(out$excluded, "S_vs_NS",
+                                                         in_every_run = FALSE), "p_high")
     both <- exclude_imputed_above_measured_proteomics(
         runs, list(fx$model, fx$model), fx$pre, fx$contrasts, flag_config())
     expect_identical(imputed_above_measured_excluded_ids(both$excluded, "S_vs_NS"), "p_high")
+    # Excluded in every run: never tested, so no summarised p-value (not 1).
+    sm_both <- summarize_limma_mult_imputation(both$runs_de_tables, cfg)
+    rb <- sm_both$FeatureID == "p_high"
+    expect_true(is.na(sm_both$pvalue.imputs.S_vs_NS[rb]))
+    expect_true(is.na(sm_both$padj.imputs.S_vs_NS[rb]))
+    expect_true(is.na(sm_both$pass.imputs.S_vs_NS[rb]))
     expect_length(imputed_above_measured_excluded_ids(both$excluded, "X_vs_NS"), 0L)
     expect_length(imputed_above_measured_excluded_ids(NULL, "S_vs_NS"), 0L)
 })
@@ -464,6 +486,30 @@ test_that("enrichment leaves the excluded rows out of that contrast's table only
     expect_identical(nrow(seen$B_vs_A), 40L)
 })
 
+test_that("the pooled ranking drops rows excluded in any run, per contrast", {
+    skip_if_not_installed("limma")
+    x <- excl_de_inputs(exclude = TRUE)
+    on <- run_excl_de(x)
+    # P3 stands in for a row excluded in one run of three: the legacy rule
+    # keeps it, the pooled rule drops it.
+    on$imputed_above_measured_excluded$n_excluded["P3", "B_vs_A"] <- 1L
+    cfg <- x$config
+    cfg$modes$proteomics$annotation <- list(skip_annotation = TRUE)
+
+    rk <- suppressMessages(build_pooled_ranking_tables(on, x$pre, cfg))
+    expect_false(any(c("P1", "P2", "P3") %in% rk$B_vs_A$FeatureID))
+    expect_true(all(c("P1", "P2", "P3") %in% rk$C_vs_A$FeatureID))
+    expect_identical(nrow(rk$B_vs_A), 37L)
+    expect_identical(nrow(rk$C_vs_A), 40L)
+    expect_false("P3" %in% imputed_above_measured_excluded_ids(
+        on$imputed_above_measured_excluded, "B_vs_A"))
+
+    # Option off: the pooled ranking is untouched.
+    off <- run_excl_de(excl_de_inputs(exclude = FALSE))
+    rk_off <- suppressMessages(build_pooled_ranking_tables(off, x$pre, cfg))
+    expect_identical(nrow(rk_off$B_vs_A), 40L)
+})
+
 # --- config, Methods text and Excel glossary -----------------------------------
 
 test_that("one resolver: absent and false are off, other modes are always off", {
@@ -491,6 +537,7 @@ test_that("the Excel glossary says flagged rows were excluded only when they wer
     expect_no_match(on1, "not part of the significance call", fixed = TRUE)
     on_m <- entry(multi_imputation = TRUE, exclude_imputed_above_measured = TRUE)
     expect_match(on_m, "in each imputation run", fixed = TRUE)
+    expect_match(on_m, "as p = 1", fixed = TRUE)
 })
 
 test_that("the Methods text gains one sentence only when the option is on", {
@@ -504,5 +551,6 @@ test_that("the Methods text gains one sentence only when the option is on", {
     on <- build_proteomics_methods_text(cfg, de_method = "limma")$differential
     expect_match(on, "left untested", fixed = TRUE)
     expect_match(on, "separately in each imputation run", fixed = TRUE)
+    expect_match(on, "counted as p = 1", fixed = TRUE)
     expect_identical(sub(" In each contrast, proteins whose imputed.*$", "", on), off)
 })
