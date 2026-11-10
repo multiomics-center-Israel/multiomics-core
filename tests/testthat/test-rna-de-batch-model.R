@@ -370,6 +370,39 @@ test_that("rna_de_design_sentence describes only a batch that was fitted", {
     expect_match(lim, "The limma model included batch", fixed = TRUE)
 })
 
+test_that("de_design.tsv always reflects the current run in a reused output directory", {
+    dir <- withr::local_tempdir()
+    path <- file.path(dir, "de_design.tsv")
+    # What report_template.Rmd does: the sentence from the file if it exists.
+    methods_text <- function() {
+        if (file.exists(path)) rna_de_design_sentence(read.delim(path, stringsAsFactors = FALSE))
+    }
+    x <- stats::model.matrix(~ Batch + Condition, data = make_batch_meta())
+    batch_run <- list(design = rna_de_design_record(
+        "DESeq2", "default", "~Batch + Condition", "Batch", x))
+
+    # Run 1 fits batch: the file is written and Methods describes it.
+    expect_identical(write_rna_de_design(batch_run, dir), path)
+    expect_match(methods_text(), "batch column Batch", fixed = TRUE)
+
+    # Run 2, same directory, precomputed DE: no model, so the old file must go.
+    expect_identical(write_rna_de_design(list(dds = NULL, tables = list()), dir), character(0))
+    expect_false(file.exists(path))
+    expect_null(methods_text())
+    # Nothing to remove is not an error.
+    expect_identical(write_rna_de_design(list(), dir), character(0))
+
+    # Run 3 fits batch again, then run 4 fits a model without batch.
+    write_rna_de_design(batch_run, dir)
+    no_batch_run <- list(design = rna_de_design_record(
+        "DESeq2", "default", "~Condition", character(0),
+        stats::model.matrix(~ Condition, data = make_batch_meta())))
+    write_rna_de_design(no_batch_run, dir)
+    expect_true(file.exists(path))
+    expect_identical(read.delim(path, stringsAsFactors = FALSE)$formula, "~Condition")
+    expect_null(methods_text())
+})
+
 test_that("de_design.tsv round-trips into the Methods sentence", {
     dir <- withr::local_tempdir()
     meta <- make_batch_meta()
