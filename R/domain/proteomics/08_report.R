@@ -718,6 +718,12 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
             "Batch effects were corrected with %s%s. The correction was estimated and applied on ",
             "the single-imputed complete matrix, and quality control and clustering use the ",
             "corrected values; measured values are not altered."), bc_name, bc_col))
+        # correct_batch_combat() passes this flag to ComBat as mean.only.
+        if (identical(bc_m, "combat") && isTRUE(bc$combat_mean_only)) {
+            dp <- paste(dp, paste0(
+                "ComBat adjusted only the batch means (mean.only), not the ",
+                "spread of each batch."))
+        }
         if (identical(bc_m, "probatch")) {
             dp <- paste(dp, paste0(
                 "proBatch median-centering does not model the biological condition, so ",
