@@ -90,6 +90,21 @@ mod_proteomics_exports <- function(
                    save_tsv(bd_rows, dirs$datasets, basename(bd_contrasts_path)))
     }
 
+    # 3c. Continuous-covariate design diagnostics (de$covariates), removed when
+    #     no covariate was modelled for the same reason as the batch tables.
+    cd_path <- file.path(dirs$datasets, "covariate_design_contrasts.tsv")
+    cd <- de_res$covariate_design
+    if (is.null(cd)) {
+        unlink(cd_path)
+    } else {
+        cd_rows <- rbind(cd$contrasts, if (length(cd$notes) > 0) {
+            data.frame(Contrast = "(design)", Covariate = NA_character_,
+                       Difference = NA_real_, R2_on_condition = NA_real_,
+                       SE_inflation = NA_real_, Note = cd$notes, stringsAsFactors = FALSE)
+        })
+        files <- c(files, save_tsv(cd_rows, dirs$datasets, basename(cd_path)))
+    }
+
     # =========================================================================
     # 4. Build final_results ONCE (the key optimization)
     # =========================================================================

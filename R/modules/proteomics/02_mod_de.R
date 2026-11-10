@@ -141,12 +141,21 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
 
         # The design depends on the metadata only, so run 1 speaks for every
         # run; warning per run would repeat the same text no_repetitions times.
+        # The same holds for the covariate design.
         batch_design <- runs[[1]]$batch_design
         if (!is.null(batch_design)) {
             notes <- c(batch_design$notes,
                        with(batch_design$contrasts,
                             sprintf("Contrast '%s': %s", Contrast, Note)[nzchar(Note)]))
             for (n in notes) warning("Batch design: ", n, call. = FALSE)
+        }
+        covariate_design <- runs[[1]]$covariate_design
+        if (!is.null(covariate_design)) {
+            notes <- c(covariate_design$notes,
+                       with(covariate_design$contrasts,
+                            sprintf("Contrast '%s', covariate '%s': %s",
+                                    Contrast, Covariate, Note)[nzchar(Note)]))
+            for (n in notes) warning("Covariate design: ", n, call. = FALSE)
         }
 
         return(list(
@@ -156,7 +165,8 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             runs_de_tables = runs_de_tables,
             summary_df = summary_df,
             de_model = runs[[1]]$fit2,
-            batch_design = batch_design
+            batch_design = batch_design,
+            covariate_design = covariate_design
         ))
     }
 

@@ -1359,3 +1359,25 @@ test_that("the report's method note describes only the methods that wrote tables
     expect_match(both, "fgsea asks", fixed = TRUE)
     expect_match(both, "The two methods test different null hypotheses", fixed = TRUE)
 })
+
+test_that("de$covariates are named in the limma sentence only where they were fitted", {
+    # get_proteomics_de_covariates() is the reader the fit uses too, and
+    # validation allows covariates only with pooled limma and no precomputed DE.
+    one <- blocks_for(de = list(method = "limma", p_cutoff = 0.05, linear_fc_cutoff = 1.5,
+                                covariates = list("depth")))$differential
+    expect_match(one, paste0("The design also included depth as centred continuous ",
+                             "covariate (~ 0 + condition + depth)"), fixed = TRUE)
+    expect_match(one, "adjusting for it;", fixed = TRUE)
+
+    two <- blocks_for(de = list(method = "limma", p_cutoff = 0.05, linear_fc_cutoff = 1.5,
+                                covariates = list("depth", "ratio")))$differential
+    expect_match(two, "depth, ratio as centred continuous covariates (~ 0 + condition + depth + ratio)",
+                 fixed = TRUE)
+
+    expect_false(grepl("continuous covariate", blocks_for()$differential, fixed = TRUE))
+    expect_false(grepl("continuous covariate", blocks_for(
+        de = list(method = "limma", covariates = list("depth")),
+        de_method = "precomputed")$differential, fixed = TRUE))
+    expect_identical(methods_de_phrase(list(), "ttest", covariates = "depth"),
+                     methods_de_phrase(list(), "ttest"))
+})

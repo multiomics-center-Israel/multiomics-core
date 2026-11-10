@@ -412,8 +412,11 @@ methods_p_value_label <- function(method, p_adjust_none, across_proteins = TRUE)
 #' @param batch_col The batch column modelled as a covariate, or NULL when batch
 #'   is not in the design. Only the pooled limma fit can carry it; validation
 #'   refuses the other methods.
+#' @param covariates Continuous covariate columns in the design (from
+#'   [get_proteomics_de_covariates()]), or NULL. Used for the pooled limma fit
+#'   only, the one method validation allows them with.
 #' @return A character scalar.
-methods_de_phrase <- function(de_cfg, method, batch_col = NULL) {
+methods_de_phrase <- function(de_cfg, method, batch_col = NULL, covariates = NULL) {
     m <- tolower(as.character(method))
     if (identical(m, "limma")) {
         s <- paste0("Moderated t-tests were fitted with the *limma* package, using empirical ",
@@ -425,6 +428,17 @@ methods_de_phrase <- function(de_cfg, method, batch_col = NULL) {
                 " The design included %s as an additive batch covariate and was fitted on ",
                 "uncorrected values, so contrasts between conditions were estimated ",
                 "adjusting for batch."), batch_col))
+        }
+        if (length(covariates) > 0) {
+            s <- paste0(s, sprintf(paste0(
+                " The design also included %s as centred continuous covariate%s ",
+                "(~ 0 + condition + %s), so contrasts between conditions were estimated ",
+                "adjusting for %s; the covariate design table reports, per contrast, the ",
+                "covariate difference between the two sides and the change in standard error."),
+                paste(covariates, collapse = ", "),
+                if (length(covariates) > 1) "s" else "",
+                paste(covariates, collapse = " + "),
+                if (length(covariates) > 1) "them" else "it"))
         }
         bc <- de_cfg$block_col
         if (!is.null(bc) && nzchar(bc)) {
@@ -780,7 +794,8 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     } else {
         m <- tolower(as.character(de_method))
         de_txt <- methods_de_phrase(de_cfg, de_method,
-                                    batch_col = if (batch_in_model) bc$batch_col)
+                                    batch_col = if (batch_in_model) bc$batch_col,
+                                    covariates = get_proteomics_de_covariates(cfg))
         # fdrtool is implemented in run_limma_proteomics() and
         # run_limma_percontrast_proteomics() only; the flag being TRUE does not
         # mean a t-test or ANOVA run applied it.
