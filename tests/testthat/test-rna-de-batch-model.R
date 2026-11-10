@@ -20,33 +20,72 @@ make_batch_meta <- function() {
     )
 }
 
-# Direction of each gene's batch effect: alternating up and down in B2, so the
-# library sizes do not move and size-factor normalization cannot absorb it.
-batch_sign <- function(n_genes = 300) rep(c(1, -1), length.out = n_genes)
+# The simulated truth. DESeq2's median-of-ratios size factors assume that most
+# genes do not differ between samples and that those which do are balanced; a
+# fixture that breaks this biases every log2FC through the size factors, in
+# models with and without batch alike. So:
+#   * DE: genes 1-20 go up 4-fold in Treat, genes 21-40 down 4-fold.
+#   * Batch: 90 of the 300 genes (31-120) move 2^1.5-fold in B2, alternating
+#     up and down. Genes 31-40 are DE and batch-affected.
+#   * The other 190 genes are unchanged and anchor the size factors.
+gene_ids <- function(n_genes = 300) sprintf("G%03d", seq_len(n_genes))
+truth_lfc <- function(n_genes = 300) c(rep(2, 20), rep(-2, 20), rep(0, n_genes - 40))
+batch_sign <- function(n_genes = 300) {
+    s <- rep(0, n_genes)
+    s[31:120] <- rep(c(1, -1), length.out = 90)
+    s
+}
 
-# Counts: genes 1-40 go up 4-fold in Treat; each gene moves 2^1.5-fold in B2,
-# up or down by batch_sign().
 make_batch_counts <- function(meta, n_genes = 300, batch_lfc = 1.5, seed = 11) {
     withr::with_seed(seed, {
         base <- stats::rgamma(n_genes, shape = 4, rate = 0.004) + 200
-        group_lfc <- c(rep(2, 40), rep(0, n_genes - 40))
         log2mu <- outer(log2(base), rep(0, nrow(meta)), "+") +
-            outer(group_lfc, as.numeric(meta$Condition == "Treat")) +
+            outer(truth_lfc(n_genes), as.numeric(meta$Condition == "Treat")) +
             outer(batch_lfc * batch_sign(n_genes), as.numeric(meta$Batch == "B2"))
         counts <- matrix(stats::rnbinom(length(log2mu), mu = 2^log2mu, size = 100),
                          nrow = n_genes)
     })
-    dimnames(counts) <- list(sprintf("G%03d", seq_len(n_genes)), meta$SampleID)
+    dimnames(counts) <- list(gene_ids(n_genes), meta$SampleID)
     counts
 }
 
-# How much of the batch effect leaked into the null genes' contrast, measured
-# along each gene's own batch direction. Unbalanced batches leak about
-# 1.5 * (4/6 - 2/6) = 0.5 when batch is not modelled, and about 0 when it is.
-batch_leak <- function(tab) {
-    genes <- null_genes()
-    mean(tab[genes, "log2FoldChange"] * batch_sign()[match(genes, rownames(tab))])
+# Estimation error of the Treat vs Ctrl log2FC against the simulated truth.
+lfc_error <- function(tab, genes = gene_ids()) {
+    tab[genes, "log2FoldChange"] - truth_lfc()[match(genes, gene_ids())]
 }
+rmse <- function(e) sqrt(mean(e^2))
+batch_genes <- function() gene_ids()[batch_sign() != 0]
+
+# Diagnostic: the mean error of the batch-affected null genes along each gene's
+# own batch direction. Unbalanced batches leak about 1.5 * (4/6 - 2/6) = 0.5
+# when batch is not modelled. Blind to a shift common to all genes (it cancels
+# between up and down batch genes), which is why the bias check below exists.
+batch_leak <- function(tab) {
+    genes <- gene_ids()[batch_sign() != 0 & truth_lfc() == 0]
+    mean(lfc_error(tab, genes) * batch_sign()[match(genes, gene_ids())])
+}
+
+# The scientific claim, checked for one fit with and one without batch:
+#   * on the batch-affected genes, modelling batch at least halves the RMSE
+#     against the truth (expected: about 0.5 -> about 0.1, a 4-5x reduction);
+#   * the batch-adjusted estimates have no global bias (expected about 0;
+#     a size-factor or contrast error shows up here);
+#   * every DE gene keeps the direction of its true effect (|truth| = 2,
+#     about 20 standard errors);
+#   * the leak diagnostic agrees.
+expect_batch_adjustment_improves <- function(off_tab, on_tab, info) {
+    expect_lt(rmse(lfc_error(on_tab, batch_genes())),
+              0.5 * rmse(lfc_error(off_tab, batch_genes())), label = paste(info, "RMSE"))
+    expect_lt(abs(mean(lfc_error(on_tab))), 0.1, label = paste(info, "global bias"))
+    de <- gene_ids()[truth_lfc() != 0]
+    expect_true(all(sign(on_tab[de, "log2FoldChange"]) == sign(truth_lfc()[truth_lfc() != 0])),
+                label = paste(info, "DE directions"))
+    expect_gt(batch_leak(off_tab), 0.3, label = paste(info, "leak without batch"))
+    expect_lt(abs(batch_leak(on_tab)), 0.1, label = paste(info, "leak with batch"))
+}
+
+# Seeds the estimation checks are repeated over, so they are not tuned to one.
+batch_seeds <- c(11, 23, 37, 101, 2024)
 
 batch_contrasts <- function() {
     data.frame(Contrast_name = "Treat_vs_Ctrl", Factor = "Condition",
@@ -56,8 +95,6 @@ batch_contrasts <- function() {
 batch_on <- function(cols = "Batch") {
     get_rna_batch_model_config(list(batch_in_model = list(enabled = TRUE, batch_cols = cols)))
 }
-
-null_genes <- function() sprintf("G%03d", 41:300)
 
 # --- Config resolution and validation ----------------------------------------
 
@@ -161,8 +198,8 @@ test_that("build_rna_limma_design keeps the group columns and adds batch columns
 
 # --- limma (preprocessed) path -----------------------------------------------
 
-limma_expr <- function(meta) {
-    log2(make_batch_counts(meta) + 1)
+limma_expr <- function(meta, seed = 11) {
+    log2(make_batch_counts(meta, seed = seed) + 1)
 }
 
 test_that("run_limma_rna_de without batch matches the current limma fit", {
@@ -191,17 +228,17 @@ test_that("run_limma_rna_de without batch matches the current limma fit", {
     expect_identical(off$design$batch_cols, "")
 })
 
-test_that("run_limma_rna_de with batch removes the leaked batch shift", {
+test_that("run_limma_rna_de with batch reduces the estimation error against the truth", {
     meta <- make_batch_meta()
-    expr <- limma_expr(meta)
     de_cfg <- list(sample_col = "SampleID")
-    off <- suppressMessages(run_limma_rna_de(expr, meta, batch_contrasts(), de_cfg))
-    on  <- suppressMessages(run_limma_rna_de(expr, meta, batch_contrasts(), de_cfg,
-                                             batch_cfg = batch_on("Batch")))
-    expect_gt(batch_leak(off$tables$Treat_vs_Ctrl), 0.3)
-    expect_lt(abs(batch_leak(on$tables$Treat_vs_Ctrl)), 0.1)
-    # Direction unchanged: Treat over Ctrl stays positive for the up genes.
-    expect_gt(stats::median(on$tables$Treat_vs_Ctrl[sprintf("G%03d", 1:40), "log2FoldChange"]), 1.5)
+    for (seed in batch_seeds) {
+        expr <- limma_expr(meta, seed = seed)
+        off <- suppressMessages(run_limma_rna_de(expr, meta, batch_contrasts(), de_cfg))
+        on  <- suppressMessages(run_limma_rna_de(expr, meta, batch_contrasts(), de_cfg,
+                                                 batch_cfg = batch_on("Batch")))
+        expect_batch_adjustment_improves(off$tables$Treat_vs_Ctrl, on$tables$Treat_vs_Ctrl,
+                                         info = paste("limma seed", seed))
+    }
 
     expect_identical(on$design$formula, "~ 0 + Condition + Batch")
     expect_identical(on$design$batch_cols, "Batch")
@@ -245,21 +282,21 @@ test_that("run_deseq2_de without batch matches the current DESeq2 fit", {
     expect_identical(off$design$batch_cols, "")
 })
 
-test_that("run_deseq2_de with batch fits ~ Batch + Condition and removes the leak", {
+test_that("run_deseq2_de with batch fits ~ Batch + Condition and reduces the error", {
     skip_if_not_installed("DESeq2")
     meta <- make_batch_meta()
-    counts <- make_batch_counts(meta)
-    off <- run_ds(meta, counts)
-    on  <- run_ds(meta, counts, batch_cfg = batch_on("Batch"))
+    for (seed in batch_seeds) {
+        counts <- make_batch_counts(meta, seed = seed)
+        off <- run_ds(meta, counts)
+        on  <- run_ds(meta, counts, batch_cfg = batch_on("Batch"))
+        expect_batch_adjustment_improves(off$tables$Treat_vs_Ctrl, on$tables$Treat_vs_Ctrl,
+                                         info = paste("DESeq2 seed", seed))
+    }
 
     expect_identical(deparse(DESeq2::design(on$dds)), "~Batch + Condition")
     expect_identical(on$design$formula, "~Batch + Condition")
     expect_identical(on$design$batch_cols, "Batch")
     expect_identical(on$design$residual_df, 9L)
-
-    expect_gt(batch_leak(off$tables$Treat_vs_Ctrl), 0.3)
-    expect_lt(abs(batch_leak(on$tables$Treat_vs_Ctrl)), 0.1)
-    expect_gt(stats::median(on$tables$Treat_vs_Ctrl[sprintf("G%03d", 1:40), "log2FoldChange"]), 1.5)
 
     # Output contract unchanged: same contrasts, same columns.
     expect_identical(names(on$tables), names(off$tables))
