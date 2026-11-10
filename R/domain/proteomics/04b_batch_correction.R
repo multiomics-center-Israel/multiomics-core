@@ -4,7 +4,9 @@
 #' produced by `preprocess_proteomics()`. The correction is driven by the
 #' `modes.proteomics.batch_correction` config block and supports two backends:
 #'
-#'   * `"combat"`   — empirical-Bayes location/scale adjustment via `sva::ComBat`.
+#'   * `"combat"`   — empirical-Bayes location/scale adjustment via `sva::ComBat`
+#'                    (the shared [correct_batch_combat()] in `R/core/`).
+#'                    `combat_mean_only: true` adjusts the batch means only.
 #'   * `"probatch"` — per-feature, per-batch median centering via
 #'                    `proBatch::center_feature_batch_medians_dm` (proBatch's
 #'                    discrete-batch correction).
@@ -85,8 +87,9 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
 
   corrected <- switch(
     bc$method,
-    combat   = correct_proteomics_combat(expr, batch_var, group_var, covariates,
-                                         preserve_group = bc$preserve_condition, seed = seed),
+    combat   = correct_batch_combat(expr, batch_var, group_var, covariates,
+                                    preserve_group = bc$preserve_condition,
+                                    mean_only = bc$combat_mean_only, seed = seed),
     probatch = correct_proteomics_probatch(expr, batch_var,
                                            sample_ids = colnames(expr)),
     cli::cli_abort(c(
@@ -128,12 +131,20 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
 #'
 #' @param cfg The `config$modes$proteomics` sub-config.
 #' @return A list with `enabled`, `method`, `corrects` (a correction will run),
-#'   `batch_col`, `group_col`, `covariates`, `preserve_condition`, `de_mode`,
-#'   `de_mode_explicit`.
+#'   `batch_col`, `group_col`, `covariates`, `preserve_condition`,
+#'   `combat_mean_only`, `de_mode`, `de_mode_explicit`.
 #' @noRd
 get_proteomics_batch_config <- function(cfg) {
   bc <- cfg$batch_correction %||% list()
   method <- bc$method %||% "none"
+  combat_mean_only <- bc$combat_mean_only %||% FALSE
+  if (!(is.logical(combat_mean_only) && length(combat_mean_only) == 1L &&
+        !is.na(combat_mean_only))) {
+    cli::cli_abort(c(
+      "{.code batch_correction.combat_mean_only} must be {.val true} or {.val false}.",
+      "i" = "Got {.val {combat_mean_only}}."
+    ))
+  }
   enabled <- bc$enabled %||% (!identical(method, "none"))
   corrects <- isTRUE(enabled) && !identical(method, "none")
   de_mode <- bc$de_mode %||% (if (corrects) "covariate" else "none")
@@ -153,6 +164,7 @@ get_proteomics_batch_config <- function(cfg) {
     group_col          = bc$group_col,
     covariates         = bc$covariates,
     preserve_condition = bc$preserve_condition %||% TRUE,
+    combat_mean_only   = combat_mean_only,
     de_mode            = de_mode
   )
 }
@@ -268,63 +280,6 @@ align_meta_column <- function(meta, expr, col, sample_col) {
     ))
   }
   meta[[col]]
-}
-
-#' ComBat batch correction for a log2 proteomics matrix
-#'
-#' Wraps `sva::ComBat`, which expects log-scale data and corrects additive and
-#' multiplicative batch effects via empirical Bayes. When `preserve_group` is
-#' `TRUE` (the default) and a group vector is supplied, the biological condition
-#' (and any covariates) are encoded in the ComBat model matrix so that the
-#' design effect is preserved rather than removed.
-#'
-#' @param expr Numeric log2 matrix (proteins x samples). Must be complete
-#'   (no NA) — ComBat does not accept missing values.
-#' @param batch_var Factor of batch labels (length `ncol(expr)`).
-#' @param group_var Factor of biological group labels, or `NULL`.
-#' @param covariates Optional data.frame of additional covariates, or `NULL`.
-#' @param preserve_group Logical; encode `group_var`/`covariates` in the ComBat
-#'   model so the condition effect is retained.
-#' @param seed Integer seed passed through `withr::with_seed()`.
-#' @return Corrected numeric matrix with the same dim/dimnames as `expr`.
-correct_proteomics_combat <- function(expr, batch_var, group_var = NULL,
-                                      covariates = NULL, preserve_group = TRUE,
-                                      seed = 42) {
-  if (!requireNamespace("sva", quietly = TRUE)) {
-    cli::cli_abort(c(
-      "Package {.pkg sva} is required for {.val combat} batch correction but is not installed.",
-      "i" = "Install it with {.code BiocManager::install('sva')} (a dependency change must be approved by a human)."
-    ))
-  }
-
-  if (!all(is.finite(expr))) {
-    cli::cli_abort(c(
-      "ComBat requires a matrix of finite values.",
-      "i" = "Found {sum(is.na(expr))} NA and {sum(is.infinite(expr))} non-finite value(s) (e.g. from log2 of zero/negative intensities).",
-      "i" = "Impute NAs and floor/remove non-finite values before batch correction."
-
-    ))
-  }
-
-  mod <- NULL
-  if (isTRUE(preserve_group) && (!is.null(group_var) || !is.null(covariates))) {
-    md <- data.frame(.row = seq_len(ncol(expr)))
-    if (!is.null(group_var)) md[[".group"]] <- group_var
-    if (!is.null(covariates)) md <- cbind(md, covariates)
-    md$.row <- NULL
-    if (ncol(md) > 0) {
-      mod <- stats::model.matrix(~., data = md)
-    }
-  }
-
-  withr::with_seed(seed, {
-    sva::ComBat(
-      dat       = as.matrix(expr),
-      batch     = batch_var,
-      mod       = mod,
-      par.prior = TRUE
-    )
-  })
 }
 
 #' proBatch median-centering batch correction for a log2 proteomics matrix

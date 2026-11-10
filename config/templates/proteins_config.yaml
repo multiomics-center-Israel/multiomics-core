@@ -113,6 +113,10 @@ modes:
       group_col: null
       preserve_condition: true
       covariates: null
+      # ComBat only. true = adjust the batch means only, not their spread.
+      # Use when batches are small (e.g. 2 samples per batch), where the
+      # per-batch spread cannot be estimated reliably.
+      combat_mean_only: false
 
       # --- 2. Batch in differential expression (de_mode) ---
       #   null               - automatic: "covariate" when method is not

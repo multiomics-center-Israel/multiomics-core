@@ -196,6 +196,19 @@ test_that("batch correction needs the resolved enabled state, not just a method"
         method = "none", enabled = TRUE))$data_processing, fixed = TRUE))
 })
 
+test_that("mean-only ComBat is stated only when ComBat ran with that flag", {
+    # correct_batch_combat() passes combat_mean_only to ComBat as mean.only.
+    on <- blocks_for(batch_correction = list(method = "combat",
+                                             combat_mean_only = TRUE))$data_processing
+    expect_match(on, "ComBat adjusted only the batch means (mean.only)", fixed = TRUE)
+
+    expect_false(grepl("mean.only", blocks_for(batch_correction = list(
+        method = "combat"))$data_processing, fixed = TRUE))
+    # The flag means nothing to proBatch, so it must not be described there.
+    expect_false(grepl("mean.only", blocks_for(batch_correction = list(
+        method = "probatch", combat_mean_only = TRUE))$data_processing, fixed = TRUE))
+})
+
 test_that("covariate mode says the model saw uncorrected data with batch in it", {
     # mod_proteomics_de() hands limma expr_filt (never corrected) in this mode,
     # and run_limma_proteomics() adds batch to the design or stops.
