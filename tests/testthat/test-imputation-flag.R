@@ -230,22 +230,15 @@ test_that("a flagged row loses its p-values in its own contrast only", {
     expect_identical(sum(out$excluded$n_excluded), 1L)
 })
 
-test_that("the adjustment is recomputed over the rows still tested", {
+test_that("the other rows keep the adjustment made over every row", {
     fx <- excl_fixture()
+    run <- excl_run(excl_p)
     out <- exclude_imputed_above_measured_proteomics(
-        list(excl_run(excl_p)), list(fx$model), fx$pre, fx$contrasts, flag_config())
+        list(run), list(fx$model), fx$pre, fx$contrasts, flag_config())
     s <- out$runs_de_tables[[1]]$S_vs_NS
     kept <- s$FeatureID != "p_high"
-    expect_equal(s$adj.P.Val[kept], p.adjust(excl_p$S_vs_NS[-1], method = "BH"))
-    expect_equal(s$P.Value[kept], excl_p$S_vs_NS[-1])
-
-    # The configured method is the one recomputed, not BH by default.
-    cfg <- flag_config()
-    cfg$modes$proteomics$de$p_adjust_method <- "bonferroni"
-    out_b <- exclude_imputed_above_measured_proteomics(
-        list(excl_run(excl_p)), list(fx$model), fx$pre, fx$contrasts, cfg)
-    s_b <- out_b$runs_de_tables[[1]]$S_vs_NS
-    expect_equal(s_b$adj.P.Val[kept], p.adjust(excl_p$S_vs_NS[-1], method = "bonferroni"))
+    expect_identical(s$adj.P.Val[kept], run$S_vs_NS$adj.P.Val[kept])
+    expect_identical(s$P.Value[kept], excl_p$S_vs_NS[-1])
 })
 
 test_that("an excluded row cannot pass, and its log2FC is still reported", {
@@ -430,7 +423,8 @@ test_that("with the option on, each run drops exactly the rows its own draw flag
             expect_identical(t_on$logFC, t_off$logFC)
             expect_identical(t_on$t, t_off$t)
             expect_identical(t_on$P.Value[!hit], t_off$P.Value[!hit])
-            expect_equal(t_on$adj.P.Val, p.adjust(t_on$P.Value, method = "BH"))
+            expect_true(all(is.na(t_on$adj.P.Val[hit])))
+            expect_identical(t_on$adj.P.Val[!hit], t_off$adj.P.Val[!hit])
             expect_identical(on$runs[[i]]$de_tables[[cn]], t_on)
         }
     }

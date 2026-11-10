@@ -169,8 +169,9 @@ modes:
       # (in that contrast's two groups) average above their measured values --
       # the rule behind imputed_above_measured.<contrast>. The model fit is
       # unchanged; in each imputation run the flagged proteins
-      # lose their p-value in that contrast only and the adjustment is
-      # recomputed over the rest. In the summary across runs an excluded run
+      # lose their p-value in that contrast only; the other proteins keep the
+      # adjusted p-value computed over all proteins (not re-adjusted, so the
+      # option can only remove calls). In the summary across runs an excluded run
       # counts as p = 1 (no p-value if excluded in every run). Proteins left
       # untested in every run leave that contrast's enrichment ranking and ORA
       # background; the pooled ranking drops those excluded in any run.

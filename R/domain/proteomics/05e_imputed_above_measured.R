@@ -116,9 +116,11 @@ IMPUTED_ABOVE_MEASURED_EXCLUDED_COL <- "imputed_above_measured_excluded"
 #' group, so the variance moderation is unchanged); only the testing is
 #' narrowed. For each imputation run and each contrast, the
 #' rows that \code{\link{flag_imputed_above_measured_proteomics}} flags on that
-#' run's own imputed matrix get \code{P.Value} and \code{adj.P.Val} set to NA,
-#' and the adjusted p-value is recomputed with \code{de.p_adjust_method} over
-#' the rows of that contrast that still have a p-value. A row excluded in one
+#' run's own imputed matrix get \code{P.Value} and \code{adj.P.Val} set to NA.
+#' The other rows keep the adjusted p-value the method computed over every
+#' row: the adjustment is not redone over the smaller set, because that can
+#' lower the remaining adjusted p-values, so the exclusion could add
+#' significant calls rather than only remove them. A row excluded in one
 #' contrast keeps its p-value in every other contrast. \code{logFC} and the
 #' other columns are left as fitted.
 #'
@@ -139,10 +141,9 @@ IMPUTED_ABOVE_MEASURED_EXCLUDED_COL <- "imputed_above_measured_excluded"
 #' @param pre Proteomics preprocessing results (\code{expr_filt}, whose NAs
 #'   mark the imputed cells, and \code{meta}).
 #' @param contrasts_df Contrasts table the runs were fitted with.
-#' @param config Full pipeline config (feature ID column, p-value adjustment
-#'   method, sample-ID column).
+#' @param config Full pipeline config (feature ID column, sample-ID column).
 #' @return A list with \code{runs_de_tables} (the input with the flagged rows'
-#'   p-values removed, the adjusted p-values recomputed and the
+#'   p-values removed, the other rows' adjusted p-values unchanged and the
 #'   \code{imputed_above_measured_excluded} column added) and \code{excluded}:
 #'   a list holding \code{n_runs} and \code{n_excluded}, an integer matrix
 #'   (features x contrasts, named by feature ID and contrast) counting the runs
@@ -157,7 +158,6 @@ exclude_imputed_above_measured_proteomics <- function(runs_de_tables, imputation
     }
     p_cfg <- config$modes$proteomics %||% list()
     id_col <- (p_cfg$de_table %||% list())$id_col %||% "FeatureID"
-    adj_method <- p_cfg$de$p_adjust_method %||% "BH"
 
     contrasts <- names(runs_de_tables[[1]])
     ref_ids <- as.character(runs_de_tables[[1]][[contrasts[1]]][[id_col]])
@@ -193,13 +193,10 @@ exclude_imputed_above_measured_proteomics <- function(runs_de_tables, imputation
                      call. = FALSE)
             }
             hit <- flags[[cn]][at] %in% TRUE
-            if (any(hit)) {
-                tab$P.Value[hit] <- NA_real_
-                # p.adjust() leaves NAs in place and sizes the correction on the
-                # non-missing values, so this is the adjustment over the rows of
-                # this contrast that are still tested.
-                tab$adj.P.Val <- stats::p.adjust(tab$P.Value, method = adj_method)
-            }
+            # Only blanked: re-adjusting over the remaining rows would shrink
+            # their adjusted p-values and let the exclusion add calls.
+            tab$P.Value[hit] <- NA_real_
+            tab$adj.P.Val[hit] <- NA_real_
             # Read by summarize_limma_mult_imputation(), which has to tell an
             # excluded run apart from a row the method itself left untested.
             tab[[IMPUTED_ABOVE_MEASURED_EXCLUDED_COL]] <- hit

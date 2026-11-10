@@ -819,7 +819,7 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                 "itself was unchanged, but those proteins received no p-value in ",
                 "that contrast%s%s."),
                 if (p_adjust_none) "" else
-                    ", and the adjusted p-values were recomputed over the remaining proteins",
+                    ", while the other proteins kept the adjusted p-values computed over all proteins",
                 if (multi_on) paste0(
                     ", with the rule applied separately in each imputation run and a run ",
                     "that left a protein untested counted as p = 1 in its summarised p-values ",
