@@ -425,6 +425,10 @@ test_that("with the option on, each run drops exactly the rows its own draw flag
             expect_identical(t_on$P.Value[!hit], t_off$P.Value[!hit])
             expect_true(all(is.na(t_on$adj.P.Val[hit])))
             expect_identical(t_on$adj.P.Val[!hit], t_off$adj.P.Val[!hit])
+            # Those kept values are limma's p-values under BH over all rows,
+            # recomputable with p.adjust() (no fdrtool step).
+            expect_equal(t_on$adj.P.Val[!hit],
+                         p.adjust(t_off$P.Value, method = "BH")[!hit])
             expect_identical(on$runs[[i]]$de_tables[[cn]], t_on)
         }
     }

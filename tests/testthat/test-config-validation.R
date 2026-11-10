@@ -92,6 +92,24 @@ test_that("de$exclude_imputed_above_measured accepts TRUE/FALSE/absent and rejec
     }
 })
 
+test_that("de$exclude_imputed_above_measured needs plain model p-values with BH", {
+    cfg <- create_mock_proteomics_config()
+    cfg$de$exclude_imputed_above_measured <- TRUE
+    cfg$de$fdrtool_correction <- TRUE
+    expect_error(validate_proteomics_config(cfg), "fdrtool_correction")
+    cfg$de$fdrtool_correction <- FALSE
+    expect_true(validate_proteomics_config(cfg))
+    cfg$de$p_adjust_method <- "bonferroni"
+    expect_error(validate_proteomics_config(cfg), "BH")
+    cfg$de$p_adjust_method <- NULL
+    expect_true(validate_proteomics_config(cfg))
+    # Off: the other settings stay free.
+    cfg$de$exclude_imputed_above_measured <- FALSE
+    cfg$de$fdrtool_correction <- TRUE
+    cfg$de$p_adjust_method <- "holm"
+    expect_true(validate_proteomics_config(cfg))
+})
+
 test_that("de$exclude_imputed_above_measured is refused with precomputed DE tables", {
     cfg <- create_mock_proteomics_config()
     cfg$files$de_table <- "precomputed_de.csv"

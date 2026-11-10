@@ -175,6 +175,7 @@ modes:
       # counts as p = 1 (no p-value if excluded in every run). Proteins left
       # untested in every run leave that contrast's enrichment ranking and ORA
       # background; the pooled ranking drops those excluded in any run.
+      # Requires p_adjust_method "BH" and fdrtool_correction: false.
       exclude_imputed_above_measured: false
       paired: false           # relevant for t-test
       pairing_col: null          # metadata column for paired test (e.g. "Subject")
