@@ -1202,6 +1202,16 @@ Differential expression was performed using **DESeq2** (`r rna_cfg$de$deseq_mode
 Genes were considered significant at adjusted p-value $\leq$ `r rna_cfg$de$p_cutoff`
 and |linear fold change| $\geq$ `r rna_cfg$de$linear_fc_cutoff`.
 
+```{r de-design-batch, results='asis'}
+# Built from Datasets/de_design.tsv, written from the design the DE actually
+# fitted -- not from batch_in_model in the config, which only asked for it.
+.de_design_file <- file.path(datasets_dir, "de_design.tsv")
+.de_design_text <- if (file.exists(.de_design_file)) {
+    rna_de_design_sentence(read.delim(.de_design_file, stringsAsFactors = FALSE))
+}
+if (!is.null(.de_design_text)) cat(.de_design_text, "\n\n")
+```
+
 ## DE Summary
 
 ```{r de-summary}

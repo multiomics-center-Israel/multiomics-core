@@ -131,6 +131,24 @@ modes:
       linear_fc_cutoff: 1.5
       use_adj: true
 
+    # --------------------------------------------------------
+    # Batch in the DE model (optional)
+    # Adds batch as a covariate to the DE design:
+    #   DESeq2: ~ Batch + <group>    limma: ~ 0 + <group> + Batch
+    # The contrasts and their directions are unchanged.
+    # Does not modify expression matrices or apply batch correction
+    # to QC plots. Downstream analyses that depend on DE results
+    # (e.g. DE gene lists used for clustering) may change.
+    # Numeric batch labels (e.g. 1, 2, 3) are treated as categories.
+    # The run stops if batch and group are fully confounded (e.g. every
+    # batch holds a single group) or no residual degrees of freedom remain.
+    # Not available with precomputed DE (files$de_table).
+    # --------------------------------------------------------
+    batch_in_model:
+      enabled: false
+      # One or two metadata columns holding the batch label(s).
+      batch_cols: ["Batch"]
+
     # How to interpret your DE summary output table (for get_de_features / clustering / QC_post)
     de_table:
       id_col: "FeatureID"
