@@ -57,6 +57,65 @@
 
 .el_md5 <- function(paths) unname(tools::md5sum(paths))
 
+# The output folders this script looks into, in the spelling the comparison
+# uses. The pipeline does not spell them one way everywhere ("Datasets" and
+# "datasets" both occur), and on a file system that ignores case the folder
+# keeps whichever spelling created it first. Matching the spelling exactly
+# therefore found no enrichment table on such a system.
+.EL_TOP_DIRS <- c("Enrichment", "Datasets", "mummichog_pinned")
+
+# Relative paths with "/" separators and the top-level folder in the canonical
+# spelling, whatever its case on disk. Only that first component is rewritten.
+.el_canon_paths <- function(paths) {
+    paths <- gsub("\\\\", "/", as.character(paths))
+    for (d in .EL_TOP_DIRS) {
+        paths <- sub(paste0("^", d, "(/|$)"), paste0(d, "\\1"), paths,
+                     ignore.case = TRUE)
+    }
+    paths
+}
+
+# Which relative paths are enrichment result tables / plots of either layout.
+.el_is_enrichment_tsv <- function(paths) {
+    grepl("^Enrichment/.*\\.tsv$|^Datasets/enrichment_[^/]*\\.tsv$",
+          .el_canon_paths(paths))
+}
+.el_is_enrichment_png <- function(paths) {
+    grepl("^Enrichment/.*\\.png$", .el_canon_paths(paths))
+}
+
+# What is on disk under a mode folder: every file (canonical relative path) and
+# the content hash of the enrichment tables and of the mummichog files. The
+# hashes are read through the path as it is on disk and named by the canonical
+# one.
+.el_inventory <- function(mode_dir) {
+    on_disk <- sort(list.files(mode_dir, recursive = TRUE))
+    canon   <- .el_canon_paths(on_disk)
+    md5_of  <- function(sel) stats::setNames(
+        .el_md5(file.path(mode_dir, on_disk[sel])), canon[sel])
+    list(files         = canon,
+         tsv_md5       = md5_of(.el_is_enrichment_tsv(canon)),
+         mummichog_md5 = md5_of(grepl("^mummichog_pinned/", canon)))
+}
+
+# TRUE when a snapshot hashed every enrichment table its file list shows, and
+# there is at least one. A snapshot with none proves nothing about the tables,
+# so the table checks must fail on it rather than compare two empty sets.
+.el_tsv_collected <- function(snap) {
+    listed <- .el_canon_paths(snap$files)
+    listed <- listed[.el_is_enrichment_tsv(listed)]
+    hashed <- .el_canon_paths(names(snap$tsv_md5))
+    length(hashed) > 0 && setequal(hashed, listed)
+}
+
+# Plot data and labels compared by value, exactly: no numeric tolerance, and
+# attributes count. identical() is the wrong test here because it compares
+# environments and other references by address, and those are never the same
+# object in two R sessions.
+.el_same_plots <- function(before, after) {
+    isTRUE(all.equal(before, after, tolerance = 0, check.attributes = TRUE))
+}
+
 # The enrichment result with every `files` element removed, at any depth: the
 # paths are what the refactor changes, and `files` occurs at the top level and
 # inside each *_by_contrast entry. `plots` are taken out here and compared
@@ -99,12 +158,12 @@ snapshot_enrichment_layout <- function(label, mode_dir, snap_dir,
              "run. Enable modes.metabolomics.enrichment.run_enrichment.")
     }
 
-    all_files <- sort(list.files(mode_dir, recursive = TRUE))
-    is_tsv <- grepl("^Enrichment/.*\\.tsv$|^Datasets/enrichment_[^/]*\\.tsv$", all_files)
-    is_png <- grepl("^Enrichment/.*\\.png$", all_files)
-    is_mmc <- grepl("^mummichog_pinned/", all_files)
-    md5_of <- function(sel) stats::setNames(.el_md5(file.path(mode_dir, all_files[sel])),
-                                            all_files[sel])
+    inv <- .el_inventory(mode_dir)
+    if (length(inv$tsv_md5) == 0) {
+        stop("No enrichment result table was found under ", mode_dir,
+             ". Check that this is the run's metabolomics folder and that ",
+             "enrichment ran; a snapshot without tables cannot be compared.")
+    }
 
     rds <- list.files(mode_dir, pattern = "^shiny_payload_metabolomics_.*\\.rds$",
                       full.names = TRUE)
@@ -128,10 +187,9 @@ snapshot_enrichment_layout <- function(label, mode_dir, snap_dir,
         by_contrast_names = lapply(
             res[grep("_by_contrast$", names(res), value = TRUE)],
             function(b) lapply(b, names)),
-        files          = all_files,
-        tsv_md5        = md5_of(is_tsv),
-        png_files      = all_files[is_png],
-        mummichog_md5  = md5_of(is_mmc),
+        files          = inv$files,
+        tsv_md5        = inv$tsv_md5,
+        mummichog_md5  = inv$mummichog_md5,
         payload_names  = names(payload),
         payload_tables = payload_tables,
         slide_titles   = slide_titles
@@ -196,7 +254,8 @@ snapshot_enrichment_layout <- function(label, mode_dir, snap_dir,
 #' Compare the two snapshots
 #'
 #' @param snap_dir The folder both snapshots were written to.
-#' @return TRUE if every check passed, invisibly. Prints one line per check.
+#' @return TRUE if every check passed, invisibly, with the per-check results in
+#'   the attribute "checks". Prints one line per check.
 compare_enrichment_layout <- function(snap_dir) {
     b <- readRDS(file.path(snap_dir, "before.rds"))
     a <- readRDS(file.path(snap_dir, "after.rds"))
@@ -207,52 +266,72 @@ compare_enrichment_layout <- function(snap_dir) {
         pass
     }
     # Names of what differs, never values.
-    differing <- function(x, y) {
+    differing <- function(x, y, same = identical) {
         nms <- union(names(x), names(y))
-        bad <- nms[!vapply(nms, function(n) identical(x[[n]], y[[n]]), logical(1))]
+        bad <- nms[!vapply(nms, function(n) same(x[[n]], y[[n]]), logical(1))]
         if (length(bad)) paste("differs in:", paste(bad, collapse = ", ")) else ""
     }
 
-    tsv_new <- vapply(names(b$tsv_md5), .el_tsv_new_path, character(1))
+    # Paths in one spelling on both sides, also for snapshots taken before the
+    # script canonicalised them.
+    b_files <- .el_canon_paths(b$files)
+    a_files <- .el_canon_paths(a$files)
+    b_tsv <- stats::setNames(unname(b$tsv_md5), .el_canon_paths(names(b$tsv_md5)))
+    a_tsv <- stats::setNames(unname(a$tsv_md5), .el_canon_paths(names(a$tsv_md5)))
+    b_png <- b_files[.el_is_enrichment_png(b_files)]
+    a_png <- a_files[.el_is_enrichment_png(a_files)]
+
+    tsv_ok <- .el_tsv_collected(b) && .el_tsv_collected(a)
+    tsv_hint <- if (tsv_ok) "" else paste(
+        "a snapshot holds no enrichment table, or not all the tables its file",
+        "list shows. Take both snapshots again with this version of the script;",
+        "that only reads the existing run folders.")
+    tsv_new <- vapply(names(b_tsv), .el_tsv_new_path, character(1))
+
     # Contrast directory names, read off the unit paths of the new layout.
     contrast_dirs <- unique(basename(dirname(sub(
         "/de/results\\.tsv$", "/results.tsv",
-        grep("/(contrasts|ranking_by_fc)/", names(a$tsv_md5), value = TRUE)))))
-    png_new <- vapply(b$png_files, .el_png_new_path, character(1),
+        grep("/(contrasts|ranking_by_fc)/", names(a_tsv), value = TRUE)))))
+    png_new <- vapply(b_png, .el_png_new_path, character(1),
                       contrast_dirs = contrast_dirs)
 
     passed <- c(
-        check("1. every result in metab_enrichment_res is identical (all fields except `files` and `plots`, at every level)",
+        results = check("1. every result in metab_enrichment_res is identical (all fields except `files` and `plots`, at every level)",
               identical(b$results, a$results), differing(b$results, a$results)),
-        check("2. every plot was drawn from identical data with identical labels",
-              identical(b$plots, a$plots), differing(b$plots, a$plots)),
-        check("3. metab_enrichment_res has the same fields, top level and per contrast",
+        plots = check("2. every plot was drawn from equal data with equal labels (exact values, attributes included)",
+              .el_same_plots(b$plots, a$plots),
+              differing(b$plots, a$plots, same = .el_same_plots)),
+        fields = check("3. metab_enrichment_res has the same fields, top level and per contrast",
               identical(b$result_names, a$result_names) &&
                   identical(b$by_contrast_names, a$by_contrast_names)),
-        check("4. every enrichment table of the old layout has a file with identical content in the new one",
-              !anyNA(tsv_new) && all(tsv_new %in% names(a$tsv_md5)) &&
-                  identical(unname(b$tsv_md5), unname(a$tsv_md5[tsv_new])),
-              "an old .tsv has no counterpart, or its content changed"),
-        check("5. the new layout holds no enrichment table beyond those",
-              setequal(tsv_new, names(a$tsv_md5)),
-              paste("unexpected:", paste(setdiff(names(a$tsv_md5), tsv_new), collapse = ", "))),
-        check("6. every enrichment plot of the old layout exists in the new one, and no others",
-              !anyNA(png_new) && setequal(png_new, a$png_files),
-              paste("missing:", paste(setdiff(png_new, a$png_files), collapse = ", "),
-                    "| unexpected:", paste(setdiff(a$png_files, png_new), collapse = ", "))),
-        check("7. Enrichment/enrichment_manifest.csv was written, and no temporary file is left",
-              "Enrichment/enrichment_manifest.csv" %in% a$files &&
-                  !("Enrichment/enrichment_manifest.csv.tmp" %in% a$files)),
-        check("8. mummichog_pinned/ holds the same files",
+        tsv_content = check("4. every enrichment table of the old layout has a file with identical content in the new one",
+              tsv_ok && !anyNA(tsv_new) && all(tsv_new %in% names(a_tsv)) &&
+                  identical(unname(b_tsv), unname(a_tsv[tsv_new])),
+              if (tsv_ok) "an old .tsv has no counterpart, or its content changed"
+              else tsv_hint),
+        tsv_complete = check("5. the new layout holds no enrichment table beyond those",
+              tsv_ok && setequal(tsv_new, names(a_tsv)),
+              if (tsv_ok) paste("unexpected:",
+                                paste(setdiff(names(a_tsv), tsv_new), collapse = ", "))
+              else tsv_hint),
+        png = check("6. every enrichment plot of the old layout exists in the new one, and no others",
+              length(b_png) > 0 && !anyNA(png_new) && setequal(png_new, a_png),
+              if (length(b_png) == 0) "no enrichment plot was found in the 'before' run"
+              else paste("missing:", paste(setdiff(png_new, a_png), collapse = ", "),
+                         "| unexpected:", paste(setdiff(a_png, png_new), collapse = ", "))),
+        manifest = check("7. Enrichment/enrichment_manifest.csv was written, and no temporary file is left",
+              "Enrichment/enrichment_manifest.csv" %in% a_files &&
+                  !("Enrichment/enrichment_manifest.csv.tmp" %in% a_files)),
+        mummichog = check("8. mummichog_pinned/ holds the same files",
               identical(names(b$mummichog_md5), names(a$mummichog_md5))),
-        check("9. Shiny payload has the same keys",
+        payload_keys = check("9. Shiny payload has the same keys",
               identical(b$payload_names, a$payload_names),
               "NULL on both sides means the payload .rds was not found"),
-        check("10. Shiny enrichment keys and mummichog tables are identical",
+        payload_tables = check("10. Shiny enrichment keys and mummichog tables are identical",
               !is.null(b$payload_tables) &&
                   identical(b$payload_tables, a$payload_tables),
               differing(b$payload_tables, a$payload_tables)),
-        check("11. PPTX enrichment slides: same titles in the same order",
+        slides = check("11. PPTX enrichment slides: same titles in the same order",
               !is.null(b$slide_titles) && identical(b$slide_titles, a$slide_titles),
               "NULL means the deck or the 'officer' package was not found")
     )
@@ -263,5 +342,5 @@ compare_enrichment_layout <- function(snap_dir) {
             "whether those files are reproducible on your setup.\n", sep = "")
     }
     cat("Not covered here: open both HTML reports and compare the Enrichment tabs.\n")
-    invisible(all(passed))
+    invisible(structure(all(passed), checks = passed))
 }
