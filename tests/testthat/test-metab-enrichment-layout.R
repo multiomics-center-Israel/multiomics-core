@@ -417,6 +417,9 @@ test_that("an enabled run replaces the manifest and leaves earlier files alone",
 
     expect_true(all(file.exists(old$kept)))
     m <- utils::read.csv(old$manifest, stringsAsFactors = FALSE)
+    # It is this run's manifest, not the seeded one-line file.
+    expect_identical(names(m), names(.empty_enrichment_manifest()))
+    expect_identical(nrow(m), 10L)
     # The earlier run's unit is on disk but is not part of this run's manifest.
     expect_false(any(grepl("Old", m$storage_key)))
     expect_false("Old" %in% m$item)
