@@ -185,6 +185,13 @@ modes:
     clustering:
       enabled: false
       group_col: "Condition"        # metadata column for clustering group logic
+      # Rows of the clustering heatmaps. Unset (null): proteins passing the DE
+      # step's own rule (pass_any_contrast: de.p_cutoff and log2(de.linear_fc_cutoff)).
+      # Set either one to use padj.imputs < de_padj_cutoff and
+      # abs(log2FC.imputs) >= de_log2fc_cutoff in at least one contrast; the
+      # unset one falls back to the de block. The DE call itself is unchanged.
+      de_padj_cutoff: null
+      de_log2fc_cutoff: null
 
       steps:
         hierarchical:
@@ -210,6 +217,10 @@ modes:
       heatmap:
         max_rows: null
         cluster_cols: true
+        # null: the hierarchical heatmap as before. A number (e.g. 3): row
+        # z-scores with colours clipped at +/- that value, 16 pt text at the
+        # saved size, a PDF next to the PNG.
+        zscore_limit: null
 
     # --------------------------------------------------------
     # Plotting / QC aesthetics
