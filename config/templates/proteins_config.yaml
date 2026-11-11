@@ -219,6 +219,17 @@ modes:
       shape: null
       samples: "SampleID"
 
+      # Heatmap annotation columns (optional), as in the RNA-seq template.
+      # Sample annotation bars of every proteomics heatmap (QC distance,
+      # correlation and expression heatmaps, top-DE heatmaps, the clustering
+      # heatmap), in this order. Levels are
+      # ordered by a leading number when every value has one (0h, 4h, 24h),
+      # else no/yes-type pairs negative first, else first appearance.
+      # If not specified, uses the color variable only.
+      # heatmap_annotations:
+      #   - "time"
+      #   - "treatment"
+
     # --------------------------------------------------------
     # Report customization
     # --------------------------------------------------------

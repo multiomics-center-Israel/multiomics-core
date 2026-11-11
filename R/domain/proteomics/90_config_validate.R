@@ -331,6 +331,16 @@ validate_proteomics_config <- function(cfg) {
                            "advanced_stats$run_robust_regression", allow_null = TRUE)
     }
 
+    # 9a. Heatmap sample annotation (get_proteomics_sample_annotation_cols()).
+    #     Columns missing from the metadata are warned about at run time, as
+    #     in RNA-seq; here only the type is checked.
+    ha <- (cfg$effects %||% list())[["heatmap_annotations"]]
+    if (!is.null(ha) && !(is.character(unlist(ha)) && length(unlist(ha)) > 0 &&
+                          !anyNA(unlist(ha)) && all(nzchar(unlist(ha))))) {
+        stop("effects$heatmap_annotations must be a list of sample-metadata column names, ",
+             "for example heatmap_annotations: [\"time\", \"treatment\"].", call. = FALSE)
+    }
+
     # 10. QC Settings (optional)
     if (!is.null(cfg$qc)) {
         assert_scalar_bool(cfg$qc$run_umap, "qc$run_umap", allow_null = TRUE)
