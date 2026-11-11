@@ -61,7 +61,8 @@
 #' @param tokens Character vector, same length: each label already sanitised for
 #'   use in a file name.
 #' @return Named character vector (names = \code{contrasts}) of directory names
-#'   that are non-empty, never "." or "..", and distinct ignoring case.
+#'   that are non-empty, never "." or "..", never a Windows device name, and
+#'   distinct ignoring case.
 metab_enrichment_contrast_dirs <- function(contrasts, tokens) {
     contrasts <- as.character(contrasts)
     tokens    <- as.character(tokens)
@@ -76,6 +77,11 @@ metab_enrichment_contrast_dirs <- function(contrasts, tokens) {
     # of their own; an empty token would collapse a path level.
     tokens <- sub("\\.+$", "", tokens)
     tokens[is.na(tokens) | !nzchar(tokens)] <- "contrast"
+    # Windows reserves these names for devices, with or without an extension,
+    # and refuses to create a directory called by one of them.
+    reserved <- grepl("^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\..*)?$", tokens,
+                      ignore.case = TRUE)
+    tokens[reserved] <- paste0("contrast_", tokens[reserved])
 
     out  <- character(length(tokens))
     used <- character(0)
@@ -246,7 +252,9 @@ list_metab_enrichment_owned_files <- function(enr_root, datasets_dir) {
 
     owned_enr <- character(0)
     if (dir.exists(enr_root)) {
-        rel <- list.files(enr_root, recursive = TRUE)
+        # all.files: a contrast whose name starts with "." has a hidden unit
+        # directory, which list.files() otherwise does not descend into.
+        rel <- list.files(enr_root, recursive = TRUE, all.files = TRUE)
         hit <- Reduce(`|`, lapply(enr_patterns, grepl, x = rel),
                       rep(FALSE, length(rel)))
         owned_enr <- file.path(enr_root, rel[hit])

@@ -124,18 +124,26 @@ test_that("the inventory hashes the tables of a lower-case datasets folder", {
     writeLines("other", file.path(mode_dir, "datasets", "final_results.tsv"))
     writeLines("png", file.path(mode_dir, "enrichment", "enrichment_ora_dotplot_A.png"))
     writeLines("mmc", file.path(mode_dir, "mummichog_pinned", "A", "input.tsv"))
+    # A contrast whose name starts with "." has a hidden unit directory.
+    hidden <- file.path(mode_dir, "enrichment", "ORA", "combined", "contrasts",
+                        ".treated", "de")
+    dir.create(hidden, recursive = TRUE)
+    writeLines("hidden", file.path(hidden, "results.tsv"))
 
     inv <- verify_env$.el_inventory(mode_dir)
 
-    expect_identical(names(inv$tsv_md5), "Datasets/enrichment_ora_A_results.tsv")
+    expect_setequal(names(inv$tsv_md5),
+                    c("Datasets/enrichment_ora_A_results.tsv",
+                      "Enrichment/ORA/combined/contrasts/.treated/de/results.tsv"))
     expect_identical(
-        unname(inv$tsv_md5),
+        inv$tsv_md5[["Datasets/enrichment_ora_A_results.tsv"]],
         unname(tools::md5sum(file.path(mode_dir, "datasets",
                                        "enrichment_ora_A_results.tsv"))))
     expect_identical(names(inv$mummichog_md5), "mummichog_pinned/A/input.tsv")
     expect_setequal(inv$files, c("Datasets/enrichment_ora_A_results.tsv",
                                  "Datasets/final_results.tsv",
                                  "Enrichment/enrichment_ora_dotplot_A.png",
+                                 "Enrichment/ORA/combined/contrasts/.treated/de/results.tsv",
                                  "mummichog_pinned/A/input.tsv"))
 })
 

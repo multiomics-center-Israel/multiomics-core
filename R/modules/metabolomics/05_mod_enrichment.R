@@ -51,7 +51,18 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     # leaves no manifest, instead of an earlier run's manifest beside new files.
     manifest_file <- file.path(out_enr, .METAB_ENRICHMENT_MANIFEST_FILE)
     stale_manifest <- c(manifest_file, paste0(manifest_file, ".tmp"))
-    unlink(stale_manifest[file.exists(stale_manifest)])
+    stale_manifest <- stale_manifest[file.exists(stale_manifest)]
+    # unlink() does not fail on a file it cannot delete (one that is open in
+    # another program on Windows). Left in place, the earlier manifest would end
+    # up beside this run's new files, so stop before writing any of them.
+    stuck <- stale_manifest[!.delete_metab_enrichment_files(stale_manifest)]
+    if (length(stuck) > 0) {
+        stop("metabolomics enrichment: the manifest of an earlier run could not ",
+             "be removed, so no result was written: ",
+             paste(stuck, collapse = ", "),
+             ". Close the file if it is open in another program and run again.",
+             call. = FALSE)
+    }
 
     contrast_names <- if (!is.null(de_res) && !is.null(de_res$de_tables)) {
         names(de_res$de_tables)

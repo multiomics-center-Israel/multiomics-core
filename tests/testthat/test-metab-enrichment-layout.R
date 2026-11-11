@@ -153,6 +153,21 @@ test_that("names that are no directory of their own are replaced", {
     expect_identical(anyDuplicated(tolower(dirs)), 0L)
 })
 
+test_that("a contrast named like a Windows device gets a usable directory name", {
+    labels <- c("CON", "nul", "Com1", "LPT9.txt", "aux.", "CONTROL", "COM10", "A_CON")
+    expect_silent(dirs <- metab_enrichment_contrast_dirs(labels, labels))
+
+    expect_identical(unname(dirs[c("CON", "nul", "Com1", "LPT9.txt", "aux.")]),
+                     c("contrast_CON", "contrast_nul", "contrast_Com1",
+                       "contrast_LPT9.txt", "contrast_aux"))
+    # Names that merely contain or start with one are left alone.
+    expect_identical(unname(dirs[c("CONTROL", "COM10", "A_CON")]),
+                     c("CONTROL", "COM10", "A_CON"))
+    reserved <- "^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\..*)?$"
+    expect_false(any(grepl(reserved, dirs, ignore.case = TRUE)))
+    for (d in dirs) expect_silent(metab_enrichment_unit_rel_dir("gsea", d))
+})
+
 test_that("clean contrast names pass through silently and unchanged", {
     expect_silent(dirs <- metab_enrichment_contrast_dirs(c("A vs B", "C vs D"),
                                                          c("A_vs_B", "C_vs_D")))
@@ -549,7 +564,12 @@ test_that("a file that could not be deleted is reported as left, not as removed"
     old <- seed_earlier_run(out)
     stubs <- method_stubs()
     # Deletion that silently does nothing, as unlink() does on a locked file.
-    stubs$.delete_metab_enrichment_files <- function(paths) rep(FALSE, length(paths))
+    # The earlier manifest is not locked: that case stops the run (see below).
+    stubs$.delete_metab_enrichment_files <- function(paths) {
+        is_manifest <- grepl("enrichment_manifest\\.csv", paths)
+        unlink(paths[is_manifest])
+        is_manifest
+    }
     local_metab_enrichment_stubs(stubs)
 
     msgs <- testthat::capture_messages(
@@ -564,6 +584,38 @@ test_that("a file that could not be deleted is reported as left, not as removed"
     expect_true(all(file.exists(res$files)))
     m <- utils::read.csv(old$manifest, stringsAsFactors = FALSE)
     expect_identical(nrow(m), 10L)
+})
+
+test_that("a run stops before writing anything when the earlier manifest is stuck", {
+    fx  <- layout_fixture()
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    old <- seed_earlier_run(out)
+    before <- rel_files(out)
+    stubs <- method_stubs()
+    # The earlier manifest is open elsewhere: unlink() leaves it and says nothing.
+    stubs$.delete_metab_enrichment_files <- function(paths) rep(FALSE, length(paths))
+    local_metab_enrichment_stubs(stubs)
+
+    expect_error(mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
+                                             inputs = fx$inputs),
+                 "manifest of an earlier run could not be removed")
+
+    # No result of the new run exists, and the earlier folder is as it was, so
+    # the earlier manifest still describes what is on disk.
+    expect_identical(rel_files(out), before)
+    expect_identical(readLines(old$manifest), "earlier run")
+})
+
+test_that("a hidden unit directory is still part of the stage's files", {
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    enr <- file.path(out, "Enrichment")
+    unit <- file.path(enr, "ORA", "combined", "contrasts", ".treated", "de")
+    dir.create(unit, recursive = TRUE)
+    mine <- file.path(unit, c("results.tsv", "dotplot.png"))
+    file.create(c(mine, file.path(unit, ".notes"), file.path(enr, ".DS_Store")))
+
+    owned <- list_metab_enrichment_owned_files(enr, file.path(out, "Datasets"))
+    expect_setequal(normalizePath(owned), normalizePath(mine))
 })
 
 test_that("only the files that are really gone are returned as removed", {

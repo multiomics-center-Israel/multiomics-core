@@ -118,9 +118,12 @@ Enrichment/
     the library of a pathway is the `library` column of the table where the
     method records it (QEA, ORA, GSEA).
 -   **`<contrast>`** is the contrast label made file-safe. Labels that collide
-    after that get a numeric suffix, with a warning.
--   **`enrichment_manifest.csv`** is removed when an enrichment run starts and
-    written once all results are on disk, through a temporary file that is
+    after that get a numeric suffix, with a warning, and a label that is a
+    Windows device name (`CON`, `NUL`, `COM1`, ...) is prefixed with
+    `contrast_`.
+-   **`enrichment_manifest.csv`** is removed when an enrichment run starts (the
+    run stops, before writing anything, if it cannot be removed) and written
+    once all results are on disk, through a temporary file that is
     renamed into place, so it is either complete or absent: a run that stopped
     part-way has none. Only units that produced a table are listed. Its columns
     are the RNA-seq ones, **except that `storage_key` means something else

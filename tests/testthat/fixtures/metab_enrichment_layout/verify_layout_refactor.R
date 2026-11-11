@@ -89,7 +89,8 @@
 # hashes are read through the path as it is on disk and named by the canonical
 # one.
 .el_inventory <- function(mode_dir) {
-    on_disk <- sort(list.files(mode_dir, recursive = TRUE))
+    # all.files: a contrast whose name starts with "." has a hidden directory.
+    on_disk <- sort(list.files(mode_dir, recursive = TRUE, all.files = TRUE))
     canon   <- .el_canon_paths(on_disk)
     md5_of  <- function(sel) stats::setNames(
         .el_md5(file.path(mode_dir, on_disk[sel])), canon[sel])
