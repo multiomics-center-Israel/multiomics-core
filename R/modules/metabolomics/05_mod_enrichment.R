@@ -589,7 +589,8 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #' @param res     First-contrast result (with \code{$table}).
 #' @param plots   First-contrast plot list (keyed as produced above).
 #' @param out_enr,out_ds Output directories.
-#' @return Character vector of written file paths.
+#' @return Character vector of the file paths that were written. A plot whose
+#'   save failed is left out.
 .save_legacy_enrichment <- function(method, res, plots, out_enr, out_ds) {
     files <- save_tsv(res$table, out_ds,
                       paste0("enrichment_", method, "_results.tsv"))
@@ -605,11 +606,15 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     for (key in names(legacy)) {
         if (!is.null(plots[[key]])) {
             f <- file.path(out_enr, legacy[[key]])
-            tryCatch(
-                ggplot2::ggsave(f, plots[[key]], width = 12, height = 8, dpi = 300),
-                error = function(e) NULL
-            )
-            files <- c(files, f)
+            saved <- tryCatch({
+                ggplot2::ggsave(f, plots[[key]], width = 12, height = 8, dpi = 300)
+                TRUE
+            }, error = function(e) FALSE)
+            # Only a copy that was actually written is this run's. A path whose
+            # save failed may still hold an earlier run's plot, and reporting it
+            # as written would keep that plot out of the stale-file check and
+            # put it in the PowerPoint.
+            if (saved) files <- c(files, f)
         }
     }
     files

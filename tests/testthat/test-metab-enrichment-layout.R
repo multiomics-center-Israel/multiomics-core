@@ -727,6 +727,29 @@ test_that("a failed manifest write leaves the target as it was and no partial fi
 
 # ---- plots ----------------------------------------------------------------------
 
+test_that("a first-contrast copy whose save failed is not reported as written", {
+    skip_if_not_installed("ggplot2")
+    skip_if_not(capabilities("png") || requireNamespace("ragg", quietly = TRUE),
+                "no PNG device")
+    d <- withr::local_tempdir()
+    enr <- file.path(d, "Enrichment"); ds <- file.path(d, "Datasets")
+    dir.create(enr); dir.create(ds)
+    # A path that cannot be written as a file stands in for a PNG that is open
+    # in another program: the save fails, and whatever was there stays.
+    blocked <- file.path(enr, "enrichment_ora_dotplot.png")
+    dir.create(blocked)
+    plot <- ggplot2::ggplot()
+
+    files <- suppressWarnings(.save_legacy_enrichment(
+        "ora", res = list(table = data.frame(pathway = "P1", FDR = 0.01)),
+        plots = list(dotplot = plot, lollipop = plot), out_enr = enr, out_ds = ds))
+
+    expect_false(blocked %in% files)
+    expect_setequal(basename(files),
+                    c("enrichment_ora_results.tsv", "enrichment_ora_lollipop.png"))
+    expect_true(all(file.exists(files)))
+})
+
 test_that("plots are written beside their table under fixed names", {
     skip_if_not_installed("ggplot2")
     skip_if_not(capabilities("png") || requireNamespace("ragg", quietly = TRUE),
