@@ -158,6 +158,18 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
         )
       ),
 
+      # ---- enrichment summary heatmaps across contrasts (reads the tables
+      #      the two enrichment targets above wrote) ----
+      tar_target(
+        prot_enrichment_heatmaps,
+        mod_proteomics_enrichment_heatmaps(
+          pathway_res = prot_pathway_res,
+          pooled_res  = prot_pathway_pooled_res,
+          config      = config,
+          out_dir     = prot_out_dir
+        )
+      ),
+
       # ---- PPI network analysis ----
       tar_target(
         prot_ppi_res,
@@ -226,6 +238,7 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
         {
           force(prot_pathway_res)
           force(prot_pathway_pooled_res)
+          force(prot_enrichment_heatmaps)
           force(prot_ppi_res)
           force(prot_domain_res)
           force(prot_adv_stats)

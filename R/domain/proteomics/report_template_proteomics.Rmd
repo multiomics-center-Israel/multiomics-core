@@ -252,6 +252,9 @@ show_executive_summary <- report_cfg$show_executive_summary %||% TRUE
 show_methods <- report_cfg$show_methods %||% TRUE
 show_session_info <- report_cfg$show_session_info %||% TRUE
 force_pca <- report_cfg$force_pca %||% FALSE
+# Figures written by prot_enrichment_heatmaps; the section below also needs
+# its index file, so a run that did not write them shows nothing.
+show_enrichment_heatmaps <- report_cfg$show_enrichment_heatmaps %||% TRUE
 
 # Load DE summary data (used in multiple sections). Use the same QC_post /
 # DE_plots fallback resolver as the PNG chunks so older runs (which wrote
@@ -3531,6 +3534,69 @@ if (length(fgsea_files) > 0) {
         } else {
             cat("No significant pathways with leading edge information.\n\n")
         }
+    }
+}
+```
+
+```{r enrichment-across-contrasts, eval=length(contrast_names) > 5, results='asis', fig.width=10, fig.height=9}
+enr_across <- collect_enrichment_results(enrich_dir)
+if (nrow(enr_across) > 0) {
+    cat("\n## Enrichment Across Contrasts {.tabset}\n\n")
+    cat("Each heatmap has one row per gene set and one column per contrast.",
+        "GSEA cells show NES; ORA cells show -log10(padj). Three selections per",
+        "analysis: gene sets significant in more than half of the contrasts, those",
+        "significant in only one or two, and the top 30 by smallest padj in any",
+        "contrast. Each list is cut to 30 rows, ordered by smallest padj.\n\n")
+    print_enrichment_contrast_heatmaps(enr_across, contrast_names, gsea_cut = 0.05, ora_cut = 0.05)
+}
+```
+
+```{r enrichment-summary-heatmaps, eval=show_enrichment_heatmaps, results='asis'}
+# Reads only what mod_proteomics_enrichment_heatmaps() wrote; nothing here
+# selects terms or recomputes a statistic.
+.eh_dir <- file.path(enrich_dir, "contrast_heatmaps")
+.eh_idx_file <- file.path(.eh_dir, "heatmaps_index.tsv")
+if (file.exists(.eh_idx_file)) {
+    .eh <- read.delim(.eh_idx_file, stringsAsFactors = FALSE, na.strings = "")
+    .eh_cut <- .eh$fdr_cutoff[1]
+    cat("\n## Enrichment summary heatmaps {.tabset}\n\n")
+    cat(sprintf(paste0(
+        "One heatmap per collection and analysis, with every contrast as a column. Rows are the ",
+        "gene sets with FDR < %s in at least one contrast, ordered by their smallest FDR and capped ",
+        "at report.enrichment_heatmap_max_terms; the caption under each figure says how many were ",
+        "left out. GSEA cells show NES. ORA cells show -log10(FDR) of the up-regulated list as ",
+        "positive and of the down-regulated list as negative; where both lists were tested in a ",
+        "contrast, the one with the smaller FDR is shown. cameraPR cells (pooled ranking) are signed ",
+        "the same way by its Direction column. A dot marks FDR < %s. Blank cells were not tested in ",
+        "that contrast (ORA runs only when a direction has at least 5 DE proteins). The tables these ",
+        "are read from are the ones in the sections above; nothing was recomputed.\n\n"),
+        .eh_cut, .eh_cut))
+    if (isTRUE((prot_cfg$ppi %||% list())$enabled)) {
+        cat("STRING functional enrichment is not shown here: it is run once on the DE proteins of all contrasts together, so it has no per-contrast columns.\n\n")
+    }
+    .value_txt <- c(NES = "NES (diverging, centred at 0)",
+                    signed_log10 = "-log10(FDR), positive for the up list or Up direction and negative for the down list or Down direction (diverging, centred at 0)",
+                    log10 = "-log10(FDR) (sequential)")
+    .none <- .eh[is.na(.eh$png), , drop = FALSE]
+    if (nrow(.none) > 0) {
+        cat(sprintf("No gene set reached FDR < %s in any contrast for: %s.\n\n", .eh_cut,
+                    paste(sprintf("%s %s%s", .none$database, .none$analysis,
+                                  ifelse(.none$source == "pooled", " (pooled ranking)", "")),
+                          collapse = "; ")))
+    }
+    .drawn <- .eh[!is.na(.eh$png), , drop = FALSE]
+    for (i in seq_len(nrow(.drawn))) {
+        .r <- .drawn[i, ]
+        .src_txt <- if (.r$source == "pooled") " (pooled ranking)" else ""
+        cat(sprintf("\n### %s, %s%s\n\n", .r$database, .r$analysis, .src_txt))
+        cat(sprintf("![%s %s](%s){width=100%%}\n\n", .r$database, .r$analysis,
+                    file.path(.eh_dir, .r$png)))
+        figure_legend(sprintf(paste0(
+            "%s %s%s across contrasts. Cell value: %s. %d gene sets had FDR < %s in at least one ",
+            "contrast; %d shown, %d left out. Source: %s; figure Enrichment/contrast_heatmaps/%s ",
+            "(PDF alongside)."),
+            .r$database, .r$analysis, .src_txt, .value_txt[[.r$value]], .r$n_significant, .eh_cut,
+            .r$n_shown, .r$n_left_out, .r$source_files, .r$png))
     }
 }
 ```

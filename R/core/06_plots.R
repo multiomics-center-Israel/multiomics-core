@@ -903,6 +903,26 @@ add_A_from_expr <- function(de_tbl, expr_mat, id_col = "FeatureID") {
   de_tbl
 }
 
+#' Text sizes for figures placed at their saved size
+#'
+#' \code{theme_minimal()} draws axis and legend text at 0.8 of the base size;
+#' this sets every text element to \code{size} pt.
+#'
+#' @param size Font size in pt.
+#' @return A ggplot2 theme object to add to a plot.
+theme_print_text <- function(size = 16) {
+  ggplot2::theme(
+    text         = ggplot2::element_text(size = size),
+    axis.text    = ggplot2::element_text(size = size),
+    axis.title   = ggplot2::element_text(size = size),
+    legend.text  = ggplot2::element_text(size = size),
+    legend.title = ggplot2::element_text(size = size),
+    plot.title   = ggplot2::element_text(size = size, hjust = 0),
+    plot.caption = ggplot2::element_text(size = size, hjust = 0),
+    strip.text   = ggplot2::element_text(size = size)
+  )
+}
+
 #' Save a pheatmap object to file
 save_heatmap_to_file <- function(pheatmap_obj, out_file,
                                  width = 2000, height = 1400, res = 150) {

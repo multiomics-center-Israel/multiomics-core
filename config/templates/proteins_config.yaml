@@ -265,6 +265,13 @@ modes:
       show_identified_proteins_venn: false  # Pre-imputation identified proteins Venn diagram
       force_pca: false                     # Force PCA even with <2 replicates per group
 
+      # Enrichment summary heatmaps (Enrichment/contrast_heatmaps/): one per
+      # collection and analysis, all contrasts as columns, sets with FDR below the
+      # cutoff in at least one contrast as rows, capped at max_terms.
+      show_enrichment_heatmaps: true
+      enrichment_heatmap_fdr: 0.05
+      enrichment_heatmap_max_terms: 40
+
       # Text overrides (leave empty for auto-generated text)
       stats_methods_text: ""               # Custom DE statistics description in Results section
       stats_section_text: ""               # Custom statistical analysis text in Methods section
