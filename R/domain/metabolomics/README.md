@@ -120,10 +120,22 @@ Enrichment/
 -   **`<contrast>`** is the contrast label made file-safe. Labels that collide
     after that get a numeric suffix, with a warning.
 -   **`enrichment_manifest.csv`** is removed when an enrichment run starts and
-    written when it ends, so a run that stopped part-way has none. Only units
-    that produced a table are listed. Nothing else is deleted: files left by an
-    earlier run, including the flat `enrichment_*` files that preceded this
-    layout, stay where they are and are not in the manifest.
+    written when it ends, through a temporary file that is renamed into place,
+    so it is either complete or absent: a run that stopped part-way has none.
+    Only units that produced a table are listed. Its columns are the RNA-seq
+    ones, **except that `storage_key` means something else here**: the unit
+    directory relative to `Enrichment/`, not the key of a table inside a
+    results object as in RNA-seq.
+-   **Files from an earlier run.** Once a run has written its results, it
+    removes the files of this stage that it did not write: a contrast that is
+    gone or gave no result, a plot that was not drawn this time, the flat
+    `enrichment_*` files that preceded this layout. A file counts as this
+    stage's only by folder and name together (`results.tsv` and `*.png` under
+    the four method folders; `enrichment_<method>_*.png` directly in
+    `Enrichment/`; `enrichment_<method>[_<contrast>]_results.tsv` directly in
+    `Datasets/`). Anything else is left alone, directories are never removed,
+    and nothing is removed by a run that fails, a run that produces no result
+    at all, or a run with enrichment disabled.
 -   **Still written for compatibility:** the first contrast's ORA and GSEA table
     in `Datasets/enrichment_{ora,gsea}_results.tsv` and its plots as
     `Enrichment/enrichment_{ora,gsea}_*.png`.

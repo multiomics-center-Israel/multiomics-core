@@ -172,6 +172,51 @@ metab_enrichment_legacy_plot_name <- function(path, enr_root) {
 }
 
 
+#' Enrichment files on disk that this stage owns
+#'
+#' The files only the metabolomics enrichment stage writes, identified by where
+#' they are AND what they are called, so nothing another stage or a person put
+#' in these folders is ever listed:
+#' \itemize{
+#'   \item under \code{Enrichment/{ORA,GSEA,QEA,ssGSEA}/}: \code{results.tsv}
+#'     and \code{*.png} (the unit layout);
+#'   \item directly in \code{Enrichment/}:
+#'     \code{enrichment_<method>_*.png} (the flat names used before the unit
+#'     layout, and the first-contrast copies still written);
+#'   \item directly in \code{Datasets/}:
+#'     \code{enrichment_<method>[_<contrast>]_results.tsv} (the same).
+#' }
+#' The manifest is not listed: the stage removes and rewrites it itself. The
+#' mummichog stage's \code{mummichog_pinned/} tree is outside both folders.
+#'
+#' @param enr_root The mode's Enrichment directory.
+#' @param datasets_dir The mode's Datasets directory.
+#' @return Character vector of existing file paths (possibly empty).
+list_metab_enrichment_owned_files <- function(enr_root, datasets_dir) {
+    methods <- paste(names(.METAB_ENRICHMENT_METHOD_DIR), collapse = "|")
+    flat_png <- paste0("^enrichment_(", methods, ")_.*\\.png$")
+    flat_tsv <- paste0("^enrichment_(", methods, ")(_.*)?_results\\.tsv$")
+
+    unit_files <- unlist(lapply(
+        file.path(enr_root, .METAB_ENRICHMENT_METHOD_DIR),
+        function(d) {
+            if (!dir.exists(d)) return(character(0))
+            f <- list.files(d, recursive = TRUE, full.names = TRUE)
+            f[basename(f) == "results.tsv" | grepl("\\.png$", basename(f))]
+        }), use.names = FALSE)
+
+    flat <- c(
+        if (dir.exists(enr_root))
+            list.files(enr_root, pattern = flat_png, full.names = TRUE),
+        if (dir.exists(datasets_dir))
+            list.files(datasets_dir, pattern = flat_tsv, full.names = TRUE))
+    # list.files() also returns directories that match the pattern.
+    flat <- flat[!dir.exists(flat)]
+
+    as.character(c(unit_files, flat))
+}
+
+
 #' Manifest of the enrichment units a run wrote
 #'
 #' One row per result unit, in the column schema of the RNA-seq enrichment
@@ -182,8 +227,14 @@ metab_enrichment_legacy_plot_name <- function(path, enr_root) {
 #' first one.
 #'
 #' \code{status} is "significant" when at least one pathway has
-#' FDR < \code{.METAB_ENRICHMENT_SIG_FDR}, otherwise "empty". \code{storage_key}
-#' is the unit directory relative to Enrichment/.
+#' FDR < \code{.METAB_ENRICHMENT_SIG_FDR}, otherwise "empty".
+#'
+#' The columns are the RNA-seq ones, but \code{storage_key} does NOT mean the
+#' same thing. In RNA-seq it is the key of the result table inside the
+#' pathway-results object (the Shiny payload builder looks tables up by it).
+#' Here it is the unit's directory relative to Enrichment/, i.e. where the files
+#' are. It locates a unit on disk; it is not a key into any R object, so code
+#' written against the RNA-seq manifest must not use it as one.
 #'
 #' @param units List of units, each a list with \code{method} ("ora", "gsea",
 #'   "qea", "ssgsea"), \code{contrast} (the contrast label, or NA for a run over

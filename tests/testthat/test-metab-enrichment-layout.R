@@ -374,23 +374,57 @@ test_that("contrasts that sanitise to one name keep separate outputs", {
 
 # ---- what the module leaves alone -----------------------------------------------
 
+# An output folder as an earlier run could have left it. `stale` are files this
+# stage owns (by folder AND name) that the stubbed run below does not write;
+# `foreign` are files it does not own, some of them deliberately look-alikes.
 seed_earlier_run <- function(out) {
     enr <- file.path(out, "Enrichment")
-    dir.create(file.path(enr, "ORA", "combined", "contrasts", "Old", "de"),
-               recursive = TRUE)
+    old_unit <- file.path(enr, "ORA", "combined", "contrasts", "Old", "de")
+    cur_unit <- file.path(enr, "ORA", "combined", "contrasts", "A_vs_B", "de")
+    dir.create(old_unit, recursive = TRUE)
+    dir.create(cur_unit, recursive = TRUE)
     dir.create(file.path(out, "Datasets"))
     dir.create(file.path(out, "mummichog_pinned", "Old"), recursive = TRUE)
-    kept <- c(
+
+    stale <- c(
+        # flat files from before the unit layout
         file.path(enr, "enrichment_ora_dotplot_Old.png"),
-        file.path(enr, "ORA", "combined", "contrasts", "Old", "de", "results.tsv"),
+        file.path(enr, "enrichment_qea_barplot.png"),
         file.path(out, "Datasets", "enrichment_ora_Old_results.tsv"),
+        file.path(out, "Datasets", "enrichment_qea_results.tsv"),
+        # a first-contrast copy this run does not redraw
+        file.path(enr, "enrichment_ora_dotplot.png"),
+        # a unit of a contrast that is gone
+        file.path(old_unit, "results.tsv"),
+        file.path(old_unit, "dotplot.png"),
+        # a plot in a unit this run rewrites, but does not redraw
+        file.path(cur_unit, "dotplot.png"))
+    foreign <- c(
         file.path(out, "Datasets", "final_results.tsv"),
-        file.path(out, "mummichog_pinned", "Old", "input.tsv"))
-    file.create(kept)
+        file.path(out, "Datasets", "enrichment_summary.tsv"),
+        file.path(enr, "notes.txt"),
+        file.path(enr, "other.png"),
+        file.path(enr, "mummichog_pathway_bubble_Old.png"),
+        file.path(old_unit, "notes.txt"),
+        file.path(out, "mummichog_pinned", "Old", "input.tsv"),
+        file.path(out, "mummichog_pinned", "enrichment_ora_dotplot_Old.png"))
+    file.create(c(stale, foreign))
     manifest <- file.path(enr, "enrichment_manifest.csv")
     writeLines("earlier run", manifest)
-    list(kept = kept, manifest = manifest)
+    list(stale = stale, foreign = foreign, manifest = manifest)
 }
+
+test_that("only the stage's own files are listed as owned", {
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    old <- seed_earlier_run(out)
+    owned <- list_metab_enrichment_owned_files(file.path(out, "Enrichment"),
+                                               file.path(out, "Datasets"))
+    expect_setequal(normalizePath(owned), normalizePath(old$stale))
+    # The manifest is handled separately and is never in the list.
+    expect_false(any(basename(owned) == "enrichment_manifest.csv"))
+    expect_length(list_metab_enrichment_owned_files(
+        file.path(out, "no_such_dir"), file.path(out, "nor_this")), 0L)
+})
 
 test_that("a disabled run deletes nothing, not even the earlier manifest", {
     fx  <- layout_fixture()
@@ -406,26 +440,72 @@ test_that("a disabled run deletes nothing, not even the earlier manifest", {
     expect_identical(readLines(old$manifest), "earlier run")
 })
 
-test_that("an enabled run replaces the manifest and leaves earlier files alone", {
+test_that("a completed run removes its own earlier files and nothing else", {
     fx  <- layout_fixture()
     out <- file.path(withr::local_tempdir(), "metabolomics")
     old <- seed_earlier_run(out)
     local_metab_enrichment_stubs(method_stubs())
 
-    mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
-                                inputs = fx$inputs)
+    expect_message(
+        res <- mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
+                                           inputs = fx$inputs),
+        "removed 8 file")
 
-    expect_true(all(file.exists(old$kept)))
+    expect_false(any(file.exists(old$stale)))
+    expect_true(all(file.exists(old$foreign)))
+    # What this run wrote is all still there.
+    expect_true(all(file.exists(res$files)))
+
     m <- utils::read.csv(old$manifest, stringsAsFactors = FALSE)
     # It is this run's manifest, not the seeded one-line file.
     expect_identical(names(m), names(.empty_enrichment_manifest()))
     expect_identical(nrow(m), 10L)
-    # The earlier run's unit is on disk but is not part of this run's manifest.
-    expect_false(any(grepl("Old", m$storage_key)))
     expect_false("Old" %in% m$item)
+    # Every enrichment table left on disk is one the manifest accounts for,
+    # apart from the two first-contrast copies.
+    enr <- file.path(out, "Enrichment")
+    expect_setequal(
+        list.files(enr, pattern = "^results\\.tsv$", recursive = TRUE),
+        file.path(m$storage_key, "results.tsv"))
 })
 
-test_that("a run that stops part-way leaves no manifest behind", {
+test_that("a clean run has nothing to remove and says nothing", {
+    fx  <- layout_fixture()
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    local_metab_enrichment_stubs(method_stubs())
+    expect_silent(mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
+                                              inputs = fx$inputs))
+    # Running again over its own output removes nothing either.
+    expect_silent(res <- mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config,
+                                                     out, inputs = fx$inputs))
+    expect_true(all(file.exists(res$files)))
+})
+
+test_that("a run that produces no result removes nothing", {
+    fx  <- layout_fixture()
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    old <- seed_earlier_run(out)
+    stubs <- method_stubs()
+    for (m in c("run_metabolomics_qea", "run_metabolomics_ssgsea",
+                "run_metabolomics_ora", "run_metabolomics_gsea")) {
+        stubs[[m]] <- function(...) NULL
+    }
+    local_metab_enrichment_stubs(stubs)
+
+    expect_message(
+        res <- mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
+                                           inputs = fx$inputs),
+        "produced no result")
+
+    expect_true(all(file.exists(c(old$stale, old$foreign))))
+    # The manifest is this run's: complete, and empty.
+    m <- utils::read.csv(old$manifest, stringsAsFactors = FALSE)
+    expect_identical(names(m), names(.empty_enrichment_manifest()))
+    expect_identical(nrow(m), 0L)
+    expect_identical(basename(res$files), "enrichment_manifest.csv")
+})
+
+test_that("a run that stops part-way removes no results and leaves no manifest", {
     fx  <- layout_fixture()
     out <- file.path(withr::local_tempdir(), "metabolomics")
     old <- seed_earlier_run(out)
@@ -438,7 +518,39 @@ test_that("a run that stops part-way leaves no manifest behind", {
                  "stopped part-way")
 
     expect_false(file.exists(old$manifest))
-    expect_true(all(file.exists(old$kept)))
+    expect_false(file.exists(paste0(old$manifest, ".tmp")))
+    # The earlier results it did not get to replace are still there.
+    expect_true(all(file.exists(old$stale[!grepl("A_vs_B", old$stale)])))
+    expect_true(all(file.exists(old$foreign)))
+})
+
+# ---- manifest write ---------------------------------------------------------------
+
+test_that("the manifest is written whole, with no temporary file left", {
+    path <- file.path(withr::local_tempdir(), "enrichment_manifest.csv")
+    m <- build_metab_enrichment_manifest(list(
+        list(method = "qea", contrast = NA_character_,
+             rel_dir = "QEA/combined/all_samples",
+             table = data.frame(FDR = 0.01))))
+
+    expect_identical(.write_metab_enrichment_manifest(m, path), path)
+    expect_false(file.exists(paste0(path, ".tmp")))
+    back <- utils::read.csv(path, stringsAsFactors = FALSE)
+    expect_identical(names(back), names(m))
+    expect_identical(back$storage_key, m$storage_key)
+})
+
+test_that("a failed manifest write leaves the target as it was and no partial file", {
+    path <- file.path(withr::local_tempdir(), "enrichment_manifest.csv")
+    writeLines("complete earlier manifest", path)
+    # write.csv() cannot encode a list column, so the write fails after the
+    # temporary file has been opened.
+    bad <- data.frame(analysis = c("ORA", "GSEA"))
+    bad$broken <- list(1, 2)
+
+    expect_error(.write_metab_enrichment_manifest(bad, path))
+    expect_identical(readLines(path), "complete earlier manifest")
+    expect_false(file.exists(paste0(path, ".tmp")))
 })
 
 # ---- plots ----------------------------------------------------------------------
