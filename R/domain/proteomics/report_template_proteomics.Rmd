@@ -3190,7 +3190,24 @@ cat("- **Binary patterns** — assigns each feature to an on/off (1/0) pattern a
 ```{r clustering-hier, eval=clustering_show && has_hier, results='asis'}
 cat("## Hierarchical\n\n")
 cat(sprintf("![Hierarchical clustering heatmap](%s){width=100%%}\n\n", hier_hm))
-figure_legend("Hierarchical clustering heatmap of differentially expressed proteins (rows z-scored). Row dendrogram reflects feature similarity; samples are annotated by experimental group.")
+.hier_info_file <- file.path(hier_dir, "Hierarchical_DE_heatmap_info.tsv")
+if (file.exists(.hier_info_file)) {
+  # Written by mod_proteomics_clustering() with the heatmap, so the caption
+  # states the rule and matrix this run used.
+  .hi <- read.delim(.hier_info_file, stringsAsFactors = FALSE)
+  figure_legend(sprintf(paste0(
+    "Hierarchical clustering heatmap of %d DE proteins, the union over contrasts of %s. ",
+    "Rows z-scored; %s distance and %s linkage on the proteins%s.%s Matrix: %s. ",
+    "Row annotation: the contrasts in which each protein passes that rule, by direction. ",
+    "Source: Clustering/Hierarchical/Hierarchical_DE_heatmap.png; DE columns from the DE summary ",
+    "(Datasets/limma_multimp_summary_*.tsv)."),
+    .hi$n_features[1], .hi$row_rule[1], .hi$distance[1], .hi$linkage[1],
+    if (isTRUE(as.logical(.hi$samples_clustered[1]))) " and on the samples" else "; samples in metadata order",
+    if (!is.na(.hi$zscore_limit[1])) sprintf(" Colours clipped at +/-%s.", .hi$zscore_limit[1]) else "",
+    .hi$matrix[1]))
+} else {
+  figure_legend("Hierarchical clustering heatmap of differentially expressed proteins (rows z-scored). Row dendrogram reflects feature similarity; samples are annotated by experimental group.")
+}
 render_commentary("clustering_hierarchical")
 ```
 
