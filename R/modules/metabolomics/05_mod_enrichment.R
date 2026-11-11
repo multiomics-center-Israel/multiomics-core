@@ -119,7 +119,8 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             for (lib_name in unique(qea_res$table$library)) {
                 lib_df <- qea_res$table[qea_res$table$library == lib_name, ]
                 lib_label <- toupper(gsub("_pathway$", "", lib_name))
-                f_lib <- file.path(qea_dir, paste0(tolower(lib_label), ".png"))
+                f_lib <- file.path(qea_dir, paste0(
+                    .METAB_ENRICHMENT_LIBRARY_PLOT_PREFIX, tolower(lib_label), ".png"))
                 p_lib <- tryCatch({
                     pl <- plot_enrichment_barplot(lib_df, top_n = 20,
                                                   title = paste0(lib_label, " Enrichment"))
@@ -337,13 +338,18 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     # the metabolomics DAG when modes.metabolomics.enrichment.mummichog.enabled is
     # true — it is no longer produced here. See mod_mummichog_pinned().
 
-    # Every result of this run is on disk now, so what an earlier run left
-    # under this stage's own file names is no longer current. Done here, not at
-    # the start, so a run that fails keeps the earlier results it did not
-    # replace (and has no manifest, which is how it shows as incomplete).
-    # A run that produced no result at all (a wrong GMT path, say) replaces
-    # nothing, so it removes nothing either: its empty manifest already says
-    # that no unit on disk belongs to it.
+    # The manifest goes first: if it cannot be written the run stops here, with
+    # nothing removed and no manifest, exactly like any other failed run.
+    .write_metab_enrichment_manifest(build_metab_enrichment_manifest(units),
+                                     manifest_file)
+    files <- c(files, manifest_file)
+
+    # Every result of this run is now on disk and recorded, so what an earlier
+    # run left under this stage's own file names is no longer current. Done at
+    # the end, not the start, so a run that fails keeps the earlier results it
+    # did not replace. A run that produced no result at all (a wrong GMT path,
+    # say) replaces nothing, so it removes nothing either: its empty manifest
+    # already says that no unit on disk belongs to it.
     if (length(units) > 0) {
         .remove_stale_metab_enrichment_files(out_enr, out_ds, written = files)
     } else {
@@ -351,11 +357,6 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                 "files left by an earlier run were not removed; the manifest ",
                 "lists none of them.")
     }
-
-    # Written last: its presence marks a run that reached the end.
-    .write_metab_enrichment_manifest(build_metab_enrichment_manifest(units),
-                                     manifest_file)
-    files <- c(files, manifest_file)
 
     list(
         qea                = qea_res,
@@ -376,6 +377,20 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 # Output housekeeping
 # ==============================================================================
 
+#' Delete files and say which are really gone
+#'
+#' \code{unlink()} does not fail when a file cannot be deleted (it is open in
+#' another program, or the folder is read-only), so its caller would otherwise
+#' report a deletion that did not happen.
+#'
+#' @param paths Paths of files (not directories).
+#' @return Logical vector, one per path: TRUE when the file no longer exists.
+.delete_metab_enrichment_files <- function(paths) {
+    if (length(paths) == 0) return(logical(0))
+    unlink(paths)
+    !file.exists(paths)
+}
+
 #' Remove this stage's files that the current run did not write
 #'
 #' Results left by an earlier run would otherwise sit beside the new ones and
@@ -386,19 +401,34 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #' is left alone. Files are removed one by one; directories are never removed,
 #' so an emptied unit directory stays.
 #'
+#' A file that could not be deleted is not counted as removed. It is named in a
+#' warning instead, because it is still on disk and is not a result of this
+#' run. The run itself is complete either way: its results and its manifest
+#' were written before this is called.
+#'
 #' @param out_enr,out_ds The mode's Enrichment and Datasets directories.
 #' @param written Paths of the files the current run wrote.
-#' @return Invisibly, the paths that were removed.
+#' @return Invisibly, the paths that were actually removed.
 .remove_stale_metab_enrichment_files <- function(out_enr, out_ds, written) {
     key   <- function(x) normalizePath(x, winslash = "/", mustWork = FALSE)
     owned <- list_metab_enrichment_owned_files(out_enr, out_ds)
     stale <- owned[!key(owned) %in% key(written)]
-    if (length(stale) > 0) {
-        unlink(stale)
-        message("metabolomics enrichment: removed ", length(stale),
+    if (length(stale) == 0) return(invisible(character(0)))
+
+    gone    <- .delete_metab_enrichment_files(stale)
+    removed <- stale[gone]
+    left    <- stale[!gone]
+    if (length(removed) > 0) {
+        message("metabolomics enrichment: removed ", length(removed),
                 " file(s) left by an earlier run under ", out_enr, " and ", out_ds)
     }
-    invisible(stale)
+    if (length(left) > 0) {
+        warning("metabolomics enrichment: ", length(left), " file(s) left by an ",
+                "earlier run could not be removed. They are NOT results of this ",
+                "run and are not in its manifest; delete them by hand: ",
+                paste(left, collapse = ", "), call. = FALSE)
+    }
+    invisible(removed)
 }
 
 #' Write the enrichment manifest so that it is either complete or absent

@@ -169,7 +169,7 @@ test_that("every unit plot maps back to the flat name it had before the layout",
         metab_enrichment_unit_dir(root, method, contrast)
 
     new <- c(
-        file.path(unit("qea"), c("barplot.png", "lollipop.png", "kegg.png")),
+        file.path(unit("qea"), c("barplot.png", "lollipop.png", "library_kegg.png")),
         file.path(unit("ssgsea"), c("barplot.png", "boxplots.png", "lollipop.png")),
         file.path(unit("ora", "A_vs_B"), c("dotplot.png", "lollipop.png", "barplot.png")),
         file.path(unit("gsea", "A_vs_B"), c("nes_barplot.png", "lollipop.png", "barplot.png")),
@@ -375,21 +375,27 @@ test_that("contrasts that sanitise to one name keep separate outputs", {
 # ---- what the module leaves alone -----------------------------------------------
 
 # An output folder as an earlier run could have left it. `stale` are files this
-# stage owns (by folder AND name) that the stubbed run below does not write;
-# `foreign` are files it does not own, some of them deliberately look-alikes.
+# stage owns (by path shape AND name) that the stubbed run below does not
+# write; `foreign` are files it does not own. Most of the foreign ones are
+# deliberate look-alikes: a PNG inside a method folder, a file with the stage's
+# prefix but not one of its plot names, a stage file name in the wrong place.
 seed_earlier_run <- function(out) {
     enr <- file.path(out, "Enrichment")
     old_unit <- file.path(enr, "ORA", "combined", "contrasts", "Old", "de")
     cur_unit <- file.path(enr, "ORA", "combined", "contrasts", "A_vs_B", "de")
-    dir.create(old_unit, recursive = TRUE)
-    dir.create(cur_unit, recursive = TRUE)
-    dir.create(file.path(out, "Datasets"))
-    dir.create(file.path(out, "mummichog_pinned", "Old"), recursive = TRUE)
+    qea_all  <- file.path(enr, "QEA", "combined", "all_samples")
+    for (d in c(old_unit, cur_unit, qea_all,
+                file.path(enr, "GSEA", "combined", "ranking_by_fc", "Old", "extra"),
+                file.path(out, "Datasets"),
+                file.path(out, "mummichog_pinned", "Old"))) {
+        dir.create(d, recursive = TRUE)
+    }
 
     stale <- c(
         # flat files from before the unit layout
         file.path(enr, "enrichment_ora_dotplot_Old.png"),
         file.path(enr, "enrichment_qea_barplot.png"),
+        file.path(enr, "enrichment_qea_kegg.png"),
         file.path(out, "Datasets", "enrichment_ora_Old_results.tsv"),
         file.path(out, "Datasets", "enrichment_qea_results.tsv"),
         # a first-contrast copy this run does not redraw
@@ -397,15 +403,29 @@ seed_earlier_run <- function(out) {
         # a unit of a contrast that is gone
         file.path(old_unit, "results.tsv"),
         file.path(old_unit, "dotplot.png"),
-        # a plot in a unit this run rewrites, but does not redraw
-        file.path(cur_unit, "dotplot.png"))
+        # plots in units this run rewrites, but does not redraw
+        file.path(cur_unit, "dotplot.png"),
+        file.path(qea_all, "library_old.png"))
     foreign <- c(
         file.path(out, "Datasets", "final_results.tsv"),
         file.path(out, "Datasets", "enrichment_summary.tsv"),
         file.path(enr, "notes.txt"),
         file.path(enr, "other.png"),
         file.path(enr, "mummichog_pathway_bubble_Old.png"),
+        # the stage's prefix, but not one of its plot names
+        file.path(enr, "enrichment_ora_myfigure.png"),
+        # PNGs someone put inside the method folders
+        file.path(enr, "ORA", "overview.png"),
+        file.path(enr, "ORA", "combined", "summary.png"),
+        file.path(old_unit, "my_figure.png"),
         file.path(old_unit, "notes.txt"),
+        file.path(cur_unit, "custom.png"),
+        # a GSEA plot name in an ORA unit, and a stage name one level too deep
+        file.path(cur_unit, "nes_barplot.png"),
+        file.path(enr, "GSEA", "combined", "ranking_by_fc", "Old", "extra", "barplot.png"),
+        # a library plot without the prefix, and a results table that is not .tsv
+        file.path(qea_all, "kegg.png"),
+        file.path(qea_all, "results.csv"),
         file.path(out, "mummichog_pinned", "Old", "input.tsv"),
         file.path(out, "mummichog_pinned", "enrichment_ora_dotplot_Old.png"))
     file.create(c(stale, foreign))
@@ -449,7 +469,7 @@ test_that("a completed run removes its own earlier files and nothing else", {
     expect_message(
         res <- mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
                                            inputs = fx$inputs),
-        "removed 8 file")
+        "removed 10 file")
 
     expect_false(any(file.exists(old$stale)))
     expect_true(all(file.exists(old$foreign)))
@@ -479,6 +499,106 @@ test_that("a clean run has nothing to remove and says nothing", {
     expect_silent(res <- mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config,
                                                      out, inputs = fx$inputs))
     expect_true(all(file.exists(res$files)))
+})
+
+test_that("a PNG that is not the stage's own survives inside a method folder", {
+    fx  <- layout_fixture()
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    local_metab_enrichment_stubs(method_stubs())
+    # A first run creates the real unit folders ...
+    mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
+                                inputs = fx$inputs)
+    enr <- file.path(out, "Enrichment")
+    mine <- c(
+        file.path(enr, "ORA", "combined", "contrasts", "A_vs_B", "de", "figure_for_paper.png"),
+        file.path(enr, "GSEA", "combined", "ranking_by_fc", "C_D", "annotated.png"),
+        file.path(enr, "QEA", "combined", "all_samples", "kegg.png"),
+        file.path(enr, "ssGSEA", "combined", "contrasts", "A_vs_B", "scores_by_hand.png"),
+        file.path(enr, "ssGSEA", "panel.png"))
+    file.create(mine)
+
+    # ... and a second run over them leaves every such file in place.
+    expect_silent(mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
+                                              inputs = fx$inputs))
+    expect_true(all(file.exists(mine)))
+    expect_length(intersect(
+        normalizePath(mine),
+        normalizePath(list_metab_enrichment_owned_files(
+            enr, file.path(out, "Datasets")))), 0L)
+})
+
+test_that("nothing is removed when the manifest cannot be written", {
+    fx  <- layout_fixture()
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    old <- seed_earlier_run(out)
+    stubs <- method_stubs()
+    stubs$.write_metab_enrichment_manifest <- function(...) stop("manifest failed")
+    local_metab_enrichment_stubs(stubs)
+
+    expect_error(mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
+                                             inputs = fx$inputs),
+                 "manifest failed")
+
+    expect_true(all(file.exists(c(old$stale, old$foreign))))
+    expect_false(file.exists(old$manifest))
+})
+
+test_that("a file that could not be deleted is reported as left, not as removed", {
+    fx  <- layout_fixture()
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    old <- seed_earlier_run(out)
+    stubs <- method_stubs()
+    # Deletion that silently does nothing, as unlink() does on a locked file.
+    stubs$.delete_metab_enrichment_files <- function(paths) rep(FALSE, length(paths))
+    local_metab_enrichment_stubs(stubs)
+
+    msgs <- testthat::capture_messages(
+        expect_warning(
+            res <- mod_metabolomics_enrichment(fx$pre, fx$de_res, fx$config, out,
+                                               inputs = fx$inputs),
+            "10 file\\(s\\) left by an earlier run could not be removed"))
+
+    expect_false(any(grepl("removed", msgs)))
+    expect_true(all(file.exists(old$stale)))
+    # The run itself is complete: its results and its manifest are there.
+    expect_true(all(file.exists(res$files)))
+    m <- utils::read.csv(old$manifest, stringsAsFactors = FALSE)
+    expect_identical(nrow(m), 10L)
+})
+
+test_that("only the files that are really gone are returned as removed", {
+    d <- withr::local_tempdir()
+    enr <- file.path(d, "Enrichment"); ds <- file.path(d, "Datasets")
+    dir.create(enr); dir.create(ds)
+    f <- file.path(enr, c("enrichment_ora_dotplot_A.png", "enrichment_ora_dotplot_B.png"))
+    file.create(f)
+    local_metab_enrichment_stubs(list(
+        .delete_metab_enrichment_files = function(paths) {
+            gone <- grepl("_A\\.png$", paths)
+            unlink(paths[gone])
+            gone
+        }))
+
+    expect_message(
+        expect_warning(
+            removed <- .remove_stale_metab_enrichment_files(enr, ds, written = character(0)),
+            "1 file\\(s\\) left by an earlier run could not be removed"),
+        "removed 1 file")
+    expect_identical(basename(removed), "enrichment_ora_dotplot_A.png")
+})
+
+test_that("deleting files reports what is actually gone", {
+    d <- withr::local_tempdir()
+    f <- file.path(d, c("a.png", "b.png"))
+    file.create(f)
+    expect_identical(.delete_metab_enrichment_files(f), c(TRUE, TRUE))
+    expect_false(any(file.exists(f)))
+    expect_identical(.delete_metab_enrichment_files(character(0)), logical(0))
+    # unlink() does not delete a directory unless asked to, and says nothing.
+    sub <- file.path(d, "kept_dir")
+    dir.create(sub)
+    expect_identical(.delete_metab_enrichment_files(sub), FALSE)
+    expect_true(dir.exists(sub))
 })
 
 test_that("a run that produces no result removes nothing", {

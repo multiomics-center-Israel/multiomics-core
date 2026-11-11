@@ -107,7 +107,7 @@ Enrichment/
 ├── enrichment_manifest.csv            the units this run wrote (same columns as RNA-seq)
 ├── ORA/combined/contrasts/<contrast>/de/       results.tsv, dotplot.png, lollipop.png, barplot.png
 ├── GSEA/combined/ranking_by_fc/<contrast>/     results.tsv, nes_barplot.png, lollipop.png, barplot.png
-├── QEA/combined/all_samples/                   results.tsv, barplot.png, lollipop.png, <library>.png
+├── QEA/combined/all_samples/                   results.tsv, barplot.png, lollipop.png, library_<library>.png
 ├── QEA/combined/contrasts/<contrast>/          results.tsv, lollipop.png, barplot.png
 ├── ssGSEA/combined/all_samples/                results.tsv, barplot.png, boxplots.png, lollipop.png
 └── ssGSEA/combined/contrasts/<contrast>/       results.tsv, lollipop.png, barplot.png
@@ -120,22 +120,28 @@ Enrichment/
 -   **`<contrast>`** is the contrast label made file-safe. Labels that collide
     after that get a numeric suffix, with a warning.
 -   **`enrichment_manifest.csv`** is removed when an enrichment run starts and
-    written when it ends, through a temporary file that is renamed into place,
-    so it is either complete or absent: a run that stopped part-way has none.
-    Only units that produced a table are listed. Its columns are the RNA-seq
-    ones, **except that `storage_key` means something else here**: the unit
-    directory relative to `Enrichment/`, not the key of a table inside a
-    results object as in RNA-seq.
--   **Files from an earlier run.** Once a run has written its results, it
+    written once all results are on disk, through a temporary file that is
+    renamed into place, so it is either complete or absent: a run that stopped
+    part-way has none. Only units that produced a table are listed. Its columns
+    are the RNA-seq ones, **except that `storage_key` means something else
+    here**: the unit directory relative to `Enrichment/`, not the key of a table
+    inside a results object as in RNA-seq.
+-   **Files from an earlier run.** After the manifest is written, the run
     removes the files of this stage that it did not write: a contrast that is
     gone or gave no result, a plot that was not drawn this time, the flat
     `enrichment_*` files that preceded this layout. A file counts as this
-    stage's only by folder and name together (`results.tsv` and `*.png` under
-    the four method folders; `enrichment_<method>_*.png` directly in
-    `Enrichment/`; `enrichment_<method>[_<contrast>]_results.tsv` directly in
-    `Datasets/`). Anything else is left alone, directories are never removed,
-    and nothing is removed by a run that fails, a run that produces no result
-    at all, or a run with enrichment disabled.
+    stage's only when both its path and its name are ones the stage produces:
+    -   in a unit directory of the tree above: `results.tsv`, the plots listed
+        for that method, and `library_*.png` in `QEA/combined/all_samples/`;
+    -   directly in `Enrichment/`: `enrichment_<method>_<plot>[_<contrast>].png`
+        for those same plot names, and `enrichment_qea_*.png`;
+    -   directly in `Datasets/`: `enrichment_<method>[_<contrast>]_results.tsv`.
+
+    Any other file is left alone, including another PNG inside a method folder.
+    Directories are never removed. Nothing is removed by a run that fails
+    (including a failure to write the manifest), a run that produces no result
+    at all, or a run with enrichment disabled. A file that could not be deleted
+    is named in a warning, not reported as removed.
 -   **Still written for compatibility:** the first contrast's ORA and GSEA table
     in `Datasets/enrichment_{ora,gsea}_results.tsv` and its plots as
     `Enrichment/enrichment_{ora,gsea}_*.png`.

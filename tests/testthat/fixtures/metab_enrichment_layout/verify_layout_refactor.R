@@ -7,24 +7,44 @@
 # It is run by hand, in the pipeline's own R environment; testthat does not run
 # it. It reads results, so it never changes a run.
 #
-# How to run (from the repo root):
+# How to run
+#
+# This file exists only on the refactor branch, and the "before" run is made on
+# `main`, where it is absent. So do not source it from the working tree: put one
+# copy OUTSIDE the repo and use that same copy for both runs. It calls no
+# function of the pipeline, so one copy serves both.
+#
+#   0. Once, from the repo root (any branch):
+#
+#        git fetch origin refactor/metab-enrichment-layout
+#        git show origin/refactor/metab-enrichment-layout:tests/testthat/fixtures/metab_enrichment_layout/verify_layout_refactor.R > <outside>/verify_layout_refactor.R
+#
+#      and choose an empty folder outside the repo for the snapshots.
 #
 #   1. Check out `main`. Point the config at a NEW, empty output folder and run
-#      the pipeline. Then:
+#      the pipeline. Then, in R:
 #
-#        source("tests/testthat/fixtures/metab_enrichment_layout/verify_layout_refactor.R")
+#        source("<outside>/verify_layout_refactor.R")
 #        snapshot_enrichment_layout("before",
 #            mode_dir = "<project>/<out>/Results_<name>_<round>/metabolomics",
-#            snap_dir = "<a folder OUTSIDE the repo>")
+#            snap_dir = "<outside>/snapshots")
 #
 #   2. Check out the refactor branch. Point the SAME config at ANOTHER new,
-#      empty output folder and run the pipeline. Then:
+#      empty output folder and run the pipeline. Then, in R:
 #
-#        source("tests/testthat/fixtures/metab_enrichment_layout/verify_layout_refactor.R")
+#        source("<outside>/verify_layout_refactor.R")
 #        snapshot_enrichment_layout("after",
 #            mode_dir = "<the new .../metabolomics>",
-#            snap_dir = "<the same folder as in step 1>")
-#        compare_enrichment_layout(snap_dir = "<the same folder>")
+#            snap_dir = "<outside>/snapshots")
+#        compare_enrichment_layout(snap_dir = "<outside>/snapshots")
+#
+# Instead of switching branches in one checkout you can keep both side by side:
+#
+#        git worktree add ../multiomics-core-main main
+#
+# and run step 1 in ../multiomics-core-main and step 2 in this checkout. Each
+# worktree needs its own renv library restored (renv::restore()), and the
+# script is still sourced from the outside copy.
 #
 # Use a config with enrichment enabled and at least two contrasts; two GMT
 # files exercise the per-library QEA plots as well. Use the same {targets}
@@ -166,6 +186,10 @@ snapshot_enrichment_layout <- function(label, mode_dir, snap_dir,
     # No contrast suffix: a global QEA / ssGSEA plot moved; a first-contrast
     # ORA / GSEA copy did not.
     if (method %in% c("ora", "gsea")) return(old)
+    # Any global QEA plot other than these two was a per-library barplot.
+    if (method == "qea" && !rest %in% c("barplot", "lollipop")) {
+        rest <- paste0("library_", rest)
+    }
     paste(base, "all_samples", paste0(rest, ".png"), sep = "/")
 }
 

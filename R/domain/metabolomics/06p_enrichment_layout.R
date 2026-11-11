@@ -12,6 +12,7 @@
 #     ORA/<db>/contrasts/<contrast>/de/
 #     GSEA/<db>/ranking_by_fc/<contrast>/
 #     QEA/<db>/all_samples/            QEA/<db>/contrasts/<contrast>/
+#       (all_samples also holds library_<name>.png, one per GMT library)
 #     ssGSEA/<db>/all_samples/         ssGSEA/<db>/contrasts/<contrast>/
 #
 # This file organises files only. It computes no statistic and reads no result
@@ -27,6 +28,19 @@
                                   qea = "QEA", ssgsea = "ssGSEA")
 
 .METAB_ENRICHMENT_MANIFEST_FILE <- "enrichment_manifest.csv"
+
+# The plot files each method writes into a unit, by file stem. These, and
+# results.tsv, are the only names the stage treats as its own inside a unit.
+.METAB_ENRICHMENT_PLOT_KEYS <- list(
+    ora    = c("dotplot", "lollipop", "barplot"),
+    gsea   = c("nes_barplot", "lollipop", "barplot"),
+    qea    = c("barplot", "lollipop"),
+    ssgsea = c("barplot", "boxplots", "lollipop")
+)
+
+# The all-samples QEA unit also holds one barplot per GMT library. The library
+# name is free text, so the prefix is what marks the file as the stage's.
+.METAB_ENRICHMENT_LIBRARY_PLOT_PREFIX <- "library_"
 
 # FDR level the manifest counts pathways at. It is the value the enrichment code
 # already uses for its `significant` flag, its plot threshold lines and its log
@@ -166,6 +180,11 @@ metab_enrichment_legacy_plot_name <- function(path, enr_root) {
         stem <- tools::file_path_sans_ext(file)
         ext  <- tools::file_ext(file)
         sfx  <- if (identical(parts[3], "all_samples")) "" else paste0("_", parts[4])
+        # The per-library QEA plots were enrichment_qea_<library>.png.
+        if (identical(parts[3], "all_samples") &&
+            startsWith(stem, .METAB_ENRICHMENT_LIBRARY_PLOT_PREFIX)) {
+            stem <- substring(stem, nchar(.METAB_ENRICHMENT_LIBRARY_PLOT_PREFIX) + 1L)
+        }
         paste0("enrichment_", method_of[[parts[1]]], "_", stem, sfx,
                if (nzchar(ext)) paste0(".", ext) else "")
     }, character(1), USE.NAMES = FALSE)
@@ -174,17 +193,22 @@ metab_enrichment_legacy_plot_name <- function(path, enr_root) {
 
 #' Enrichment files on disk that this stage owns
 #'
-#' The files only the metabolomics enrichment stage writes, identified by where
-#' they are AND what they are called, so nothing another stage or a person put
-#' in these folders is ever listed:
+#' The files only the metabolomics enrichment stage writes. A file is listed
+#' only when its whole path under the mode folder has a shape the stage
+#' produces AND its name is one the stage gives, so a file another stage or a
+#' person put in these folders is never listed, whatever its extension:
 #' \itemize{
-#'   \item under \code{Enrichment/{ORA,GSEA,QEA,ssGSEA}/}: \code{results.tsv}
-#'     and \code{*.png} (the unit layout);
-#'   \item directly in \code{Enrichment/}:
-#'     \code{enrichment_<method>_*.png} (the flat names used before the unit
-#'     layout, and the first-contrast copies still written);
+#'   \item in a unit directory of the layout (see
+#'     \code{metab_enrichment_unit_rel_dir()}): \code{results.tsv} and the
+#'     method's own plots (\code{.METAB_ENRICHMENT_PLOT_KEYS}), plus
+#'     \code{library_<name>.png} in the all-samples QEA unit;
+#'   \item directly in \code{Enrichment/}, the flat names used before the unit
+#'     layout and by the first-contrast copies still written:
+#'     \code{enrichment_<method>_<plot>[_<contrast>].png} for the method's own
+#'     plots, and \code{enrichment_qea_<name>.png} (the old per-library QEA
+#'     plots carried a free-text library name);
 #'   \item directly in \code{Datasets/}:
-#'     \code{enrichment_<method>[_<contrast>]_results.tsv} (the same).
+#'     \code{enrichment_<method>[_<contrast>]_results.tsv}.
 #' }
 #' The manifest is not listed: the stage removes and rewrites it itself. The
 #' mummichog stage's \code{mummichog_pinned/} tree is outside both folders.
@@ -193,27 +217,47 @@ metab_enrichment_legacy_plot_name <- function(path, enr_root) {
 #' @param datasets_dir The mode's Datasets directory.
 #' @return Character vector of existing file paths (possibly empty).
 list_metab_enrichment_owned_files <- function(enr_root, datasets_dir) {
-    methods <- paste(names(.METAB_ENRICHMENT_METHOD_DIR), collapse = "|")
-    flat_png <- paste0("^enrichment_(", methods, ")_.*\\.png$")
+    keys <- .METAB_ENRICHMENT_PLOT_KEYS
+    alt  <- function(x) paste0("(", paste(x, collapse = "|"), ")")
+    seg  <- "[^/]+"
+    unit <- function(method, scope, plot_keys, extra = NULL) {
+        names_ok <- c("results\\.tsv", paste0(alt(plot_keys), "\\.png"), extra)
+        paste0("^", .METAB_ENRICHMENT_METHOD_DIR[[method]], "/",
+               .METAB_ENRICHMENT_DB, "/", scope, "/", alt(names_ok), "$")
+    }
+    lib_png <- paste0(.METAB_ENRICHMENT_LIBRARY_PLOT_PREFIX, seg, "\\.png")
+    flat <- function(method) {
+        paste0("^enrichment_", method, "_", alt(keys[[method]]),
+               "(_", seg, ")?\\.png$")
+    }
+
+    enr_patterns <- c(
+        unit("ora",    paste0("contrasts/", seg, "/de"), keys$ora),
+        unit("gsea",   paste0("ranking_by_fc/", seg),    keys$gsea),
+        unit("qea",    "all_samples",                    keys$qea, extra = lib_png),
+        unit("qea",    paste0("contrasts/", seg),        keys$qea),
+        unit("ssgsea", "all_samples",                    keys$ssgsea),
+        unit("ssgsea", paste0("contrasts/", seg),        keys$ssgsea),
+        flat("ora"), flat("gsea"), flat("ssgsea"),
+        paste0("^enrichment_qea_", seg, "\\.png$")
+    )
+    methods  <- paste(names(.METAB_ENRICHMENT_METHOD_DIR), collapse = "|")
     flat_tsv <- paste0("^enrichment_(", methods, ")(_.*)?_results\\.tsv$")
 
-    unit_files <- unlist(lapply(
-        file.path(enr_root, .METAB_ENRICHMENT_METHOD_DIR),
-        function(d) {
-            if (!dir.exists(d)) return(character(0))
-            f <- list.files(d, recursive = TRUE, full.names = TRUE)
-            f[basename(f) == "results.tsv" | grepl("\\.png$", basename(f))]
-        }), use.names = FALSE)
-
-    flat <- c(
-        if (dir.exists(enr_root))
-            list.files(enr_root, pattern = flat_png, full.names = TRUE),
-        if (dir.exists(datasets_dir))
-            list.files(datasets_dir, pattern = flat_tsv, full.names = TRUE))
-    # list.files() also returns directories that match the pattern.
-    flat <- flat[!dir.exists(flat)]
-
-    as.character(c(unit_files, flat))
+    owned_enr <- character(0)
+    if (dir.exists(enr_root)) {
+        rel <- list.files(enr_root, recursive = TRUE)
+        hit <- Reduce(`|`, lapply(enr_patterns, grepl, x = rel),
+                      rep(FALSE, length(rel)))
+        owned_enr <- file.path(enr_root, rel[hit])
+    }
+    owned_ds <- character(0)
+    if (dir.exists(datasets_dir)) {
+        owned_ds <- list.files(datasets_dir, pattern = flat_tsv, full.names = TRUE)
+        # list.files() also returns directories that match the pattern.
+        owned_ds <- owned_ds[!dir.exists(owned_ds)]
+    }
+    c(owned_enr, owned_ds)
 }
 
 
