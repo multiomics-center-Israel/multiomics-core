@@ -231,38 +231,53 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
         plots$boxplot <- p_bp
     }
 
+    # ---------- Sample annotation for every heatmap below ----------
+    # effects$heatmap_annotations through the one resolver; NULL when unset,
+    # and then each heatmap keeps the annotation it has always drawn.
+    hm_ann <- proteomics_heatmap_annotation(pre$meta, cfg, colnames(pre$expr_imp_single))
+
     # ---------- Sample distance ----------
-    annot <- data.frame(
-        Condition = pre$meta[[cfg$effects$color]],
-        row.names = pre$meta[[cfg$effects$samples]]
-    )
+    annot <- if (is.null(hm_ann)) {
+        data.frame(
+            Condition = pre$meta[[cfg$effects$color]],
+            row.names = pre$meta[[cfg$effects$samples]]
+        )
+    } else {
+        hm_ann$annot
+    }
 
     f_dist <- file.path(out_qc, "sample_distance_heatmap.png")
-    ph <- plot_sample_distance_heatmap(pre$expr_imp_single, annotation_col = annot)
+    ph <- plot_sample_distance_heatmap(pre$expr_imp_single, annotation_col = annot,
+                                       annotation_colors = hm_ann$colors)
     written <- save_heatmap_to_file(ph, f_dist, width = 1600, height = 1200, res = 150)
     files <- c(files, written)
     plots$dist_heatmap <- ph
 
     f_dist_na <- file.path(out_qc, "sample_distance_heatmap_NA.png")
-    ph_na <- plot_sample_distance_heatmap(pre$expr_raw, annotation_col = annot)
+    ph_na <- plot_sample_distance_heatmap(pre$expr_raw, annotation_col = annot,
+                                          annotation_colors = hm_ann$colors)
     written_na <- save_heatmap_to_file(ph_na, f_dist_na, width = 1600, height = 1200, res = 150)
     files <- c(files, written_na)
     plots$dist_heatmap_na <- ph_na
 
     # ---------- Correlation ----------
     f_cor <- file.path(out_qc, "sample_correlation_heatmap.png")
-    p_cor <- qc_sample_correlation_heatmap(pre$expr_imp_single, pre$meta, cfg, out_file = f_cor)
+    p_cor <- qc_sample_correlation_heatmap(pre$expr_imp_single, pre$meta, cfg, out_file = f_cor,
+                                           annot = hm_ann$annot, annot_colors = hm_ann$colors)
     files <- c(files, f_cor)
     plots$correlation <- p_cor
 
     # ---------- Expression heatmaps ----------
     f_hm <- file.path(out_qc, "samples_protein_heatmap.png")
-    hm_clusters <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage, out_file = f_hm)
+    hm_clusters <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage, out_file = f_hm,
+                                   annot = hm_ann$annot, annot_colors = hm_ann$colors)
     files <- c(files, f_hm)
     plots$heatmap_clusters <- hm_clusters
 
     f_hm_nocol <- file.path(out_qc, "samples_protein_heatmap_wo_col.png")
-    hm_nocol <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage, out_file = f_hm_nocol, cluster_cols = FALSE)
+    hm_nocol <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage, out_file = f_hm_nocol,
+                                cluster_cols = FALSE,
+                                annot = hm_ann$annot, annot_colors = hm_ann$colors)
     files <- c(files, f_hm_nocol)
     plots$heatmap_nocol <- hm_nocol
 
@@ -270,7 +285,8 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     f_hm_uncl <- file.path(out_qc, "samples_protein_heatmap_unclustered.png")
     hm_uncl <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage,
                                 out_file = f_hm_uncl,
-                                cluster_cols = FALSE, cluster_rows = FALSE)
+                                cluster_cols = FALSE, cluster_rows = FALSE,
+                                annot = hm_ann$annot, annot_colors = hm_ann$colors)
     files <- c(files, f_hm_uncl)
     plots$heatmap_unclustered <- hm_uncl
 

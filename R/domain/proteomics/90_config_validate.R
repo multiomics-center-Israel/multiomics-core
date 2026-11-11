@@ -407,6 +407,16 @@ validate_proteomics_config <- function(cfg) {
                            "advanced_stats$run_robust_regression", allow_null = TRUE)
     }
 
+    # 9a. Heatmap sample annotation (get_proteomics_sample_annotation_cols()).
+    #     Columns missing from the metadata are warned about at run time, as
+    #     in RNA-seq; here only the type is checked.
+    ha <- (cfg$effects %||% list())[["heatmap_annotations"]]
+    if (!is.null(ha) && !(is.character(unlist(ha)) && length(unlist(ha)) > 0 &&
+                          !anyNA(unlist(ha)) && all(nzchar(unlist(ha))))) {
+        stop("effects$heatmap_annotations must be a list of sample-metadata column names, ",
+             "for example heatmap_annotations: [\"time\", \"treatment\"].", call. = FALSE)
+    }
+
     # 10. QC Settings (optional)
     if (!is.null(cfg$qc)) {
         assert_scalar_bool(cfg$qc$run_umap, "qc$run_umap", allow_null = TRUE)
@@ -427,6 +437,12 @@ validate_clustering_config <- function(clust_cfg) {
     assert_named_list(clust_cfg, "modes$proteomics$clustering")
     assert_scalar_bool(clust_cfg$enabled, "modes$proteomics$clustering$enabled")
 
+
+    # Row rule of the clustering heatmap (get_clustering_de_cutoffs()).
+    assert_scalar_num(clust_cfg$de_padj_cutoff, "clustering$de_padj_cutoff",
+                      allow_null = TRUE, min_val = 0, max_val = 1)
+    assert_scalar_num(clust_cfg$de_log2fc_cutoff, "clustering$de_log2fc_cutoff",
+                      allow_null = TRUE, min_val = 0)
 
     if (!is.null(clust_cfg$de_source)) {
         assert_one_of(clust_cfg$de_source, "modes$proteomics$clustering$de_source", c("any_contrast"), allow_null = TRUE)
@@ -472,6 +488,8 @@ validate_clustering_config <- function(clust_cfg) {
             assert_named_list(clust_cfg$heatmap, "clustering$heatmap")
             assert_scalar_num(clust_cfg$heatmap$max_rows, "clustering$heatmap$max_rows", allow_null = TRUE, min_val = 1)
             assert_scalar_bool(clust_cfg$heatmap$cluster_cols, "clustering$heatmap$cluster_cols", allow_null = TRUE)
+            assert_scalar_num(clust_cfg$heatmap$zscore_limit, "clustering$heatmap$zscore_limit",
+                              allow_null = TRUE, min_val = 0.5)
         }
         return(invisible(TRUE))
     }

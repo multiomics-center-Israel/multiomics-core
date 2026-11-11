@@ -195,10 +195,14 @@ plot_top_de_heatmap <- function(de_tbl, expr_mat, meta, cfg, n_top = 50,
     mat_z <- t(scale(t(mat_sub)))
     mat_z[is.na(mat_z)] <- 0
 
-    # Annotation
+    # Annotation: effects$heatmap_annotations through the shared resolver when
+    # set; otherwise the condition column, as before.
+    hm_ann <- proteomics_heatmap_annotation(meta, cfg, colnames(mat_z))
     color_col <- cfg$effects$color %||% "Condition"
     annot_col <- NULL
-    if (color_col %in% colnames(meta)) {
+    if (!is.null(hm_ann)) {
+        annot_col <- hm_ann$annot
+    } else if (color_col %in% colnames(meta)) {
         annot_col <- data.frame(
             Condition = meta[[color_col]],
             row.names = colnames(mat_z)
@@ -209,6 +213,7 @@ plot_top_de_heatmap <- function(de_tbl, expr_mat, meta, cfg, n_top = 50,
         pheatmap::pheatmap(
             mat_z,
             annotation_col   = annot_col,
+            annotation_colors = if (is.null(hm_ann$colors)) NA else hm_ann$colors,
             cluster_rows     = TRUE,
             cluster_cols     = TRUE,
             show_rownames    = n_top <= 50,

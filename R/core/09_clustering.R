@@ -1295,9 +1295,16 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
 #' @param annot_context list passed to wrap_clustering_heatmap as
 #'   \code{annotation_row_context}.
 #' @param out_dir destination directory for this step's outputs.
+#' @param zscore_limit NULL (default) draws the heatmap as before. A number
+#'   draws it with \code{plot_zscore_heatmap()} instead: colours clipped at
+#'   +/- that many z units, 16 pt text at the saved size, \code{annot_col} as
+#'   the sample annotation, and a PDF next to the PNG.
+#' @param annotation_colors Optional pheatmap \code{annotation_colors} for
+#'   \code{annot_col}; used only with \code{zscore_limit}.
 #' @return list(files, plot, payload, clusters, excel_order, table_df)
 .run_hierarchical_step <- function(expr_mat, meta, de_features, cfg,
-                                   annot_col, annot_context, out_dir) {
+                                   annot_col, annot_context, out_dir,
+                                   zscore_limit = NULL, annotation_colors = NULL) {
   ensure_dir(out_dir)
   hcfg <- cfg$clustering$steps$hierarchical %||% list()
   
@@ -1335,19 +1342,48 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
   cluster_samples <- isTRUE(cfg$clustering$cluster_samples)
 
   f_hm <- file.path(out_dir, "Hierarchical_DE_heatmap.png")
-  p_cluster <- wrap_clustering_heatmap(
-    expr_mat               = expr_mat,
-    meta                   = meta,
-    cfg                    = cfg,
-    feature_ids            = de_features,
-    ordering               = hc_res$ordering,
-    annotation_row_builder = TRUE,
-    annotation_row_context = annot_context,
-    out_file               = f_hm,
-    cluster_cols           = cluster_samples,
-    title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
-  )
-  written <- f_hm
+  if (is.null(zscore_limit)) {
+    p_cluster <- wrap_clustering_heatmap(
+      expr_mat               = expr_mat,
+      meta                   = meta,
+      cfg                    = cfg,
+      feature_ids            = de_features,
+      ordering               = hc_res$ordering,
+      annotation_row_builder = TRUE,
+      annotation_row_context = annot_context,
+      out_file               = f_hm,
+      cluster_cols           = cluster_samples,
+      # Every caller builds annot_col with build_heatmap_annotation_col(), the
+      # same default wrap_clustering_heatmap() would build, unless it chose
+      # another annotation on purpose (proteomics effects$heatmap_annotations).
+      annotation_col         = annot_col,
+      title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
+    )
+    written <- f_hm
+  } else {
+    # Rows reuse the tree run_clustering() built on these same rows (mat_de is
+    # in its input order); columns are clustered with the same distance and
+    # linkage when cluster_samples is on.
+    n_samples <- ncol(mat_de)
+    p_cluster <- plot_zscore_heatmap(
+      expr_mat          = mat_de,
+      annotation_col    = annot_col,
+      annotation_row    = build_contrast_row_context(rownames(mat_de), annot_context),
+      annotation_colors = annotation_colors,
+      cluster_rows      = hc_res$details,
+      cluster_cols      = cluster_samples,
+      distance          = hcfg$distance %||% "euclidean",
+      linkage           = hcfg$linkage %||% "complete",
+      zlim              = zscore_limit,
+      fontsize          = 16,
+      title             = sprintf("%d DE proteins, row z-score, %s / %s",
+                                  nrow(mat_de), hcfg$distance %||% "euclidean",
+                                  hcfg$linkage %||% "complete")
+    )
+    written <- save_heatmap_png_pdf(p_cluster, f_hm,
+                                    width_in = max(12, 0.35 * n_samples + 9),
+                                    height_in = 11)
+  }
   
   payload <- list(
     pheatmap       = p_cluster,

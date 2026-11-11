@@ -113,6 +113,11 @@ modes:
       group_col: null
       preserve_condition: true
       covariates: null
+      # ComBat only. true = adjust the batch means only, not their spread.
+      # Use when batches are small (e.g. 2 samples per batch), where the
+      # per-batch spread cannot be estimated reliably. Required when a
+      # batch has a single sample; without it the run stops.
+      combat_mean_only: false
 
       # --- 2. Batch in differential expression (de_mode) ---
       #   null               - automatic: "covariate" when method is not
@@ -180,6 +185,13 @@ modes:
     clustering:
       enabled: false
       group_col: "Condition"        # metadata column for clustering group logic
+      # Rows of the clustering heatmaps. Unset (null): proteins passing the DE
+      # step's own rule (pass_any_contrast: de.p_cutoff and log2(de.linear_fc_cutoff)).
+      # Set either one to use padj.imputs < de_padj_cutoff and
+      # abs(log2FC.imputs) >= de_log2fc_cutoff in at least one contrast; the
+      # unset one falls back to the de block. The DE call itself is unchanged.
+      de_padj_cutoff: null
+      de_log2fc_cutoff: null
 
       steps:
         hierarchical:
@@ -205,6 +217,10 @@ modes:
       heatmap:
         max_rows: null
         cluster_cols: true
+        # null: the hierarchical heatmap as before. A number (e.g. 3): row
+        # z-scores with colours clipped at +/- that value, 16 pt text at the
+        # saved size, a PDF next to the PNG.
+        zscore_limit: null
 
     # --------------------------------------------------------
     # Plotting / QC aesthetics
@@ -213,6 +229,17 @@ modes:
       color: "Condition"
       shape: null
       samples: "SampleID"
+
+      # Heatmap annotation columns (optional), as in the RNA-seq template.
+      # Sample annotation bars of every proteomics heatmap (QC distance,
+      # correlation and expression heatmaps, top-DE heatmaps, the clustering
+      # heatmap), in this order. Levels are
+      # ordered by a leading number when every value has one (0h, 4h, 24h),
+      # else no/yes-type pairs negative first, else first appearance.
+      # If not specified, uses the color variable only.
+      # heatmap_annotations:
+      #   - "time"
+      #   - "treatment"
 
     # --------------------------------------------------------
     # Report customization

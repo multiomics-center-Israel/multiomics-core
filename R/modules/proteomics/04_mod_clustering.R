@@ -5,6 +5,10 @@
 #' only when the data has enough groups (>= min_groups), where groups are
 #' defined by cfg$effects$color.
 #'
+#' \code{clustering.de_padj_cutoff} /
+#' \code{de_log2fc_cutoff} choose the rows by their own rule
+#' (get_clustering_de_cutoffs()); without them the rows are pass_any_contrast.
+#'
 #' @param pre preprocessed proteomics object (expects $expr_imp_single and $meta)
 #' @param de_res  DE results list (expects $summary_df at least)
 #' @param config  full YAML config list
@@ -49,6 +53,10 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   # the first step by a fixed-string grep, and a comment would shadow it.)
   f_hier_hm <- file.path(clustering_dir, "Hierarchical", "Hierarchical_DE_heatmap.png")
   if (file.exists(f_hier_hm)) file.remove(f_hier_hm)
+  # Its PDF and the caption facts the report reads, for the same reason.
+  f_hier_extra <- file.path(clustering_dir, "Hierarchical",
+                            c("Hierarchical_DE_heatmap.pdf", "Hierarchical_DE_heatmap_info.tsv"))
+  unlink(f_hier_extra)
 
   flags <- clustering_run_flags(pre, cfg)
   message(sprintf(
@@ -57,8 +65,12 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   ))
   
   annot_col   <- build_heatmap_annotation_col(pre$meta, cfg)
-  de_features <- get_de_features(de_res, cfg)
+  # Same rows for every step below, chosen by the clustering cut-offs when set.
+  de_cutoffs  <- get_clustering_de_cutoffs(cfg)
+  summary_cl  <- apply_clustering_de_cutoffs(de_res$summary_df, de_cutoffs)
+  de_features <- get_de_features(list(summary_df = summary_cl), cfg)
   expr_mat    <- as.matrix(pre$expr_imp_single)
+  matrix_label <- "QC imputation draw (expr_imp_single)"
 
   # Same guard the metabolomics and lipidomics modules already carry: a DE step
   # that returns nothing is a legitimate result, not a pipeline failure.
@@ -77,16 +89,40 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   
   prot_de_cfg <- cfg$de %||% list()
   annot_context <- list(
-    summary_df    = de_res$summary_df,
+    summary_df    = summary_cl,
     p_cutoff      = prot_de_cfg$p_cutoff %||% 0.05,
     log2fc_cutoff = log2(prot_de_cfg$linear_fc_cutoff %||% 1.5),
     id_col        = cfg$de_table$id_col %||% "FeatureID"
   )
   
   if (isTRUE(flags$hierarchical)) {
+    annot_hier <- annotation_for_pheatmap(build_proteomics_sample_annotation(pre$meta, cfg), cfg)
+    zlim <- (cl$heatmap %||% list())[["zscore_limit"]]
     h <- .run_hierarchical_step(expr_mat, pre$meta, de_features, cfg,
-                                annot_col, annot_context,
-                                file.path(clustering_dir, "Hierarchical"))
+                                annot_hier, annot_context,
+                                file.path(clustering_dir, "Hierarchical"),
+                                zscore_limit = zlim,
+                                annotation_colors = build_sample_annotation_colors(annot_hier))
+    f_info <- f_hier_extra[2]
+    if (file.exists(f_hier_hm)) {
+      info <- data.frame(
+        n_features    = length(intersect(de_features, rownames(expr_mat))),
+        row_rule      = if (is.null(de_cutoffs)) {
+          "pass_any_contrast (DE step's own rule)"
+        } else {
+          sprintf("padj.imputs < %s and abs(log2FC.imputs) >= %s in at least one contrast",
+                  format(de_cutoffs$padj_cutoff), format(de_cutoffs$log2fc_cutoff))
+        },
+        matrix        = matrix_label,
+        distance      = (cfg$clustering$steps$hierarchical %||% list())$distance %||% "euclidean",
+        linkage       = (cfg$clustering$steps$hierarchical %||% list())$linkage %||% "complete",
+        samples_clustered = isTRUE(cfg$clustering$cluster_samples),
+        zscore_limit  = if (is.null(zlim)) NA_real_ else as.numeric(zlim),
+        stringsAsFactors = FALSE
+      )
+      utils::write.table(info, f_info, sep = "\t", quote = FALSE, row.names = FALSE)
+      h$files <- c(h$files, f_info)
+    }
     written              <- c(written, h$files)
     plots$p_cluster_hier <- h$plot
     if (!is.null(h$table_df)) plots$cl_tbl <- h$table_df
@@ -114,7 +150,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
       expr_mat_counts = NULL,
       meta            = pre$meta,
       de_features     = de_features,
-      summary_df      = de_res$summary_df,
+      summary_df      = summary_cl,
       cfg             = cfg,
       annot_context   = annot_context,
       out_dir         = file.path(clustering_dir, "Binary_patterns")
