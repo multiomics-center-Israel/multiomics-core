@@ -95,6 +95,40 @@ There is no separate `normalization:` block.
 | `metab_shiny_payload` | `save_shiny_payload_metabolomics()` → `build_shiny_payload_metabolomics()` | `07_shiny_export.R` |
 | `metab_report` | `mod_metabolomics_report()` | `R/pipeline/metabolomics/templates/report_metabolomics.Rmd` |
 
+## Enrichment output layout
+
+`mod_metabolomics_enrichment()` writes each result unit to its own directory
+under `<mode>/Enrichment/`. The layout follows the RNA-seq one: the analysis
+context is in the path, and file names inside a unit are short and fixed. All
+paths are built in `06p_enrichment_layout.R`.
+
+```
+Enrichment/
+├── enrichment_manifest.csv            the units this run wrote (same columns as RNA-seq)
+├── ORA/combined/contrasts/<contrast>/de/       results.tsv, dotplot.png, lollipop.png, barplot.png
+├── GSEA/combined/ranking_by_fc/<contrast>/     results.tsv, nes_barplot.png, lollipop.png, barplot.png
+├── QEA/combined/all_samples/                   results.tsv, barplot.png, lollipop.png, <library>.png
+├── QEA/combined/contrasts/<contrast>/          results.tsv, lollipop.png, barplot.png
+├── ssGSEA/combined/all_samples/                results.tsv, barplot.png, boxplots.png, lollipop.png
+└── ssGSEA/combined/contrasts/<contrast>/       results.tsv, lollipop.png, barplot.png
+```
+
+-   **`combined`** is the database level. Each method adjusts FDR across all
+    configured GMT libraries together, so there is one result family per unit;
+    the library of a pathway is the `library` column of the table where the
+    method records it (QEA, ORA, GSEA).
+-   **`<contrast>`** is the contrast label made file-safe. Labels that collide
+    after that get a numeric suffix, with a warning.
+-   **`enrichment_manifest.csv`** is removed when an enrichment run starts and
+    written when it ends, so a run that stopped part-way has none. Only units
+    that produced a table are listed. Nothing else is deleted: files left by an
+    earlier run, including the flat `enrichment_*` files that preceded this
+    layout, stay where they are and are not in the manifest.
+-   **Still written for compatibility:** the first contrast's ORA and GSEA table
+    in `Datasets/enrichment_{ora,gsea}_results.tsv` and its plots as
+    `Enrichment/enrichment_{ora,gsea}_*.png`.
+-   The mummichog stage is separate and keeps its own `mummichog_pinned/` tree.
+
 Other domain files: `08_metabolite_network.R`, `10_drift_correction.R`,
 `10_pipeline_summary.R`, `11_powerpoint.R`. The preprocessing modules
 (`mod_met_*`) are in `R/modules/metabolomics/00_mod_preprocessing.R`.

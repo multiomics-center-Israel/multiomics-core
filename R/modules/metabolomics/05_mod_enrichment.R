@@ -14,11 +14,20 @@
 #' Runs up to four enrichment methods (each independently optional):
 #'   QEA (globaltest), ssGSEA (GSVA), ORA (Fisher), GSEA (fgsea).
 #'
+#' Each result unit is written to its own directory under
+#' \code{<out_dir>/Enrichment/} (see \code{06p_enrichment_layout.R}), and
+#' \code{Enrichment/enrichment_manifest.csv} lists the units this run wrote.
+#' The first-contrast ORA/GSEA copies under the flat legacy names are still
+#' written (\code{.save_legacy_enrichment()}).
+#'
 #' @param pre     List from preprocess_metabolomics().
 #' @param de_res  DE results (needed by ORA and GSEA; NULL if unavailable).
 #' @param config  Full config.
 #' @param out_dir Output directory for this mode.
-#' @return list(qea, ssgsea, ora, gsea, plots, files).
+#' @param inputs  Loaded inputs (uses \code{$contrasts} for the per-contrast
+#'   QEA/ssGSEA runs); NULL skips those.
+#' @return list(qea, ssgsea, ora, gsea, qea_by_contrast, ssgsea_by_contrast,
+#'   ora_by_contrast, gsea_by_contrast, plots, files).
 mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                                         inputs = NULL) {
     assert_pre_contract(pre, stage = "metabolomics")
@@ -34,8 +43,23 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     out_enr <- dirs$enrichment
     out_ds  <- dirs$datasets
 
+    # The manifest is this run's record of what it wrote, and it is written
+    # last. Removing the previous one first means a run that stops part-way
+    # leaves no manifest, instead of an earlier run's manifest beside new files.
+    manifest_file <- file.path(out_enr, .METAB_ENRICHMENT_MANIFEST_FILE)
+    if (file.exists(manifest_file)) unlink(manifest_file)
+
+    contrast_names <- if (!is.null(de_res) && !is.null(de_res$de_tables)) {
+        names(de_res$de_tables)
+    } else {
+        character(0)
+    }
+    contrast_dirs <- metab_enrichment_contrast_dirs(
+        contrast_names, .sanitize_contrast(contrast_names))
+
     plots <- list()
     files <- character(0)
+    units <- list()
 
     # ---- QEA ----
     qea_res <- tryCatch(
@@ -47,11 +71,15 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     )
 
     if (!is.null(qea_res) && !is.null(qea_res$table)) {
-        f_qea <- save_tsv(qea_res$table, out_ds, "enrichment_qea_results.tsv")
+        qea_rel <- metab_enrichment_unit_rel_dir("qea")
+        qea_dir <- file.path(out_enr, qea_rel)
+        f_qea <- save_tsv(qea_res$table, qea_dir, "results.tsv")
         files <- c(files, f_qea)
+        units[[length(units) + 1L]] <- list(method = "qea", contrast = NA_character_,
+                                            rel_dir = qea_rel, table = qea_res$table)
 
         # QEA barplot
-        f_qea_plot <- file.path(out_enr, "enrichment_qea_barplot.png")
+        f_qea_plot <- file.path(qea_dir, "barplot.png")
         p_qea <- tryCatch({
             pq <- plot_enrichment_barplot(qea_res$table, top_n = 20,
                                            title = "Pathway Enrichment (QEA)")
@@ -69,7 +97,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
         }
 
         # QEA lollipop plot
-        f_qea_loll <- file.path(out_enr, "enrichment_qea_lollipop.png")
+        f_qea_loll <- file.path(qea_dir, "lollipop.png")
         p_qea_loll <- tryCatch({
             pl <- plot_qea_lollipop(qea_res$table, top_n = 20)
             if (!is.null(pl)) {
@@ -87,8 +115,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             for (lib_name in unique(qea_res$table$library)) {
                 lib_df <- qea_res$table[qea_res$table$library == lib_name, ]
                 lib_label <- toupper(gsub("_pathway$", "", lib_name))
-                f_lib <- file.path(out_enr,
-                                    paste0("enrichment_qea_", tolower(lib_label), ".png"))
+                f_lib <- file.path(qea_dir, paste0(tolower(lib_label), ".png"))
                 p_lib <- tryCatch({
                     pl <- plot_enrichment_barplot(lib_df, top_n = 20,
                                                   title = paste0(lib_label, " Enrichment"))
@@ -115,11 +142,16 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     )
 
     if (!is.null(ssgsea_res) && !is.null(ssgsea_res$table)) {
-        f_ssgsea <- save_tsv(ssgsea_res$table, out_ds, "enrichment_ssgsea_results.tsv")
+        ssgsea_rel <- metab_enrichment_unit_rel_dir("ssgsea")
+        ssgsea_dir <- file.path(out_enr, ssgsea_rel)
+        f_ssgsea <- save_tsv(ssgsea_res$table, ssgsea_dir, "results.tsv")
         files <- c(files, f_ssgsea)
+        units[[length(units) + 1L]] <- list(method = "ssgsea", contrast = NA_character_,
+                                            rel_dir = ssgsea_rel,
+                                            table = ssgsea_res$table)
 
         # ssGSEA barplot
-        f_ssgsea_plot <- file.path(out_enr, "enrichment_ssgsea_barplot.png")
+        f_ssgsea_plot <- file.path(ssgsea_dir, "barplot.png")
         p_ssgsea <- tryCatch({
             ps <- plot_enrichment_barplot(ssgsea_res$table, top_n = 20,
                                            title = "ssGSEA Pathway Enrichment")
@@ -147,7 +179,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                 match(colnames(ssgsea_res$scores), pre$meta[[sample_col]])
             ])
 
-            f_box <- file.path(out_enr, "enrichment_ssgsea_boxplots.png")
+            f_box <- file.path(ssgsea_dir, "boxplots.png")
             p_box <- tryCatch({
                 n_sig <- sum(ssgsea_res$table$significant, na.rm = TRUE)
                 plot_h <- max(6, ceiling(min(n_sig, 12) / 3) * 3.5)
@@ -169,7 +201,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
         }
 
         # ssGSEA lollipop plot
-        f_ssgsea_loll <- file.path(out_enr, "enrichment_ssgsea_lollipop.png")
+        f_ssgsea_loll <- file.path(ssgsea_dir, "lollipop.png")
         p_ssgsea_loll <- tryCatch({
             pl <- plot_ssgsea_lollipop(ssgsea_res$table, top_n = 20)
             if (!is.null(pl)) {
@@ -193,8 +225,15 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     if (!is.null(de_res) && !is.null(de_res$de_tables) &&
         length(de_res$de_tables) > 0) {
         for (ct in names(de_res$de_tables)) {
-            one <- .mod_metab_ora_contrast(pre, de_res, config, ct, out_enr, out_ds)
-            if (!is.null(one)) ora_by_contrast[[ct]] <- one
+            rel <- metab_enrichment_unit_rel_dir("ora", contrast_dirs[[ct]])
+            one <- .mod_metab_ora_contrast(pre, de_res, config, ct,
+                                           file.path(out_enr, rel))
+            if (!is.null(one)) {
+                ora_by_contrast[[ct]] <- one
+                units[[length(units) + 1L]] <- list(method = "ora", contrast = ct,
+                                                    rel_dir = rel,
+                                                    table = one$res$table)
+            }
         }
     }
     ora_res <- NULL
@@ -215,8 +254,15 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     if (!is.null(de_res) && !is.null(de_res$de_tables) &&
         length(de_res$de_tables) > 0) {
         for (ct in names(de_res$de_tables)) {
-            one <- .mod_metab_gsea_contrast(pre, de_res, config, ct, out_enr, out_ds)
-            if (!is.null(one)) gsea_by_contrast[[ct]] <- one
+            rel <- metab_enrichment_unit_rel_dir("gsea", contrast_dirs[[ct]])
+            one <- .mod_metab_gsea_contrast(pre, de_res, config, ct,
+                                            file.path(out_enr, rel))
+            if (!is.null(one)) {
+                gsea_by_contrast[[ct]] <- one
+                units[[length(units) + 1L]] <- list(method = "gsea", contrast = ct,
+                                                    rel_dir = rel,
+                                                    table = one$res$table)
+            }
         }
     }
     gsea_res <- NULL
@@ -260,18 +306,37 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                         ") — skipping.")
                 next
             }
-            q <- .mod_metab_qea_contrast(pre_sub, config, ct, out_enr, out_ds)
-            if (!is.null(q)) { qea_by_contrast[[ct]] <- q; files <- c(files, q$files) }
-            s <- .mod_metab_ssgsea_contrast(pre_sub, config, ct, out_enr, out_ds,
+            q_rel <- metab_enrichment_unit_rel_dir("qea", contrast_dirs[[ct]])
+            q <- .mod_metab_qea_contrast(pre_sub, config, ct,
+                                         file.path(out_enr, q_rel))
+            if (!is.null(q)) {
+                qea_by_contrast[[ct]] <- q; files <- c(files, q$files)
+                units[[length(units) + 1L]] <- list(method = "qea", contrast = ct,
+                                                    rel_dir = q_rel,
+                                                    table = q$res$table)
+            }
+            s_rel <- metab_enrichment_unit_rel_dir("ssgsea", contrast_dirs[[ct]])
+            s <- .mod_metab_ssgsea_contrast(pre_sub, config, ct,
+                                            file.path(out_enr, s_rel),
                                             groups = grp$groups,
                                             group_col = grp$group_col)
-            if (!is.null(s)) { ssgsea_by_contrast[[ct]] <- s; files <- c(files, s$files) }
+            if (!is.null(s)) {
+                ssgsea_by_contrast[[ct]] <- s; files <- c(files, s$files)
+                units[[length(units) + 1L]] <- list(method = "ssgsea", contrast = ct,
+                                                    rel_dir = s_rel,
+                                                    table = s$res$table)
+            }
         }
     }
 
     # mummichog now runs as its own pinned {targets} stage (06c/05b), wired into
     # the metabolomics DAG when modes.metabolomics.enrichment.mummichog.enabled is
     # true — it is no longer produced here. See mod_mummichog_pinned().
+
+    # Written last: its presence marks a run that reached the end.
+    utils::write.csv(build_metab_enrichment_manifest(units), manifest_file,
+                     row.names = FALSE)
+    files <- c(files, manifest_file)
 
     list(
         qea                = qea_res,
@@ -301,19 +366,21 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     gsub("^_+|_+$", "", s)
 }
 
-#' Render + save a set of enrichment plots for one contrast
+#' Render + save a set of enrichment plots for one result unit
 #'
-#' @param table   Result table to plot.
-#' @param specs   Named list of \code{key -> function(table) -> ggplot}.
-#' @param prefix  File-name prefix, e.g. "enrichment_ora".
-#' @param sfx     Sanitized contrast suffix.
-#' @param out_enr Enrichment output directory.
+#' Each plot is written as \code{<key>.png} in the unit directory, which already
+#' carries the method and the contrast.
+#'
+#' @param table    Result table to plot.
+#' @param specs    Named list of \code{key -> function(table) -> ggplot}.
+#' @param unit_dir Directory of the result unit (must exist).
+#' @param label    Method and contrast, for the warning when a plot fails.
 #' @return list(plots, files): ggplot objects (by key) and written PNG paths.
-.render_enrichment_plots <- function(table, specs, prefix, sfx, out_enr) {
+.render_enrichment_plots <- function(table, specs, unit_dir, label) {
     plots <- list()
     files <- character(0)
     for (key in names(specs)) {
-        f <- file.path(out_enr, paste0(prefix, "_", key, "_", sfx, ".png"))
+        f <- file.path(unit_dir, paste0(key, ".png"))
         p <- tryCatch({
             pp <- specs[[key]](table)
             if (!is.null(pp)) {
@@ -321,7 +388,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             }
             pp
         }, error = function(e) {
-            warning(prefix, " ", key, " failed for '", sfx, "': ", e$message)
+            warning(label, ": ", key, " plot failed: ", e$message)
             NULL
         })
         if (!is.null(p)) {
@@ -336,10 +403,10 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #'
 #' @param pre,de_res,config Passed through to \code{run_metabolomics_ora()}.
 #' @param contrast Contrast name (a key of \code{de_res$de_tables}).
-#' @param out_enr,out_ds Enrichment / datasets output directories.
+#' @param unit_dir Directory of this contrast's result unit; the table is
+#'   written there as \code{results.tsv} beside its plots.
 #' @return list(res, plots, files) or NULL when the contrast yields no table.
-.mod_metab_ora_contrast <- function(pre, de_res, config, contrast,
-                                    out_enr, out_ds) {
+.mod_metab_ora_contrast <- function(pre, de_res, config, contrast, unit_dir) {
     res <- tryCatch(
         run_metabolomics_ora(pre, de_res, config, contrast = contrast),
         error = function(e) {
@@ -349,9 +416,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     )
     if (is.null(res) || is.null(res$table)) return(NULL)
 
-    sfx   <- .sanitize_contrast(contrast)
-    files <- save_tsv(res$table, out_ds,
-                      paste0("enrichment_ora_", sfx, "_results.tsv"))
+    files <- save_tsv(res$table, unit_dir, "results.tsv")
     rendered <- .render_enrichment_plots(
         res$table,
         specs = list(
@@ -362,7 +427,8 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             barplot  = function(t) plot_enrichment_barplot(t, top_n = 20,
                           title = paste0("ORA — ", contrast))
         ),
-        prefix = "enrichment_ora", sfx = sfx, out_enr = out_enr
+        unit_dir = unit_dir,
+        label    = paste0("metabolomics ORA '", contrast, "'")
     )
     list(res = res, plots = rendered$plots,
          files = c(files, rendered$files))
@@ -372,8 +438,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #'
 #' @inheritParams .mod_metab_ora_contrast
 #' @return list(res, plots, files) or NULL when the contrast yields no table.
-.mod_metab_gsea_contrast <- function(pre, de_res, config, contrast,
-                                     out_enr, out_ds) {
+.mod_metab_gsea_contrast <- function(pre, de_res, config, contrast, unit_dir) {
     res <- tryCatch(
         run_metabolomics_gsea(pre, de_res, config, contrast = contrast),
         error = function(e) {
@@ -383,9 +448,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     )
     if (is.null(res) || is.null(res$table)) return(NULL)
 
-    sfx   <- .sanitize_contrast(contrast)
-    files <- save_tsv(res$table, out_ds,
-                      paste0("enrichment_gsea_", sfx, "_results.tsv"))
+    files <- save_tsv(res$table, unit_dir, "results.tsv")
     rendered <- .render_enrichment_plots(
         res$table,
         specs = list(
@@ -396,7 +459,8 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             barplot     = function(t) plot_enrichment_barplot(t, top_n = 20,
                              title = paste0("GSEA — ", contrast))
         ),
-        prefix = "enrichment_gsea", sfx = sfx, out_enr = out_enr
+        unit_dir = unit_dir,
+        label    = paste0("metabolomics GSEA '", contrast, "'")
     )
     list(res = res, plots = rendered$plots,
          files = c(files, rendered$files))
@@ -516,9 +580,9 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #' Run QEA for one contrast (on a two-group subset) and render/save its outputs
 #'
 #' @param pre_sub Two-group subset of the preprocessing object.
-#' @param config,contrast,out_enr,out_ds As in the other per-contrast helpers.
+#' @param config,contrast,unit_dir As in the other per-contrast helpers.
 #' @return list(res, plots, files) or NULL when the contrast yields no table.
-.mod_metab_qea_contrast <- function(pre_sub, config, contrast, out_enr, out_ds) {
+.mod_metab_qea_contrast <- function(pre_sub, config, contrast, unit_dir) {
     res <- tryCatch(
         run_metabolomics_qea(pre_sub, config),
         error = function(e) {
@@ -528,9 +592,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     )
     if (is.null(res) || is.null(res$table)) return(NULL)
 
-    sfx   <- .sanitize_contrast(contrast)
-    files <- save_tsv(res$table, out_ds,
-                      paste0("enrichment_qea_", sfx, "_results.tsv"))
+    files <- save_tsv(res$table, unit_dir, "results.tsv")
     rendered <- .render_enrichment_plots(
         res$table,
         specs = list(
@@ -539,7 +601,8 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             barplot  = function(t) plot_enrichment_barplot(t, top_n = 20,
                           title = paste0("QEA — ", contrast))
         ),
-        prefix = "enrichment_qea", sfx = sfx, out_enr = out_enr
+        unit_dir = unit_dir,
+        label    = paste0("metabolomics QEA '", contrast, "'")
     )
     list(res = res, plots = rendered$plots, files = c(files, rendered$files))
 }
@@ -564,7 +627,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #'   `enrichment.condition_column` instead would label the samples by an
 #'   unrelated variable, and the groups would not be found at all.
 #' @return list(res, plots, files) or NULL when the contrast yields no table.
-.mod_metab_ssgsea_contrast <- function(pre_sub, config, contrast, out_enr, out_ds,
+.mod_metab_ssgsea_contrast <- function(pre_sub, config, contrast, unit_dir,
                                        groups = NULL, group_col = NULL) {
     res <- tryCatch(
         run_metabolomics_ssgsea(pre_sub, config, contrast_groups = groups,
@@ -576,9 +639,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     )
     if (is.null(res) || is.null(res$table)) return(NULL)
 
-    sfx   <- .sanitize_contrast(contrast)
-    files <- save_tsv(res$table, out_ds,
-                      paste0("enrichment_ssgsea_", sfx, "_results.tsv"))
+    files <- save_tsv(res$table, unit_dir, "results.tsv")
     rendered <- .render_enrichment_plots(
         res$table,
         specs = list(
@@ -587,7 +648,8 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             barplot  = function(t) plot_enrichment_barplot(t, top_n = 20,
                           title = paste0("ssGSEA — ", contrast))
         ),
-        prefix = "enrichment_ssgsea", sfx = sfx, out_enr = out_enr
+        unit_dir = unit_dir,
+        label    = paste0("metabolomics ssGSEA '", contrast, "'")
     )
     list(res = res, plots = rendered$plots, files = c(files, rendered$files))
 }
