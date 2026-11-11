@@ -800,6 +800,39 @@ test_that("a plot that cannot be put in place is a failed save", {
     expect_length(temp_plot_files(d), 0L)
 })
 
+test_that("an existing plot is replaced even where rename will not overwrite", {
+    d <- withr::local_tempdir()
+    target <- file.path(d, "dotplot.png")
+    writeLines("earlier run's plot", target)
+    # A rename that refuses an existing destination, whatever the platform.
+    local_metab_enrichment_stubs(list(
+        .draw_metab_enrichment_png = draw_ok,
+        .rename_metab_enrichment_file = function(from, to) {
+            if (file.exists(to)) return(FALSE)
+            isTRUE(file.rename(from, to))
+        }))
+
+    expect_identical(.save_metab_enrichment_plot("a plot", target), target)
+    expect_identical(readLines(target), "new plot")
+    expect_length(temp_plot_files(d), 0L)
+})
+
+test_that("an existing plot that cannot be removed is left alone and the save fails", {
+    d <- withr::local_tempdir()
+    target <- file.path(d, "dotplot.png")
+    writeLines("earlier run's plot", target)
+    # The old file is open elsewhere: it can be neither renamed onto nor deleted.
+    local_metab_enrichment_stubs(list(
+        .draw_metab_enrichment_png = draw_ok,
+        .rename_metab_enrichment_file = function(from, to) FALSE,
+        .delete_metab_enrichment_files = function(paths) rep(FALSE, length(paths))))
+
+    expect_error(.save_metab_enrichment_plot("a plot", target),
+                 "could not be put in place")
+    expect_identical(readLines(target), "earlier run's plot")
+    expect_length(temp_plot_files(d), 0L)
+})
+
 test_that("a first-contrast copy whose save failed is not reported as written", {
     d <- withr::local_tempdir()
     enr <- file.path(d, "Enrichment"); ds <- file.path(d, "Datasets")

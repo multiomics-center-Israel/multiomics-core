@@ -488,9 +488,11 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 #'
 #' The plot is therefore drawn to a temporary file beside the target, the
 #' temporary file is checked (a regular, non-empty file), and it is then renamed
-#' onto the target, which replaces the target in one step. If any of that fails
-#' this function stops, the target is left as it was, and the temporary file is
-#' removed. Callers treat that like any other failed save.
+#' onto the target. Where the rename will not replace an existing file, the old
+#' file is removed first and the rename repeated. If the plot cannot be put in
+#' place this function stops and the temporary file is removed; an old file
+#' that could not be replaced is left as it was. Callers treat that like any
+#' other failed save.
 #'
 #' @param plot A ggplot.
 #' @param path Path of the PNG to write; its directory must exist.
@@ -507,12 +509,31 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
         stop("the plot was not written to disk (the graphics device produced ",
              "no file for ", basename(path), ")", call. = FALSE)
     }
-    # file.rename() warns as well as returning FALSE; the stop() below says it.
-    if (!isTRUE(suppressWarnings(file.rename(tmp, path)))) {
+    moved <- .rename_metab_enrichment_file(tmp, path)
+    if (!moved && file.exists(path) && !dir.exists(path)) {
+        # A rename that will not replace an existing file: take the old file
+        # away first, then rename. If the old file cannot be removed (it is
+        # open elsewhere), it stays as it was and the save fails.
+        if (.delete_metab_enrichment_files(path)) {
+            moved <- .rename_metab_enrichment_file(tmp, path)
+        }
+    }
+    if (!moved) {
         stop("the plot could not be put in place at ", path, " (is the file open ",
              "in another program?)", call. = FALSE)
     }
     invisible(path)
+}
+
+#' Rename a file, reporting success as TRUE or FALSE
+#'
+#' \code{file.rename()} warns as well as returning FALSE; the caller reports
+#' the failure itself.
+#'
+#' @param from,to Paths.
+#' @return TRUE if the file was renamed.
+.rename_metab_enrichment_file <- function(from, to) {
+    isTRUE(suppressWarnings(file.rename(from, to)))
 }
 
 
