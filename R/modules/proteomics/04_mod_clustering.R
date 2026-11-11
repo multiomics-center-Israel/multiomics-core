@@ -5,7 +5,11 @@
 #' only when the data has enough groups (>= min_groups), where groups are
 #' defined by cfg$effects$color.
 #'
-#' \code{clustering.de_padj_cutoff} /
+#' When \code{de$covariates} was fitted, the hierarchical step clusters the DE
+#' matrix with the covariates removed (resolve_proteomics_display_matrix()),
+#' so the heatmap shows what the model kept. Its Excel z-score columns stay on
+#' the unadjusted matrix, beside the .norm values they summarise; only the row
+#' order follows the heatmap. \code{clustering.de_padj_cutoff} /
 #' \code{de_log2fc_cutoff} choose the rows by their own rule
 #' (get_clustering_de_cutoffs()); without them the rows are pass_any_contrast.
 #'
@@ -13,9 +17,11 @@
 #' @param de_res  DE results list (expects $summary_df at least)
 #' @param config  full YAML config list
 #' @param out_dir output run directory (project folder)
+#' @param display Optional output of resolve_proteomics_display_matrix() (the
+#'   prot_display_matrix target); built here when NULL and needed.
 #'
 #' @return list(plots, files, excel_order, objects)
-mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
+mod_proteomics_clustering <- function(pre, de_res, config, out_dir, display = NULL) {
   stopifnot(is.character(out_dir), length(out_dir) == 1)
   
   assert_pre_contract(pre, stage = "proteomics")
@@ -71,6 +77,11 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   de_features <- get_de_features(list(summary_df = summary_cl), cfg)
   expr_mat    <- as.matrix(pre$expr_imp_single)
   matrix_label <- "QC imputation draw (expr_imp_single)"
+  if (!is.null(de_res$covariate_design)) {
+    display      <- display %||% resolve_proteomics_display_matrix(pre, de_res, config)
+    expr_mat     <- display$mat
+    matrix_label <- display$label
+  }
 
   # Same guard the metabolomics and lipidomics modules already carry: a DE step
   # that returns nothing is a legitimate result, not a pipeline failure.
@@ -103,6 +114,14 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
                                 file.path(clustering_dir, "Hierarchical"),
                                 zscore_limit = zlim,
                                 annotation_colors = build_sample_annotation_colors(annot_hier))
+    if (!is.null(de_res$covariate_design) && !is.null(h$excel_order)) {
+      # The z-score columns sit next to the unadjusted .norm values in the
+      # workbook, so they describe the unadjusted matrix, as before.
+      ids <- rownames(h$excel_order$zscore_mat)
+      z_unadj <- zscore_rows(as.matrix(pre$expr_imp_single)[ids, , drop = FALSE])
+      colnames(z_unadj) <- paste0(colnames(z_unadj), ".zscore")
+      h$excel_order$zscore_mat <- z_unadj
+    }
     f_info <- f_hier_extra[2]
     if (file.exists(f_hier_hm)) {
       info <- data.frame(

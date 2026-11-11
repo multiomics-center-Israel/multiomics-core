@@ -252,8 +252,10 @@ show_executive_summary <- report_cfg$show_executive_summary %||% TRUE
 show_methods <- report_cfg$show_methods %||% TRUE
 show_session_info <- report_cfg$show_session_info %||% TRUE
 force_pca <- report_cfg$force_pca %||% FALSE
-# Figures written by prot_enrichment_heatmaps; the section below also needs
-# its index file, so a run that did not write them shows nothing.
+# Figures written by prot_sample_figures / prot_enrichment_heatmaps; each
+# section below also needs its index file, so a run that did not write them
+# shows nothing.
+show_sample_heatmaps <- report_cfg$show_sample_heatmaps %||% TRUE
 show_enrichment_heatmaps <- report_cfg$show_enrichment_heatmaps %||% TRUE
 
 # Load DE summary data (used in multiple sections). Use the same QC_post /
@@ -1217,6 +1219,83 @@ figure_legend("Unsupervised hierarchical clustering heatmap based on the top mos
 
 ```{r commentary-expr-heatmap, eval=show_expression_heatmap, results='asis'}
 render_commentary("expr_heatmap")
+```
+
+```{r de-matrix-figures, eval=show_sample_heatmaps, results='asis'}
+# Reads only what mod_proteomics_sample_figures() wrote and its index; the
+# matrix description comes from that index, not from the config.
+.dm_dir <- file.path(diag_dir, "DE_matrix")
+.dm_idx_file <- file.path(.dm_dir, "figures_index.tsv")
+if (file.exists(.dm_idx_file)) {
+    .dm <- read.delim(.dm_idx_file, stringsAsFactors = FALSE)
+    .dm_matrix <- .dm$matrix[1]
+    .dm_ann <- unlist(prot_cfg$effects$heatmap_annotations)
+    .dm_ann_txt <- if (length(.dm_ann) > 0) {
+        sprintf("Samples are annotated by %s (effects.heatmap_annotations).",
+                paste(.dm_ann, collapse = " and "))
+    } else {
+        "Samples are annotated by the condition column."
+    }
+    cat("## Sample structure on the DE matrix {.tabset}\n\n")
+    cat(sprintf(paste0(
+        "These figures use the whole matrix rather than single contrasts. Matrix: %s. ",
+        "The DE matrix is the imputed matrix limma was fitted on (the .norm columns of ",
+        "Datasets/final_results.tsv). Protein sets are drawn only from fully measured proteins, ",
+        "i.e. observed in every sample before imputation, so no imputed value enters a set or its ",
+        "ranking; the top-N sets are the N with the largest variance across samples on this matrix. %s\n\n"),
+        .dm_matrix, .dm_ann_txt))
+
+    .dm_src <- function(png) sprintf("Source: Diagnostic_plots/DE_matrix/%s (PDF alongside).", png)
+    .pca <- .dm[.dm$figure == "pca_before_after", , drop = FALSE]
+    if (nrow(.pca) > 0) {
+        cat("### PCA before and after covariate removal\n\n")
+        cat(sprintf("![PCA before and after covariate removal](%s){width=100%%}\n\n",
+                    file.path(.dm_dir, .pca$png[1])))
+        figure_legend(paste(
+            sprintf(paste0("PCA (centred, not scaled) on the %d fully measured proteins, the same ",
+                           "proteins in every panel. Left: DE matrix before covariate removal. ",
+                           "Middle: %s. Further panels: the left-panel scores coloured by each ",
+                           "covariate value. Axes give the share of variance explained. Point ",
+                           "labels are sample names, set smaller than the other text so they do ",
+                           "not overlap."),
+                    .pca$n_proteins[1], .dm_matrix),
+            .dm_src(.pca$png[1])))
+    }
+
+    .set_label <- function(set, n) {
+        if (identical(set, "fully_measured")) sprintf("All fully measured (%d)", n)
+        else sprintf("Top %s by variance", sub("^top", "", set))
+    }
+    .hm <- .dm[.dm$figure %in% c("correlation", "zscore"), , drop = FALSE]
+    for (.set in unique(.hm$set)) {
+        .r <- .hm[.hm$set == .set, , drop = FALSE]
+        .n <- .r$n_proteins[1]
+        cat(sprintf("\n### %s {.tabset}\n\n", .set_label(.set, .n)))
+        .rc <- .r[.r$figure == "correlation", , drop = FALSE]
+        if (nrow(.rc) > 0) {
+            cat("#### Sample correlation\n\n")
+            cat(sprintf("![Sample correlation](%s){width=90%%}\n\n", file.path(.dm_dir, .rc$png[1])))
+            figure_legend(paste(
+                sprintf(paste0("Pearson correlation between samples over %d proteins, computed after ",
+                               "subtracting each protein's mean across samples. Matrix: %s. Rows and ",
+                               "columns ordered by pheatmap's clustering of the correlation matrix ",
+                               "(Euclidean distance, complete linkage). Colour scale fixed at -1 to 1."),
+                        .n, .dm_matrix),
+                .dm_src(.rc$png[1])))
+        }
+        .rz <- .r[.r$figure == "zscore", , drop = FALSE]
+        if (nrow(.rz) > 0) {
+            cat("#### Protein z-score heatmap\n\n")
+            cat(sprintf("![Protein z-score heatmap](%s){width=90%%}\n\n", file.path(.dm_dir, .rz$png[1])))
+            figure_legend(paste(
+                sprintf(paste0("Row z-scores of %d proteins (rows) across samples (columns). Euclidean ",
+                               "distance and complete linkage on both axes, computed on the z-scores; ",
+                               "colours clipped at -3 and 3. Matrix: %s."),
+                        .n, .dm_matrix),
+                .dm_src(.rz$png[1])))
+        }
+    }
+}
 ```
 
 ---

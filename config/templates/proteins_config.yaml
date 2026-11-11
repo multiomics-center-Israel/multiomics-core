@@ -233,7 +233,8 @@ modes:
       # Heatmap annotation columns (optional), as in the RNA-seq template.
       # Sample annotation bars of every proteomics heatmap (QC distance,
       # correlation and expression heatmaps, top-DE heatmaps, the clustering
-      # heatmap), in this order. Levels are
+      # heatmap, the DE-matrix sample heatmaps) and the PCA before/after covariate
+      # removal (first = colour, second = shape), in this order. Levels are
       # ordered by a leading number when every value has one (0h, 4h, 24h),
       # else no/yes-type pairs negative first, else first appearance.
       # If not specified, uses the color variable only.
@@ -265,6 +266,13 @@ modes:
       show_identified_proteins_venn: false  # Pre-imputation identified proteins Venn diagram
       force_pca: false                     # Force PCA even with <2 replicates per group
 
+      # Whole-matrix sample heatmaps on the DE matrix (Diagnostic_plots/DE_matrix/):
+      # correlation and z-score heatmaps for the top-N proteins by variance among
+      # fully measured proteins, and for all fully measured proteins. With
+      # de.covariates set, the matrix has the covariates removed (group kept) and a
+      # PCA before/after removal is added.
+      show_sample_heatmaps: true
+      sample_heatmap_top_n: [500, 1000, 2000]
       # Enrichment summary heatmaps (Enrichment/contrast_heatmaps/): one per
       # collection and analysis, all contrasts as columns, sets with FDR below the
       # cutoff in at least one contrast as rows, capped at max_terms.

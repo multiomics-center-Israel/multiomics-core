@@ -119,7 +119,14 @@ plot_sample_distance_heatmap <- function(expr_mat,
 #' @param main Optional plot title.
 #' @param colors Optional color palette for the heatmap.
 #' @param fontsize Numeric font size for row/column labels.
+#' @param center_features Logical; subtract each feature's mean across samples
+#'        before correlating. Without it, correlations of log intensities sit
+#'        close to 1 and mostly reflect the shared abundance profile.
+#' @param limits Optional length-2 numeric range for a fixed colour scale
+#'        (e.g. \code{c(-1, 1)}); overrides \code{adjust_scale}.
 #' @param annotation_colors Optional pheatmap \code{annotation_colors} list.
+#' @param base_fontsize pheatmap \code{fontsize}: legend, annotation and title
+#'        text (pheatmap's own default, 10, unless set).
 #'
 #' @return pheatmap object.
 #'
@@ -135,8 +142,14 @@ plot_sample_correlation_heatmap <- function(expr_mat,
                                             cluster_rows = TRUE,
                                             cluster_cols = TRUE,
                                             adjust_scale = FALSE,
-                                            annotation_colors = NULL) {
+                                            center_features = FALSE,
+                                            limits = NULL,
+                                            annotation_colors = NULL,
+                                            base_fontsize = 10) {
   expr_mat <- as.matrix(expr_mat)
+  if (isTRUE(center_features)) {
+    expr_mat <- expr_mat - rowMeans(expr_mat, na.rm = TRUE)
+  }
   
   cor_mat <- stats::cor(
     expr_mat,
@@ -173,6 +186,12 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     }
   }
   
+  legend_breaks <- NA
+  if (!is.null(limits)) {
+    breaks <- seq(limits[1], limits[2], length.out = length(colors) + 1)
+    legend_breaks <- pretty(limits)
+  }
+
   # Issue 1, 2, 5 FIX: Hide labels, add row annotations, make clustering configurable
   pheatmap::pheatmap(
     cor_mat,
@@ -183,7 +202,9 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     main = main,
     col = colors,
     breaks = breaks, # Issue 4 FIX: Adjusted scale
+    legend_breaks = legend_breaks,
     annotation_colors = if (is.null(annotation_colors)) NA else annotation_colors,
+    fontsize = base_fontsize,
     show_rownames = show_labels, # Issue 1 FIX
     show_colnames = show_labels, # Issue 1 FIX
     fontsize_row = fontsize,
