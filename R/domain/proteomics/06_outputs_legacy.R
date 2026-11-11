@@ -137,11 +137,15 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
 #' @param contrasts_df Dataframe defining the experimental contrasts.
 #' @param row_data Optional annotation data (defaults to pre$row_data).
 #' @param feature_id_col The column name for unique identifiers (default "FeatureID").
+#' @param mean_adj Optional \code{Mean.adj.<group>} columns from
+#'   [build_group_mean_adjusted_proteomics()] (only when the model fitted
+#'   \code{de$covariates}); placed right after the \code{Mean.<group>} block.
+#'   NULL leaves the table as it was.
 #'
 #' @return A consolidated dataframe with statistics, expression values, and Z-scores.
 build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL,
                                             feature_id_col = "FeatureID", config = NULL,
-                                            expr_model = NULL) {
+                                            expr_model = NULL, mean_adj = NULL) {
     # The exported .norm and Mean. columns must describe the SAME imputation
     # limma was fitted on. perseus_like is stochastic and the pipeline draws
     # twice -- once in preprocessing (expr_imp_single) and once per model run
@@ -155,6 +159,12 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
 
     cv_cols <- build_group_cv_proteomics(pre, contrasts_df, config)
     mean_cols <- build_group_mean_proteomics(pre_model, contrasts_df, config)
+    if (!is.null(mean_cols) && !is.null(mean_adj) && ncol(mean_adj) > 0) {
+        # One block, unadjusted means first: the Excel writer files every
+        # ^Mean\\. column except Mean.raw. under the model-input means.
+        mean_cols <- cbind(mean_cols,
+                           mean_adj[match(rownames(mean_cols), rownames(mean_adj)), , drop = FALSE])
+    }
 
     # Pre-imputation estimate, computed on expr_filt (NAs still present). This
     # is the only genuinely model-free fold change in the table, and the one the

@@ -121,6 +121,18 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
         )
       ),
       
+      # ---- the DE matrix as the sample-level figures draw it: de$covariates
+      #      removed (group kept) when the model fitted them, else unchanged.
+      #      Built once; the clustering and sample figures both read it. ----
+      tar_target(
+        prot_display_matrix,
+        resolve_proteomics_display_matrix(
+          pre    = prot_pre,
+          de_res = prot_de_res,
+          config = config
+        )
+      ),
+
       # ---- clustering (needed for excel_order) ----
       tar_target(
         prot_clustering_obj,
@@ -128,10 +140,21 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
           pre     = prot_pre,
           de_res  = prot_de_res,
           config  = config,
-          out_dir = prot_out_dir
+          out_dir = prot_out_dir,
+          display = prot_display_matrix
         )
       ),
       
+      # ---- whole-matrix sample heatmaps and covariate PCA on the DE matrix ----
+      tar_target(
+        prot_sample_figures,
+        mod_proteomics_sample_figures(
+          display = prot_display_matrix,
+          config  = config,
+          out_dir = prot_out_dir
+        )
+      ),
+
       # ---- unified exports (TSV, Excel, Shiny payload) ----
       tar_target(
         prot_exports,
@@ -155,6 +178,18 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
           pre     = prot_pre,
           config  = config,
           out_dir = prot_out_dir
+        )
+      ),
+
+      # ---- enrichment summary heatmaps across contrasts (reads the tables
+      #      the two enrichment targets above wrote) ----
+      tar_target(
+        prot_enrichment_heatmaps,
+        mod_proteomics_enrichment_heatmaps(
+          pathway_res = prot_pathway_res,
+          pooled_res  = prot_pathway_pooled_res,
+          config      = config,
+          out_dir     = prot_out_dir
         )
       ),
 
@@ -226,6 +261,9 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
         {
           force(prot_pathway_res)
           force(prot_pathway_pooled_res)
+          force(prot_enrichment_heatmaps)
+          force(prot_sample_figures)
+          force(prot_clustering_obj)
           force(prot_ppi_res)
           force(prot_domain_res)
           force(prot_adv_stats)
