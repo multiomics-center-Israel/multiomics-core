@@ -727,27 +727,133 @@ test_that("a failed manifest write leaves the target as it was and no partial fi
 
 # ---- plots ----------------------------------------------------------------------
 
+# ---- a plot counts as written only when the file is really there ------------------
+#
+# These tests replace the one call that draws to a graphics device, so they do
+# not depend on how a device reports a failure (an error on some platforms, a
+# warning or nothing at all on others) or on a device being available.
+
+# Stand-ins for .draw_metab_enrichment_png(plot, path, width, height).
+draw_ok      <- function(plot, path, width, height) writeLines("new plot", path)
+draw_nothing <- function(plot, path, width, height) invisible(NULL)
+draw_warns   <- function(plot, path, width, height) {
+    warning("could not open file")
+    invisible(NULL)
+}
+draw_empty   <- function(plot, path, width, height) file.create(path)
+
+temp_plot_files <- function(dir) {
+    list.files(dir, pattern = "^\\.saving_", all.files = TRUE, recursive = TRUE)
+}
+
+test_that("a save that produced a file reports it and leaves no temporary file", {
+    d <- withr::local_tempdir()
+    target <- file.path(d, "dotplot.png")
+    local_metab_enrichment_stubs(list(.draw_metab_enrichment_png = draw_ok))
+
+    expect_identical(.save_metab_enrichment_plot("a plot", target), target)
+    expect_identical(readLines(target), "new plot")
+    expect_length(temp_plot_files(d), 0L)
+
+    # Saving again replaces the file in place.
+    local_metab_enrichment_stubs(list(.draw_metab_enrichment_png =
+        function(plot, path, width, height) writeLines("newer plot", path)))
+    .save_metab_enrichment_plot("a plot", target)
+    expect_identical(readLines(target), "newer plot")
+})
+
+test_that("a device that writes nothing is a failed save, whatever it signals", {
+    d <- withr::local_tempdir()
+    target <- file.path(d, "dotplot.png")
+    writeLines("earlier run's plot", target)
+
+    # Silent: no error, no warning, no file.
+    local_metab_enrichment_stubs(list(.draw_metab_enrichment_png = draw_nothing))
+    expect_error(.save_metab_enrichment_plot("a plot", target), "was not written")
+
+    # A warning instead of an error.
+    local_metab_enrichment_stubs(list(.draw_metab_enrichment_png = draw_warns))
+    expect_warning(
+        expect_error(.save_metab_enrichment_plot("a plot", target), "was not written"),
+        "could not open file")
+
+    # A file that was opened but never filled.
+    local_metab_enrichment_stubs(list(.draw_metab_enrichment_png = draw_empty))
+    expect_error(.save_metab_enrichment_plot("a plot", target), "was not written")
+
+    # In every case the earlier file is untouched and nothing is left behind.
+    expect_identical(readLines(target), "earlier run's plot")
+    expect_length(temp_plot_files(d), 0L)
+})
+
+test_that("a plot that cannot be put in place is a failed save", {
+    d <- withr::local_tempdir()
+    # Something that cannot be replaced by a file stands in for a PNG that is
+    # open in another program. The draw itself succeeds.
+    target <- file.path(d, "dotplot.png")
+    dir.create(target)
+    local_metab_enrichment_stubs(list(.draw_metab_enrichment_png = draw_ok))
+
+    expect_error(.save_metab_enrichment_plot("a plot", target),
+                 "could not be put in place")
+    expect_true(dir.exists(target))
+    expect_length(temp_plot_files(d), 0L)
+})
+
 test_that("a first-contrast copy whose save failed is not reported as written", {
-    skip_if_not_installed("ggplot2")
-    skip_if_not(capabilities("png") || requireNamespace("ragg", quietly = TRUE),
-                "no PNG device")
     d <- withr::local_tempdir()
     enr <- file.path(d, "Enrichment"); ds <- file.path(d, "Datasets")
     dir.create(enr); dir.create(ds)
-    # A path that cannot be written as a file stands in for a PNG that is open
-    # in another program: the save fails, and whatever was there stays.
-    blocked <- file.path(enr, "enrichment_ora_dotplot.png")
-    dir.create(blocked)
-    plot <- ggplot2::ggplot()
+    earlier <- file.path(enr, "enrichment_ora_dotplot.png")
+    writeLines("earlier run's plot", earlier)
+    res <- list(table = data.frame(pathway = "P1", FDR = 0.01))
+    plots <- list(dotplot = "a plot", lollipop = "a plot")
 
-    files <- suppressWarnings(.save_legacy_enrichment(
-        "ora", res = list(table = data.frame(pathway = "P1", FDR = 0.01)),
-        plots = list(dotplot = plot, lollipop = plot), out_enr = enr, out_ds = ds))
+    # The device fails for the dotplot only, without raising an error. The file
+    # it is handed is a temporary one that does not carry the plot name, so the
+    # two saves are told apart by their order: the dotplot is saved first.
+    calls <- 0L
+    local_metab_enrichment_stubs(list(.draw_metab_enrichment_png =
+        function(plot, path, width, height) {
+            calls <<- calls + 1L
+            if (calls > 1L) writeLines("new plot", path)
+            invisible(NULL)
+        }))
 
-    expect_false(blocked %in% files)
+    files <- .save_legacy_enrichment("ora", res, plots, out_enr = enr, out_ds = ds)
+
+    expect_identical(calls, 2L)
+    expect_false(earlier %in% files)
     expect_setequal(basename(files),
                     c("enrichment_ora_results.tsv", "enrichment_ora_lollipop.png"))
     expect_true(all(file.exists(files)))
+    # The earlier plot is still on disk, and is not claimed by this run.
+    expect_identical(readLines(earlier), "earlier run's plot")
+})
+
+test_that("a run whose plots were not written reports none and clears the old ones", {
+    fx  <- layout_fixture(contrasts = "A vs B")
+    out <- file.path(withr::local_tempdir(), "metabolomics")
+    enr <- file.path(out, "Enrichment")
+    dir.create(enr, recursive = TRUE)
+    earlier <- file.path(enr, c("enrichment_ora_dotplot.png",
+                                "enrichment_gsea_nes_barplot.png"))
+    file.create(earlier)
+    stubs <- method_stubs(plot = function(...) "a plot")
+    stubs$.draw_metab_enrichment_png <- draw_nothing
+    local_metab_enrichment_stubs(stubs)
+
+    res <- suppressMessages(suppressWarnings(mod_metabolomics_enrichment(
+        fx$pre, fx$de_res, fx$config, out, inputs = fx$inputs)))
+
+    # No plot is reported, so none can reach the PowerPoint ...
+    expect_false(any(grepl("\\.png$", res$files)))
+    expect_true(all(file.exists(res$files)))
+    # ... and the earlier first-contrast copies were removed, not kept as current.
+    expect_false(any(file.exists(earlier)))
+    expect_length(temp_plot_files(out), 0L)
+    # The tables are unaffected.
+    expect_true(file.exists(file.path(enr, "ORA/combined/contrasts/A_vs_B/de/results.tsv")))
 })
 
 test_that("plots are written beside their table under fixed names", {

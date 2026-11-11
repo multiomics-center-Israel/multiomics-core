@@ -99,7 +99,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             pq <- plot_enrichment_barplot(qea_res$table, top_n = 20,
                                            title = "Pathway Enrichment (QEA)")
             if (!is.null(pq)) {
-                ggplot2::ggsave(f_qea_plot, pq, width = 12, height = 8, dpi = 300)
+                .save_metab_enrichment_plot(pq, f_qea_plot)
             }
             pq
         }, error = function(e) {
@@ -116,7 +116,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
         p_qea_loll <- tryCatch({
             pl <- plot_qea_lollipop(qea_res$table, top_n = 20)
             if (!is.null(pl)) {
-                ggplot2::ggsave(f_qea_loll, pl, width = 12, height = 8, dpi = 300)
+                .save_metab_enrichment_plot(pl, f_qea_loll)
             }
             pl
         }, error = function(e) NULL)
@@ -136,7 +136,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                     pl <- plot_enrichment_barplot(lib_df, top_n = 20,
                                                   title = paste0(lib_label, " Enrichment"))
                     if (!is.null(pl)) {
-                        ggplot2::ggsave(f_lib, pl, width = 12, height = 8, dpi = 300)
+                        .save_metab_enrichment_plot(pl, f_lib)
                     }
                     pl
                 }, error = function(e) NULL)
@@ -172,7 +172,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             ps <- plot_enrichment_barplot(ssgsea_res$table, top_n = 20,
                                            title = "ssGSEA Pathway Enrichment")
             if (!is.null(ps)) {
-                ggplot2::ggsave(f_ssgsea_plot, ps, width = 12, height = 8, dpi = 300)
+                .save_metab_enrichment_plot(ps, f_ssgsea_plot)
             }
             ps
         }, error = function(e) {
@@ -202,8 +202,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                 pb <- plot_ssgsea_boxplots(ssgsea_res$scores, conditions,
                                             ssgsea_res$table)
                 if (!is.null(pb)) {
-                    ggplot2::ggsave(f_box, pb, width = 12, height = plot_h,
-                                     dpi = 300)
+                    .save_metab_enrichment_plot(pb, f_box, height = plot_h)
                 }
                 pb
             }, error = function(e) {
@@ -221,7 +220,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
         p_ssgsea_loll <- tryCatch({
             pl <- plot_ssgsea_lollipop(ssgsea_res$table, top_n = 20)
             if (!is.null(pl)) {
-                ggplot2::ggsave(f_ssgsea_loll, pl, width = 12, height = 8, dpi = 300)
+                .save_metab_enrichment_plot(pl, f_ssgsea_loll)
             }
             pl
         }, error = function(e) NULL)
@@ -465,6 +464,58 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
 }
 
 
+#' Draw one plot to a PNG file (the only place the stage calls ggsave)
+#'
+#' Kept apart from \code{.save_metab_enrichment_plot()} so that the check on
+#' what actually reached the disk does not depend on how a graphics device
+#' reports a failure.
+#'
+#' @param plot A ggplot.
+#' @param path Path of the PNG to write.
+#' @param width,height Size in inches.
+#' @return Called for its side effect.
+.draw_metab_enrichment_png <- function(plot, path, width, height) {
+    ggplot2::ggsave(path, plot, width = width, height = height, dpi = 300)
+}
+
+#' Save an enrichment plot, and fail unless the file was really written
+#'
+#' A graphics device does not always raise an error when it cannot write: some
+#' only warn, and some say nothing, so "ggsave() returned" is not evidence that
+#' the plot is on disk. Worse, when the target already holds a plot from an
+#' earlier run, a save that silently did nothing leaves that plot in place under
+#' this run's name.
+#'
+#' The plot is therefore drawn to a temporary file beside the target, the
+#' temporary file is checked (a regular, non-empty file), and it is then renamed
+#' onto the target, which replaces the target in one step. If any of that fails
+#' this function stops, the target is left as it was, and the temporary file is
+#' removed. Callers treat that like any other failed save.
+#'
+#' @param plot A ggplot.
+#' @param path Path of the PNG to write; its directory must exist.
+#' @param width,height Size in inches.
+#' @return \code{path}, invisibly. Stops if the file could not be written.
+.save_metab_enrichment_plot <- function(plot, path, width = 12, height = 8) {
+    tmp <- tempfile(pattern = ".saving_", tmpdir = dirname(path), fileext = ".png")
+    on.exit(if (file.exists(tmp)) unlink(tmp), add = TRUE)
+
+    .draw_metab_enrichment_png(plot, tmp, width, height)
+
+    info <- file.info(tmp)
+    if (is.na(info$size) || isTRUE(info$isdir) || info$size == 0) {
+        stop("the plot was not written to disk (the graphics device produced ",
+             "no file for ", basename(path), ")", call. = FALSE)
+    }
+    # file.rename() warns as well as returning FALSE; the stop() below says it.
+    if (!isTRUE(suppressWarnings(file.rename(tmp, path)))) {
+        stop("the plot could not be put in place at ", path, " (is the file open ",
+             "in another program?)", call. = FALSE)
+    }
+    invisible(path)
+}
+
+
 # ==============================================================================
 # Per-contrast helpers (ORA / GSEA)
 # ==============================================================================
@@ -496,7 +547,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
         p <- tryCatch({
             pp <- specs[[key]](table)
             if (!is.null(pp)) {
-                ggplot2::ggsave(f, pp, width = 12, height = 8, dpi = 300)
+                .save_metab_enrichment_plot(pp, f)
             }
             pp
         }, error = function(e) {
@@ -607,7 +658,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
         if (!is.null(plots[[key]])) {
             f <- file.path(out_enr, legacy[[key]])
             saved <- tryCatch({
-                ggplot2::ggsave(f, plots[[key]], width = 12, height = 8, dpi = 300)
+                .save_metab_enrichment_plot(plots[[key]], f)
                 TRUE
             }, error = function(e) FALSE)
             # Only a copy that was actually written is this run's. A path whose
