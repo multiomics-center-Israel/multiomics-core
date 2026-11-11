@@ -136,7 +136,10 @@ mod_proteomics_exports <- function(
             row_data = pre$row_data,
             feature_id_col = id_col,
             config = config,
-            expr_model = expr_model
+            expr_model = expr_model,
+            # Mean.adj.<group>: only when the model fitted de$covariates
+            # (de_res$covariate_design is the evidence); NULL otherwise.
+            mean_adj = build_group_mean_adjusted_proteomics(pre, de_res, inputs$contrasts, config)
         )
 
         # Write final_results TSV
@@ -188,7 +191,13 @@ mod_proteomics_exports <- function(
             # NULL unless this run pooled two or more imputed DE fits, which is
             # the only case where the reported fold change is not simply the
             # coefficient of the model the workbook already describes.
-            de_reconciliation = build_de_reconciliation_proteomics(de_res, config)
+            de_reconciliation = build_de_reconciliation_proteomics(de_res, config),
+            de_covariates = if (!is.null(de_res$covariate_design)) {
+                get_proteomics_de_covariates(prot_cfg)
+            },
+            de_design = if (!is.null(de_res$covariate_design)) {
+                describe_proteomics_de_design(prot_cfg, get_proteomics_de_covariates(prot_cfg))
+            }
         )
         files <- c(files, excel_files)
     }

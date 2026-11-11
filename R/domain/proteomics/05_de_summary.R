@@ -401,6 +401,19 @@ resolve_de_covariates <- function(meta_aligned, p_cfg) {
     scale(mat, center = TRUE, scale = FALSE)
 }
 
+#' Condition column of the proteomics limma design
+#'
+#' The column whose levels become the `~ 0 + condition` columns of
+#' [build_proteomics_de_design()]: the same fallback chain
+#' [run_limma_proteomics()] resolves inline, so the covariate removal in
+#' [remove_proteomics_de_covariates()] keeps the grouping the model kept.
+#'
+#' @param p_cfg The `modes$proteomics` config branch.
+#' @return A single metadata column name.
+get_proteomics_de_group_col <- function(p_cfg) {
+    p_cfg$de_table$group_col %||% p_cfg$effects$color %||% "Condition"
+}
+
 #' Build the limma design matrix for a proteomics fit
 #'
 #' One column per condition (no intercept), so the contrasts can name condition
