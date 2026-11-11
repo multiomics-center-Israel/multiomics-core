@@ -331,6 +331,17 @@ validate_proteomics_config <- function(cfg) {
                            "advanced_stats$run_robust_regression", allow_null = TRUE)
     }
 
+    # 9b. Report display keys read outside the report template
+    #     (05c_mod_enrichment_heatmaps.R)
+    if (!is.null(cfg$report)) {
+        rp <- cfg$report
+        assert_scalar_bool(rp$show_enrichment_heatmaps, "report$show_enrichment_heatmaps", allow_null = TRUE)
+        assert_scalar_num(rp$enrichment_heatmap_fdr, "report$enrichment_heatmap_fdr",
+                          allow_null = TRUE, min_val = 0, max_val = 1)
+        assert_scalar_num(rp$enrichment_heatmap_max_terms, "report$enrichment_heatmap_max_terms",
+                          allow_null = TRUE, min_val = 1)
+    }
+
     # 10. QC Settings (optional)
     if (!is.null(cfg$qc)) {
         assert_scalar_bool(cfg$qc$run_umap, "qc$run_umap", allow_null = TRUE)
