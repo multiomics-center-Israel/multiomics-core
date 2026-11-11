@@ -198,6 +198,33 @@ test_that("one side entirely outside the others' range is noted as extrapolation
     expect_match(a2$contrasts$Note, "Every denominator sample (C) has V1 below", fixed = TRUE)
 })
 
+test_that("two sides holding every sample give one extrapolation sentence", {
+    skip_if_not_installed("limma")
+    # B above every A sample: "numerator above" and "denominator below" are the
+    # same fact in a two-condition design.
+    x <- cov_design_and_contrasts(rep(c("A", "B"), each = 4),
+                                  c(1, 2, 3, 2.5, 7, 8, 9, 8.5), c(B_vs_A = "B - A"))
+    a <- assess_covariate_design(x$design, x$cm, x$group, x$covariates)
+    expect_match(a$contrasts$Note, "Every numerator sample (B) has V1 above", fixed = TRUE)
+    expect_false(grepl("denominator", a$contrasts$Note))
+})
+
+test_that("the joint SE inflation is noted once per contrast, not per covariate", {
+    skip_if_not_installed("limma")
+    grp <- rep(c("A", "B"), each = 4)
+    cov <- cbind(u = c(1, 2, 3, 2.5, 7, 8, 9, 8.5),   # nearly separates A from B
+                 v = c(0.3, -0.2, 0.1, 0.4, -0.1, 0.2, -0.3, 0.0))
+    x <- cov_design_and_contrasts(grp, cov, c(B_vs_A = "B - A"))
+    a <- assess_covariate_design(x$design, x$cm, x$group, x$covariates)
+    expect_equal(a$contrasts$Covariate, c("u", "v"))
+    # One value for the design, shown on both rows.
+    expect_equal(a$contrasts$SE_inflation[1], a$contrasts$SE_inflation[2])
+    expect_gt(a$contrasts$SE_inflation[1], batch_se_inflation_note_at())
+    expect_match(a$contrasts$Note[1], "Adjusting for all covariates together inflates",
+                 fixed = TRUE)
+    expect_false(grepl("inflates", a$contrasts$Note[2]))
+})
+
 test_that("a covariate fixed by condition is refused as collinear", {
     skip_if_not_installed("limma")
     x <- cov_design_and_contrasts(rep(c("A", "B"), each = 3), c(5, 5, 5, 9, 9, 9),

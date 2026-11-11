@@ -172,6 +172,10 @@ modes:
       fdrtool_correction: false  # true = empirical null correction on t-stats (DEP-style)
       paired: false           # relevant for t-test
       pairing_col: null          # metadata column for paired test (e.g. "Subject")
+      # Numeric metadata columns entered in the limma model after the
+      # condition columns (~ 0 + condition + covariates), centred. limma only.
+      # Not batch_correction$covariates, which feeds ComBat.
+      # covariates: ["depth_score"]
 
     # --------------------------------------------------------
     # How to interpret DE summary tables (used by get_de_features, QC_post, etc.)

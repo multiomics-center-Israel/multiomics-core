@@ -1466,7 +1466,7 @@ make_dt(read.delim(.bd_contr_file, check.names = FALSE, stringsAsFactors = FALSE
 ### Continuous covariates in the DE model
 
 ```{r covariate-design-contrasts, eval=.show_covariate_design, results='asis'}
-cat("The sample covariate(s) entered the limma model as centred continuous terms after the condition columns. Per contrast and covariate: the covariate difference between the two sides (numerator minus denominator mean, in the covariate's units), the R-squared of the covariate on condition, and how much adjusting widens the standard error relative to a condition-only design. A note marks a contrast where one side's values all lie outside the range of the other samples; there the adjusted estimate depends on extending the fitted slope beyond the data.\n\n")
+cat("The sample covariate(s) entered the limma model as centred continuous terms after the condition columns. Per contrast and covariate: the covariate difference between the two sides (numerator minus denominator mean, in the covariate's units), the R-squared of the covariate on condition, and how much adjusting for all covariates together widens the standard error relative to a condition-only design (one value per contrast, repeated on each covariate row). A note marks a contrast where one side's values all lie outside the range of the other samples; there the adjusted estimate depends on extending the fitted slope beyond the data.\n\n")
 make_dt(read.delim(.cd_file, check.names = FALSE, stringsAsFactors = FALSE),
         "Covariate design diagnostics")
 ```

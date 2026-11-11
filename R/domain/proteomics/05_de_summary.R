@@ -618,8 +618,9 @@ assess_batch_design <- function(design, contrast_matrix, group, batch, block = N
 #' Otherwise returns diagnostics that never stop the run, one row per contrast
 #' and covariate: the covariate difference between the two sides of the
 #' contrast, the R-squared of the covariate on condition, the standard-error
-#' inflation from adjusting (shared with [assess_batch_design()] through
-#' [contrast_se_inflation()]), and a note when one side's covariate values all
+#' inflation from adjusting for all covariates together (one value per
+#' contrast, repeated on each covariate row; shared with
+#' [assess_batch_design()] through [contrast_se_inflation()]), and a note when one side's covariate values all
 #' lie outside the range of the other samples, where the adjusted contrast
 #' depends on extending the fitted slope beyond the data.
 #'
@@ -670,7 +671,8 @@ assess_covariate_design <- function(design, contrast_matrix, group, covariates) 
         inflation <- inflations[[cn]]
         sides <- list(numerator   = group %in% grp_cols[c0 > 0],
                       denominator = group %in% grp_cols[c0 < 0])
-        do.call(rbind, lapply(cov_names, function(cv) {
+        do.call(rbind, lapply(seq_along(cov_names), function(i) {
+            cv <- cov_names[[i]]
             x <- covariates[, cv]
             # The contrast applied to the condition means: numerator minus
             # denominator for a simple A - B contrast.
@@ -684,6 +686,11 @@ assess_covariate_design <- function(design, contrast_matrix, group, covariates) 
                 else if (all(x[in_side] < min(rest))) "below"
                 else ""
             }, character(1))
+            # When the two sides hold every sample, "numerator above" and
+            # "denominator below" are one fact; say it once.
+            if (all(nzchar(outside)) && all(sides$numerator | sides$denominator)) {
+                outside[["denominator"]] <- ""
+            }
             note <- c(
                 vapply(names(outside)[nzchar(outside)], function(sd) {
                     sprintf(paste0("Every %s sample (%s) has %s %s every other sample, so ",
@@ -693,9 +700,13 @@ assess_covariate_design <- function(design, contrast_matrix, group, covariates) 
                                       collapse = ", "),
                             cv, outside[[sd]])
                 }, character(1)),
-                if (inflation > batch_se_inflation_note_at()) {
-                    sprintf(paste0("Adjusting for the covariate(s) inflates the standard ",
+                # SE_inflation is one value per contrast for all covariates
+                # together; note it on the first covariate's row only, so the
+                # table and the warnings do not repeat it per covariate.
+                if (i == 1L && inflation > batch_se_inflation_note_at()) {
+                    sprintf(paste0("Adjusting for %s inflates the standard ",
                                    "error %.2f-fold (heuristic note above %.1f; not an error)."),
+                            if (length(cov_names) > 1) "all covariates together" else "the covariate",
                             inflation, batch_se_inflation_note_at())
                 }
             )
