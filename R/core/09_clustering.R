@@ -1345,6 +1345,10 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
     annotation_row_context = annot_context,
     out_file               = f_hm,
     cluster_cols           = cluster_samples,
+    # Every caller builds annot_col with build_heatmap_annotation_col(), the
+    # same default wrap_clustering_heatmap() would build, unless it chose
+    # another annotation on purpose (proteomics effects$heatmap_annotations).
+    annotation_col         = annot_col,
     title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
   )
   written <- f_hm

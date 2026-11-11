@@ -58,10 +58,12 @@ plot_density_overlay <- function(expr_mat,
 #' @param dist_method distance metric
 #' @param show_labels show sample names on axes (default FALSE for readability)
 #' @param cluster_rows,cluster_cols enable hierarchical clustering (default TRUE)
+#' @param annotation_colors Optional pheatmap \code{annotation_colors} list.
 #' @return invisibly returns pheatmap object
 plot_sample_distance_heatmap <- function(expr_mat,
                                          dist_method = "euclidean",
                                          annotation_col = NULL,
+                                         annotation_colors = NULL,
                                          main = NULL,
                                          colors = NULL,
                                          fontsize = 12,
@@ -87,6 +89,7 @@ plot_sample_distance_heatmap <- function(expr_mat,
     cluster_cols = cluster_cols,
     annotation_col = annotation_col,
     annotation_row = annotation_col, # Issue 2 FIX: Mirror annotations for symmetry
+    annotation_colors = if (is.null(annotation_colors)) NA else annotation_colors,
     main = main,
     col = colors,
     show_rownames = show_labels, # Issue 1 FIX: Hide by default
@@ -116,6 +119,7 @@ plot_sample_distance_heatmap <- function(expr_mat,
 #' @param main Optional plot title.
 #' @param colors Optional color palette for the heatmap.
 #' @param fontsize Numeric font size for row/column labels.
+#' @param annotation_colors Optional pheatmap \code{annotation_colors} list.
 #'
 #' @return pheatmap object.
 #'
@@ -130,7 +134,8 @@ plot_sample_correlation_heatmap <- function(expr_mat,
                                             show_labels = TRUE,
                                             cluster_rows = TRUE,
                                             cluster_cols = TRUE,
-                                            adjust_scale = FALSE) {
+                                            adjust_scale = FALSE,
+                                            annotation_colors = NULL) {
   expr_mat <- as.matrix(expr_mat)
   
   cor_mat <- stats::cor(
@@ -178,6 +183,7 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     main = main,
     col = colors,
     breaks = breaks, # Issue 4 FIX: Adjusted scale
+    annotation_colors = if (is.null(annotation_colors)) NA else annotation_colors,
     show_rownames = show_labels, # Issue 1 FIX
     show_colnames = show_labels, # Issue 1 FIX
     fontsize_row = fontsize,
@@ -941,7 +947,8 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
                                     title = NULL,
                                     cluster_cols = TRUE,
                                     cluster_rows_default = TRUE,
-                                    scale_rows = TRUE) {
+                                    scale_rows = TRUE,
+                                    annotation_col = NULL) {
   
   use_ids <- intersect(feature_ids, rownames(expr_mat))
   
@@ -957,7 +964,9 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
   sample_col <- cfg$effects$samples
   color_col  <- get_color_config(cfg)
   
-  annot_col <- build_heatmap_annotation_col(meta, cfg)
+  # A caller may pass its own sample annotation (proteomics passes
+  # effects$heatmap_annotations); the default is unchanged.
+  annot_col <- annotation_col %||% build_heatmap_annotation_col(meta, cfg)
   # annot_col <- data.frame(
   #   Condition = meta[[color_col]],
   #   row.names = meta[[sample_col]]
