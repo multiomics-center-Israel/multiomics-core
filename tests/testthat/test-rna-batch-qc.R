@@ -205,3 +205,87 @@ test_that("a deleted batch-corrected plot is redrawn, and a disabled run tracks 
     expect_identical(targets::tar_read(qc_files), character(0))
     expect_false(any(file.exists(files)))
 })
+
+# --- Before/after PCA panel ---------------------------------------------------
+
+test_that("the PCA panel shows the group the correction kept, labelled as such", {
+    # effects$color is the group: one row for it, then the batch.
+    same <- rna_batch_pca_panel_columns(bc_config()$modes$rna, "Condition", "Batch")
+    expect_identical(same$column, c("Condition", "Batch"))
+    expect_identical(same$label, c("Condition (group kept by the correction)", "Batch (batch)"))
+
+    # effects$color is another column: the kept group still comes first, and
+    # the colour column is shown under its own name, not as the kept group.
+    cfg <- bc_config(cols = c("Batch", "Run"))$modes$rna
+    cfg$effects$color <- c("Pair", "Condition")
+    other <- rna_batch_pca_panel_columns(cfg, "Condition", c("Batch", "Run"))
+    expect_identical(other$column, c("Condition", "Pair", "Batch", "Run"))
+    expect_identical(other$label, c("Condition (group kept by the correction)", "Pair",
+                                    "Batch (batch)", "Run (batch)"))
+    expect_identical(sum(grepl("kept by the correction", other$label)), 1L)
+})
+
+test_that("the panel is drawn when the kept group differs from effects$color", {
+    skip_if_not_installed("pheatmap")
+    skip_if_not_installed("patchwork")
+    out_dir <- withr::local_tempdir()
+    pre <- make_bc_pre()
+    cfg <- bc_config()
+    cfg$modes$rna$effects$color <- "Run"
+    corrected <- compute_rna_batch_correction(pre, cfg)
+    # The correction follows the contrasts, not the colour column.
+    expect_identical(corrected$record$group_col, "Condition")
+    files <- suppressMessages(mod_rnaseq_batch_qc(pre, corrected, bc_de(pre), cfg, out_dir))
+    expect_true("PCA_batch_before_after.png" %in% basename(files))
+})
+
+test_that("rna_shared_pca_features keeps genes usable on both sides", {
+    samples <- paste0("S", 1:4)
+    before <- rbind(
+        ok           = c(1, 2, 3, 4),
+        flat_before  = c(5, 5, 5, 5),
+        flat_after   = c(1, 2, 3, 4),
+        one_finite   = c(1, NA, NA, Inf),
+        only_before  = c(4, 3, 2, 1)
+    )
+    colnames(before) <- samples
+    after <- before[c("ok", "flat_before", "flat_after", "one_finite"), ]
+    after["flat_before", ] <- c(1, 2, 3, 4)
+    after["flat_after", ] <- 7
+    after <- rbind(after, only_after = c(1, 2, 3, 4))
+
+    expect_identical(rna_shared_pca_features(before, after), "ok")
+    # A gene that lost a value on one side still counts while two remain.
+    after["ok", 1] <- NA
+    expect_identical(rna_shared_pca_features(before, after), "ok")
+})
+
+test_that("both sides of the panel are fitted on the same genes", {
+    skip_if_not_installed("patchwork")
+    pre <- make_bc_pre()
+    cfg <- bc_config()
+    corrected <- compute_rna_batch_correction(pre, cfg)
+    before <- bc_plain(pre$expr_work)
+    after <- corrected$qc_expr
+    # A gene that varies before and is constant after would be dropped from
+    # one PCA only.
+    after["G200", ] <- 0
+    fitted <- list()
+    # Stand in for the PCA plot to record the genes each fit receives. The
+    # panel function looks it up where helper.R sourced R/ (its own
+    # environment), so that is where it is replaced, and restored afterwards.
+    fn_env <- environment(draw_rna_batch_pca_panel)
+    original <- get("qc_pca_scatter", envir = fn_env)
+    withr::defer(assign("qc_pca_scatter", original, envir = fn_env))
+    assign("qc_pca_scatter", function(expr_mat, ...) {
+        fitted[[length(fitted) + 1]] <<- rownames(expr_mat)
+        ggplot2::ggplot()
+    }, envir = fn_env)
+    out_file <- file.path(withr::local_tempdir(), "panel.png")
+    draw_rna_batch_pca_panel(before, after, pre$meta, cfg$modes$rna, "Condition", "Batch",
+                             "limma", out_file)
+    expect_length(fitted, 4)
+    expect_true(all(vapply(fitted, identical, logical(1), fitted[[1]])))
+    expect_false("G200" %in% fitted[[1]])
+    expect_identical(length(fitted[[1]]), 199L)
+})
