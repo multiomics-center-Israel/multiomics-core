@@ -97,6 +97,24 @@ validate_rna_config <- function(cfg) {
         }
     }
 
+    # 5c. Batch correction of the display matrices
+    if (!is.null(cfg$batch_correction)) {
+        if (!is.list(cfg$batch_correction)) {
+            stop("[config] batch_correction must be a mapping with 'enabled', 'batch_cols' ",
+                 "and 'method'.", call. = FALSE)
+        }
+        assert_scalar_bool(cfg$batch_correction$enabled, "batch_correction$enabled",
+                           allow_null = TRUE)
+        assert_scalar_bool(cfg$batch_correction$combat_mean_only,
+                           "batch_correction$combat_mean_only", allow_null = TRUE)
+        bc <- get_rna_batch_correction_config(cfg)  # stops on a bad method or batch_cols
+        if (bc$enabled && identical(bc$method, "limma") &&
+            isTRUE(cfg$batch_correction$combat_mean_only)) {
+            warning("batch_correction$combat_mean_only is used by method \"combat\" only; ",
+                    "method \"limma\" always adjusts the batch means only.", call. = FALSE)
+        }
+    }
+
     # 6. Annotation (optional)
     if (!is.null(cfg$annotation)) {
         a <- cfg$annotation

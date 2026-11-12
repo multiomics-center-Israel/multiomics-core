@@ -149,6 +149,38 @@ modes:
       # One or two metadata columns holding the batch label(s).
       batch_cols: ["Batch"]
 
+    # --------------------------------------------------------
+    # Batch correction for display and clustering (optional)
+    # Independent of batch_in_model above: that one changes the DE
+    # statistics only, this one changes expression values only, in a
+    # separate copy. Either, both or neither can be enabled.
+    # --------------------------------------------------------
+    batch_correction:
+      enabled: false
+      # Applied to a continuous log-scale matrix (VST, logCPM, or
+      # log-scale preprocessed input), never to raw counts.
+      # The corrected matrix is kept separately and is never DE input.
+      # Corrected values are for exploratory display and clustering;
+      # they do not show that the remaining variation is biological.
+      #
+      # Metadata column(s) holding the batch label.
+      #   limma:  1 or 2 columns
+      #   combat: exactly 1 column
+      batch_cols: ["Batch"]
+      # "limma"  - limma::removeBatchEffect. Shifts each batch's mean.
+      #            Recommended for RNA (default).
+      # "combat" - sva::ComBat. Also adjusts each batch's spread.
+      #            Genes that are constant within a batch are left as
+      #            they were; their number is recorded.
+      # Both methods are configured to preserve the biological group
+      # effect. However, successful separation of biological and batch
+      # effects depends on the experimental design and requires
+      # validation. The run stops if batch and group are fully confounded.
+      method: "limma"
+      # ComBat only. true = adjust the batch means only, not the spread.
+      # Use when batches are small (e.g. 2 samples per batch).
+      combat_mean_only: false
+
     # How to interpret your DE summary output table (for get_de_features / clustering / QC_post)
     de_table:
       id_col: "FeatureID"
