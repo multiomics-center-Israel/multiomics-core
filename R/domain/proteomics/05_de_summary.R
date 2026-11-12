@@ -319,29 +319,145 @@ resolve_de_batch_covariate <- function(meta_aligned, p_cfg) {
     batch
 }
 
+#' Continuous covariates requested for the proteomics limma design
+#'
+#' The one reader of `modes$proteomics$de$covariates`: the fit, the Methods
+#' text and the report all go through it, so none of them can disagree about
+#' whether covariates were requested. Type and method checks live in
+#' `validate_proteomics_config()`; the data checks in [resolve_de_covariates()].
+#'
+#' @param p_cfg The `modes$proteomics` config branch.
+#' @return A character vector of metadata column names, or NULL when no
+#'   covariate is configured.
+get_proteomics_de_covariates <- function(p_cfg) {
+    # [[ ]] rather than $: `$` partially matches names on lists.
+    cv <- p_cfg$de[["covariates"]]
+    if (is.null(cv) || length(cv) == 0) return(NULL)
+    as.character(unlist(cv))
+}
+
+#' Resolve the continuous DE covariates from the sample metadata
+#'
+#' Each configured column must be present, numeric, complete and not constant.
+#' The values are centred on their mean, which leaves every contrast between
+#' conditions unchanged and keeps each condition coefficient readable as that
+#' condition's mean at the average covariate value.
+#'
+#' @param meta_aligned Sample metadata, already ordered to match the expression
+#'   matrix columns.
+#' @param p_cfg The `modes$proteomics` config branch.
+#' @return NULL when no covariate is configured; otherwise a numeric matrix,
+#'   one row per sample and one column per covariate (named by its metadata
+#'   column), centred, with the means in attribute `"scaled:center"`.
+resolve_de_covariates <- function(meta_aligned, p_cfg) {
+    cols <- get_proteomics_de_covariates(p_cfg)
+    if (is.null(cols)) return(NULL)
+
+    # Repeated from the validator because the fit's SE-inflation baseline is
+    # the condition-only design; with batch in it the numbers would mislead.
+    if (identical(get_proteomics_batch_config(p_cfg)$de_mode, "covariate")) {
+        stop("de$covariates cannot yet be combined with a batch covariate ",
+             "(batch_correction$de_mode 'covariate').\n",
+             "  Remove de$covariates, or set batch_correction$de_mode to 'none' or ",
+             "'legacy_corrected'.", call. = FALSE)
+    }
+
+    missing <- setdiff(cols, colnames(meta_aligned))
+    if (length(missing) > 0) {
+        stop("de$covariates names column(s) not in the sample metadata: ",
+             paste(missing, collapse = ", "), ".\n",
+             "  Available columns: ", paste(colnames(meta_aligned), collapse = ", "),
+             call. = FALSE)
+    }
+
+    vals <- lapply(cols, function(col) {
+        x <- meta_aligned[[col]]
+        if (!is.numeric(x)) {
+            stop("de$covariates column '", col, "' is not numeric (it is ",
+                 class(x)[[1]], "), so it cannot enter the model as a continuous term.\n",
+                 "  For a categorical variable such as a batch or cell line, remove it ",
+                 "from de$covariates and set batch_correction$de_mode: 'covariate' with ",
+                 "batch_correction$batch_col: '", col, "' (batch_correction$method may ",
+                 "stay 'none'). That fits the same fixed term, ~ 0 + condition + ", col,
+                 ". If the values are numbers stored as text, fix the metadata file.",
+                 call. = FALSE)
+        }
+        bad <- !is.finite(x)
+        if (any(bad)) {
+            stop("de$covariates column '", col, "' has missing or non-finite values for ",
+                 sum(bad), " of ", length(x), " samples.\n",
+                 "  Every sample needs a value; fill them in or drop those samples via ",
+                 "modes$proteomics$sample_filter.", call. = FALSE)
+        }
+        if (stats::var(x) == 0) {
+            stop("de$covariates column '", col, "' has the same value for every sample, ",
+                 "so there is nothing to adjust for.\n",
+                 "  Remove it from de$covariates.", call. = FALSE)
+        }
+        x
+    })
+    mat <- matrix(unlist(vals), nrow = nrow(meta_aligned),
+                  dimnames = list(NULL, cols))
+    scale(mat, center = TRUE, scale = FALSE)
+}
+
 #' Build the limma design matrix for a proteomics fit
 #'
 #' One column per condition (no intercept), so the contrasts can name condition
 #' levels directly, plus treatment-coded batch columns when a batch covariate is
-#' given. Builds only; [assess_batch_design()] decides whether the result can
-#' be fitted.
+#' given, then one column per continuous covariate. Builds only;
+#' [assess_batch_design()] and [assess_covariate_design()] decide whether the
+#' result can be fitted.
 #'
 #' @param group Factor of condition labels, levels already made syntactic.
 #' @param batch Factor of batch labels, or NULL for a condition-only design.
+#' @param covariates Numeric matrix from [resolve_de_covariates()], or NULL.
 #' @return A numeric design matrix with one row per sample. Condition columns are
-#'   named by the levels of `group`; batch columns are named `batch_<level>`.
-build_proteomics_de_design <- function(group, batch = NULL) {
+#'   named by the levels of `group`; batch columns are named `batch_<level>`;
+#'   covariate columns `cov_<column>`.
+build_proteomics_de_design <- function(group, batch = NULL, covariates = NULL) {
     design <- stats::model.matrix(~ 0 + group)
     colnames(design) <- levels(group)
-    if (is.null(batch)) return(design)
-
-    batch_mat <- stats::model.matrix(~ batch)[, -1, drop = FALSE]
-    colnames(batch_mat) <- paste0("batch_", levels(batch)[-1])
-    design <- cbind(design, batch_mat)
-    # unique = TRUE renames only the later (batch) columns on a clash, so the
-    # condition names the contrasts refer to are never touched.
+    if (!is.null(batch)) {
+        batch_mat <- stats::model.matrix(~ batch)[, -1, drop = FALSE]
+        colnames(batch_mat) <- paste0("batch_", levels(batch)[-1])
+        design <- cbind(design, batch_mat)
+    }
+    if (!is.null(covariates)) {
+        cov_mat <- unclass(covariates)
+        attr(cov_mat, "scaled:center") <- NULL
+        colnames(cov_mat) <- paste0("cov_", colnames(covariates))
+        design <- cbind(design, cov_mat)
+    }
+    # unique = TRUE renames only the later (batch, covariate) columns on a
+    # clash, so the condition names the contrasts refer to are never touched.
     colnames(design) <- make.names(colnames(design), unique = TRUE)
     design
+}
+
+#' Standard-error inflation of each contrast from the extra design terms
+#'
+#' The unscaled standard error of each contrast in `design`, divided by the
+#' same in the design reduced to the condition columns. Shared by
+#' [assess_batch_design()] and [assess_covariate_design()], so both report the
+#' same quantity.
+#'
+#' @param design Full-rank design matrix whose condition columns are named by
+#'   `levels(group)`.
+#' @param contrast_matrix limma contrast matrix with `rownames == colnames(design)`.
+#' @param group Factor of condition labels per sample.
+#' @return Named numeric vector, one ratio per contrast (1 = no inflation).
+contrast_se_inflation <- function(design, contrast_matrix, group) {
+    # Both designs are full rank (the callers check; dropping columns keeps
+    # it), so solve() is safe.
+    grp_cols <- levels(group)
+    xtx_inv  <- solve(crossprod(design))
+    xtx0_inv <- solve(crossprod(design[, grp_cols, drop = FALSE]))
+    vapply(colnames(contrast_matrix), function(cn) {
+        cvec <- contrast_matrix[, cn]
+        c0 <- cvec[grp_cols]
+        sqrt(drop(t(cvec) %*% xtx_inv %*% cvec) / drop(t(c0) %*% xtx0_inv %*% c0))
+    }, numeric(1))
 }
 
 #' Heuristic threshold for the batch-adjustment SE inflation diagnostic
@@ -430,16 +546,11 @@ assess_batch_design <- function(design, contrast_matrix, group, batch, block = N
     cells <- data.frame(Condition = rownames(cells), cells, check.names = FALSE,
                         row.names = NULL, stringsAsFactors = FALSE)
 
-    # Unscaled SE of each contrast with and without the batch term. Both designs
-    # are full rank (checked above; dropping columns keeps it), so solve() is safe.
     grp_cols <- levels(group)
-    xtx_inv  <- solve(crossprod(design))
-    xtx0_inv <- solve(crossprod(design[, grp_cols, drop = FALSE]))
+    inflations <- contrast_se_inflation(design, contrast_matrix, group)
     contrasts <- do.call(rbind, lapply(colnames(contrast_matrix), function(cn) {
-        cvec <- contrast_matrix[, cn]
-        c0 <- cvec[grp_cols]
-        inflation <- sqrt(drop(t(cvec) %*% xtx_inv %*% cvec) /
-                          drop(t(c0) %*% xtx0_inv %*% c0))
+        c0 <- contrast_matrix[grp_cols, cn]
+        inflation <- inflations[[cn]]
         num <- group %in% grp_cols[c0 > 0]
         den <- group %in% grp_cols[c0 < 0]
         shared <- levels(batch)[vapply(levels(batch), function(b) {
@@ -482,6 +593,130 @@ assess_batch_design <- function(design, contrast_matrix, group, batch, block = N
          notes = as.character(notes))
 }
 
+#' Check a design with continuous covariates and describe them per contrast
+#'
+#' Stops when the design cannot be fitted:
+#'
+#'   * rank deficiency, which here means a covariate is a linear function of
+#'     the conditions (for example constant within each condition) or of the
+#'     other covariates. limma would silently drop the aliased column.
+#'   * no residual degrees of freedom.
+#'
+#' Otherwise returns diagnostics that never stop the run, one row per contrast
+#' and covariate: the covariate difference between the two sides of the
+#' contrast, the R-squared of the covariate on condition, the standard-error
+#' inflation from adjusting for all covariates together (one value per
+#' contrast, repeated on each covariate row; shared with
+#' [assess_batch_design()] through [contrast_se_inflation()]), and a note when one side's covariate values all
+#' lie outside the range of the other samples, where the adjusted contrast
+#' depends on extending the fitted slope beyond the data.
+#'
+#' @param design Design from [build_proteomics_de_design()] with covariates and
+#'   no batch term.
+#' @param contrast_matrix limma contrast matrix with `rownames == colnames(design)`.
+#' @param group Factor of condition labels per sample.
+#' @param covariates Matrix from [resolve_de_covariates()].
+#' @return A list: `contrasts` (data.frame: `Contrast`, `Covariate`,
+#'   `Difference`, `R2_on_condition`, `SE_inflation`, `Note`), `df_residual`
+#'   and `notes` (design-level notes; character, possibly empty).
+assess_covariate_design <- function(design, contrast_matrix, group, covariates) {
+    cov_names <- colnames(covariates)
+    # Share of each covariate's variance explained by condition. Written out
+    # rather than via summary.lm(), which warns on the perfect fit that a
+    # covariate fixed by condition produces.
+    r2 <- vapply(cov_names, function(cv) {
+        x <- covariates[, cv]
+        1 - sum((x - stats::ave(x, group))^2) / sum((x - mean(x))^2)
+    }, numeric(1))
+
+    non_est <- limma::nonEstimable(design)
+    if (!is.null(non_est)) {
+        stop("The design with de$covariates is rank-deficient: column(s) ",
+             paste(non_est, collapse = ", "), " are aliased with others, so the ",
+             "covariate(s) and the conditions cannot all be estimated.\n",
+             "  R-squared of each covariate on condition: ",
+             paste(sprintf("%s = %.3f", cov_names, r2), collapse = ", "), ". ",
+             "A value of 1 means the covariate is fixed by the condition (for example ",
+             "the same value for every sample of a condition), so it carries no ",
+             "information beyond the condition itself.\n",
+             "  Remove that covariate from de$covariates, or, if it is a categorical ",
+             "label, model it with batch_correction$de_mode: 'covariate' and ",
+             "batch_correction$batch_col instead.", call. = FALSE)
+    }
+
+    df_residual <- nrow(design) - ncol(design)
+    if (df_residual < 1) {
+        stop("The design with de$covariates has ", ncol(design), " columns for ",
+             nrow(design), " samples, leaving no residual degrees of freedom.\n",
+             "  limma cannot estimate variances; use fewer covariates.", call. = FALSE)
+    }
+
+    grp_cols <- levels(group)
+    inflations <- contrast_se_inflation(design, contrast_matrix, group)
+    rows <- lapply(colnames(contrast_matrix), function(cn) {
+        c0 <- contrast_matrix[grp_cols, cn]
+        inflation <- inflations[[cn]]
+        sides <- list(numerator   = group %in% grp_cols[c0 > 0],
+                      denominator = group %in% grp_cols[c0 < 0])
+        do.call(rbind, lapply(seq_along(cov_names), function(i) {
+            cv <- cov_names[[i]]
+            x <- covariates[, cv]
+            # The contrast applied to the condition means: numerator minus
+            # denominator for a simple A - B contrast.
+            cond_means <- tapply(x, group, mean)[grp_cols]
+            difference <- sum(c0 * cond_means)
+            outside <- vapply(names(sides), function(sd) {
+                in_side <- sides[[sd]]
+                if (!any(in_side) || all(in_side)) return("")
+                rest <- x[!in_side]
+                if (all(x[in_side] > max(rest))) "above"
+                else if (all(x[in_side] < min(rest))) "below"
+                else ""
+            }, character(1))
+            # When the two sides hold every sample, "numerator above" and
+            # "denominator below" are one fact; say it once.
+            if (all(nzchar(outside)) && all(sides$numerator | sides$denominator)) {
+                outside[["denominator"]] <- ""
+            }
+            note <- c(
+                vapply(names(outside)[nzchar(outside)], function(sd) {
+                    sprintf(paste0("Every %s sample (%s) has %s %s every other sample, so ",
+                                   "the adjusted contrast relies on extending the fitted ",
+                                   "covariate slope beyond the range of the other samples."),
+                            sd, paste(grp_cols[if (sd == "numerator") c0 > 0 else c0 < 0],
+                                      collapse = ", "),
+                            cv, outside[[sd]])
+                }, character(1)),
+                # SE_inflation is one value per contrast for all covariates
+                # together; note it on the first covariate's row only, so the
+                # table and the warnings do not repeat it per covariate.
+                if (i == 1L && inflation > batch_se_inflation_note_at()) {
+                    sprintf(paste0("Adjusting for %s inflates the standard ",
+                                   "error %.2f-fold (heuristic note above %.1f; not an error)."),
+                            if (length(cov_names) > 1) "all covariates together" else "the covariate",
+                            inflation, batch_se_inflation_note_at())
+                }
+            )
+            data.frame(Contrast = cn, Covariate = cv,
+                       Difference = signif(difference, 4),
+                       R2_on_condition = round(r2[[cv]], 3),
+                       SE_inflation = round(inflation, 3),
+                       Note = paste(note, collapse = " "),
+                       stringsAsFactors = FALSE)
+        }))
+    })
+    contrasts <- do.call(rbind, rows)
+    rownames(contrasts) <- NULL
+
+    notes <- if (df_residual < 3) {
+        sprintf(paste0("The design with covariates leaves %d residual degree(s) of freedom; ",
+                       "variance estimates rest heavily on the empirical Bayes prior."),
+                df_residual)
+    }
+
+    list(contrasts = contrasts, df_residual = df_residual, notes = as.character(notes))
+}
+
 #' Run limma differential analysis for proteomics with contrast support
 #'
 #' Fits a limma linear model on an imputed proteomics expression matrix and
@@ -502,6 +737,11 @@ assess_batch_design <- function(design, contrast_matrix, group, batch, block = N
 #' random-effect concept and can be combined with it. The caller passes the
 #' measured (uncorrected) values, which `mod_proteomics_de()` does.
 #'
+#' When `de$covariates` names numeric metadata columns, they enter the design
+#' centred, after the condition columns (see [resolve_de_covariates()]),
+#' checked by [assess_covariate_design()]. They cannot yet be combined with a
+#' batch covariate.
+#'
 #' @param expr_imp Numeric matrix of imputed abundances, features x samples.
 #' @param meta Sample metadata; one row per column of `expr_imp`.
 #' @param contrasts_df Data frame of contrasts with Contrast_name, Factor,
@@ -509,8 +749,9 @@ assess_batch_design <- function(design, contrast_matrix, group, batch, block = N
 #' @param prot_tbl Feature annotation table keyed by the protein ID column.
 #' @param cfg Full pipeline config (the `modes$proteomics` branch is used).
 #' @return A list with aligned metadata, design matrix, contrasts, fitted model,
-#'   per-contrast DE tables, and `batch_design` ([assess_batch_design()] output,
-#'   NULL when batch is not modelled).
+#'   per-contrast DE tables, `batch_design` ([assess_batch_design()] output,
+#'   NULL when batch is not modelled), and `covariate_design`
+#'   ([assess_covariate_design()] output, NULL without `de$covariates`).
 #' @export
 run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     p_cfg <- cfg$modes$proteomics
@@ -533,7 +774,8 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     levels(meta_aligned[[group_col]]) <- safe_levels
 
     batch <- resolve_de_batch_covariate(meta_aligned, p_cfg)
-    design <- build_proteomics_de_design(meta_aligned[[group_col]], batch)
+    covariates <- resolve_de_covariates(meta_aligned, p_cfg)
+    design <- build_proteomics_de_design(meta_aligned[[group_col]], batch, covariates)
 
     stopifnot(all(contrasts_df$Factor == group_col))
     # Map contrast numerator/denominator to safe level names
@@ -552,6 +794,9 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     # mod_proteomics_de() surfaces it once.
     batch_design <- if (!is.null(batch)) {
         assess_batch_design(design, contrast_matrix, meta_aligned[[group_col]], batch, block)
+    }
+    covariate_design <- if (!is.null(covariates)) {
+        assess_covariate_design(design, contrast_matrix, meta_aligned[[group_col]], covariates)
     }
     # duplicateCorrelation() and lmFit() below receive the full design, batch
     # included, so a within-block correlation is estimated after batch adjustment.
@@ -624,7 +869,8 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
         contrast_matrix = contrast_matrix,
         fit2 = fit2,
         de_tables = de_tables,
-        batch_design = batch_design
+        batch_design = batch_design,
+        covariate_design = covariate_design
     )
 }
 

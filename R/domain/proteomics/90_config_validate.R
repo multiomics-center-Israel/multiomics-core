@@ -9,6 +9,7 @@ PROTEOMICS_DE_KEYS <- c(
     "method", "control_condition", "p_cutoff", "linear_fc_cutoff",
     "p_adjust_method", "fdrtool_correction", "paired", "pairing_col",
     "block_col", "volcano_n_label", "use_adj_for_pass1", "use_fdr_for_pass1",
+    "covariates",
     # Read outside the DE fit: multiomics precomputed-DE loader, PowerPoint
     # grouping, Shiny payload cutoff, effect-size reference level.
     "contrasts", "condition_column", "padj_cutoff", "reference_level"
@@ -256,6 +257,56 @@ validate_proteomics_config <- function(cfg) {
                 "be anti-conservative, especially when conditions are unevenly spread ",
                 "over batches. Prefer de_mode 'covariate' with de$method 'limma'.",
                 call. = FALSE)
+    }
+
+    # 4b. Continuous covariates in the DE model. Only the pooled limma fit
+    # reads them; every other path would fit as if they were not configured.
+    # Data checks (present, numeric, complete, not constant) need the metadata
+    # and run in resolve_de_covariates().
+    # An empty list means no covariates, as get_proteomics_de_covariates() reads it.
+    cv <- cfg$de[["covariates"]]
+    if (length(cv) > 0) {
+        cv_flat <- unlist(cv)
+        if (!is.character(cv_flat) || length(cv_flat) != length(cv) ||
+            anyNA(cv_flat) || !all(nzchar(cv_flat))) {
+            stop("de$covariates must be a list of sample-metadata column names, for ",
+                 "example covariates: [\"depth\"].", call. = FALSE)
+        }
+        if (anyDuplicated(cv_flat)) {
+            stop("de$covariates lists '", cv_flat[anyDuplicated(cv_flat)],
+                 "' more than once.", call. = FALSE)
+        }
+        if (precomputed) {
+            stop("de$covariates is set but files$de_table supplies precomputed DE ",
+                 "results, so no model is fitted here and the covariates would be ignored.\n",
+                 "  Remove de$covariates, or remove files$de_table to fit the model in the ",
+                 "pipeline.", call. = FALSE)
+        }
+        de_method <- cfg$de$method %||% "limma"
+        if (!identical(de_method, "limma")) {
+            stop("de$covariates is set but de$method is '", de_method, "'.\n",
+                 "  Covariates can enter the model only with de$method 'limma' (one pooled ",
+                 "fit over all conditions); '", de_method, "' would ignore them.",
+                 call. = FALSE)
+        }
+        if (identical(bc$de_mode, "covariate")) {
+            stop("de$covariates cannot yet be combined with a batch covariate (",
+                 if (bc$de_mode_explicit) "batch_correction$de_mode is 'covariate'"
+                 else "batch_correction$de_mode defaults to 'covariate' when a correction is configured",
+                 ").\n",
+                 "  Remove de$covariates, or set batch_correction$de_mode to 'none' or ",
+                 "'legacy_corrected'.", call. = FALSE)
+        }
+        block_col <- cfg$de$block_col
+        if (!is.null(block_col) && block_col %in% cv_flat) {
+            stop("'", block_col, "' is both de$block_col and in de$covariates. ",
+                 "Keep it as one or the other.", call. = FALSE)
+        }
+        if (bc$corrects && !is.null(bc$batch_col) && bc$batch_col %in% cv_flat) {
+            stop("'", bc$batch_col, "' is both the batch column and in de$covariates. ",
+                 "A batch label is categorical; keep it as the batch column only.",
+                 call. = FALSE)
+        }
     }
 
     # 4b. Pathway Settings
