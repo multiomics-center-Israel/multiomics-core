@@ -7,7 +7,10 @@
 #'
 #'   * every sample-structure plot of the QC matrix, by the same code as the
 #'     originals ([draw_rna_sample_structure_plots()]), under the same names
-#'     plus `_batch_corr_<method>`, with titles that say batch-corrected;
+#'     plus `_batch_corr_<method>`, with titles that say batch-corrected.
+#'     Where a plot shows a variance-ranked subset of the genes, the subset
+#'     is the one chosen in the uncorrected matrix, so each before/after pair
+#'     shows the same genes;
 #'   * the top-DE heatmap of the analysis matrix
 #'     ([draw_rna_top_de_heatmap()]), same suffix;
 #'   * `PCA_batch_before_after.png`: PC1 vs PC2 before and after, coloured by
@@ -48,9 +51,14 @@ mod_rnaseq_batch_qc <- function(pre, batch_corrected, de_res, config, out_dir) {
     suffix <- paste0("_batch_corr_", rec$method)
     title_tag <- sprintf("batch-corrected (%s)", rec$method)
 
+    # The uncorrected QC matrix is the reference: the variance-ranked gene
+    # subsets (top-variable-gene PCAs, expression heatmaps) are chosen there,
+    # as for the uncorrected plots, so each pair shows the same genes.
+    qc_before <- rna_qc_expr(pre, cfg$qc)
     files <- draw_rna_sample_structure_plots(
         batch_corrected$qc_expr, meta, cfg, out_qc,
-        stage = "rna", suffix = suffix, title_tag = title_tag
+        stage = "rna", suffix = suffix, title_tag = title_tag,
+        reference = qc_before
     )$files
 
     # Top-DE heatmap, when the DE summary can be built (as in mod_rnaseq_qc_post).
@@ -65,7 +73,7 @@ mod_rnaseq_batch_qc <- function(pre, batch_corrected, de_res, config, out_dir) {
     }
 
     files <- c(files, draw_rna_batch_pca_panel(
-        before     = rna_qc_expr(pre, cfg$qc),
+        before     = qc_before,
         after      = batch_corrected$qc_expr,
         meta       = meta,
         cfg        = cfg,
