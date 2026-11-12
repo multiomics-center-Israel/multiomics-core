@@ -289,3 +289,95 @@ test_that("both sides of the panel are fitted on the same genes", {
     expect_false("G200" %in% fitted[[1]])
     expect_identical(length(fitted[[1]]), 199L)
 })
+
+# --- Same gene subsets before and after ---------------------------------------
+
+# 2,100 genes, so the expression heatmaps (2,000 most variable genes) and the
+# top-variable-gene PCAs each show a subset. Genes 1-400 carry a large batch
+# shift: they are the most variable genes before correction and ordinary ones
+# after it, so a ranking made in each matrix separately picks different genes.
+make_bc_ranked <- function(seed = 5) {
+    meta <- bc_meta()
+    n <- 2100
+    expr <- withr::with_seed(seed, {
+        sds <- stats::runif(n, min = 0.1, max = 1)
+        m <- matrix(stats::rnorm(n * nrow(meta)), nrow = n) * sds + 8
+        m[1:400, ] <- m[1:400, ] +
+            outer(rep(c(3, -3), length.out = 400), as.numeric(meta$Batch == "B2"))
+        m
+    })
+    dimnames(expr) <- list(sprintf("G%04d", seq_len(n)), meta$SampleID)
+    list(
+        meta   = meta,
+        before = expr,
+        after  = correct_batch_limma(expr, batch_var = factor(meta$Batch),
+                                     group_var = factor(meta$Condition))
+    )
+}
+
+# Replace qc_pca_scatter(), where the plotting helpers look it up, by a stand-in
+# that records the genes of each fit. Restored when the calling test ends.
+local_pca_recorder <- function(env = parent.frame()) {
+    rec <- new.env()
+    rec$genes <- list()
+    fn_env <- environment(draw_rna_sample_structure_plots)
+    original <- get("qc_pca_scatter", envir = fn_env)
+    withr::defer(assign("qc_pca_scatter", original, envir = fn_env), envir = env)
+    assign("qc_pca_scatter", function(expr_mat, ...) {
+        rec$genes[[length(rec$genes) + 1]] <- rownames(expr_mat)
+        ggplot2::ggplot()
+    }, envir = fn_env)
+    rec
+}
+
+test_that("rna_heatmap_rows applies the heatmap's own row rule", {
+    m <- rbind(a = c(1, 2, 3), b = c(5, 5, 5), c = c(1, 5, 9), d = c(1, 1, 2),
+               e = c(NA, NA, 4))
+    expect_identical(rna_heatmap_rows(m, max_rows = 10), c("a", "c", "d"))
+    expect_identical(rna_heatmap_rows(m, max_rows = 2), c("a", "c"))
+})
+
+test_that("before/after plots of a gene subset show the same genes on both sides", {
+    skip_if_not_installed("pheatmap")
+    fx <- make_bc_ranked()
+    cfg <- bc_config()$modes$rna
+    out <- withr::local_tempdir()
+    rec <- local_pca_recorder()
+    draw <- function(mat, ...) {
+        rec$genes <- list()
+        res <- suppressMessages(draw_rna_sample_structure_plots(mat, fx$meta, cfg, out, ...))
+        list(pca = rec$genes, plots = res$plots)
+    }
+
+    before <- draw(fx$before)
+    after <- draw(fx$after, suffix = "_batch_corr_limma",
+                  title_tag = "batch-corrected (limma)", reference = fx$before)
+    # The corrected matrix ranked by itself, as it was before the reference.
+    own <- draw(fx$after, suffix = "_own", title_tag = "own ranking")
+
+    # PCA fits per call: PC1/2, PC1/3 on all genes, then top 500, 1000, 2000.
+    expect_identical(lengths(before$pca), c(2100L, 2100L, 500L, 1000L, 2000L))
+    expect_identical(after$pca, before$pca)
+    expect_false(setequal(own$pca[[3]], before$pca[[3]]))
+
+    heatmap_genes <- function(run, name) sort(run$plots[[name]]$tree_row$labels)
+    for (name in c("heatmap_clusters", "heatmap_nocol")) {
+        expect_length(heatmap_genes(before, name), 2000)
+        expect_identical(heatmap_genes(after, name), heatmap_genes(before, name))
+        expect_false(setequal(heatmap_genes(own, name), heatmap_genes(before, name)))
+    }
+})
+
+test_that("a reference that does not match the plotted matrix is an error", {
+    fx <- make_bc_ranked()
+    cfg <- bc_config()$modes$rna
+    out <- withr::local_tempdir()
+    draw <- function(mat, reference) {
+        draw_rna_sample_structure_plots(mat, fx$meta, cfg, out, suffix = "_x",
+                                        title_tag = "x", reference = reference)
+    }
+    expect_error(draw(fx$after[-1, ], fx$before), "same genes and samples")
+    expect_error(draw(fx$after, fx$before[-1, ]), "same genes and samples")
+    expect_error(draw(fx$after[, -1], fx$before), "same genes and samples")
+    expect_length(list.files(out), 0)
+})

@@ -120,6 +120,13 @@ rna_qc_color_values <- function(cfg) {
 #' suffix and a title tag, for its batch-corrected copy by
 #' [mod_rnaseq_batch_qc()], so both sets are drawn by the same code.
 #'
+#' Two of these plots show a subset of the genes chosen by variance: the
+#' top-variable-gene PCAs and the expression heatmaps (the 2,000 most variable
+#' genes). For a before/after pair the subset must be the same on both sides,
+#' so the batch-corrected call passes the uncorrected matrix as `reference`:
+#' the genes are chosen there and those exact genes are plotted from `qc_mat`.
+#' Without a reference the genes are chosen from `qc_mat` itself, as before.
+#'
 #' @param qc_mat Matrix to plot (features x samples).
 #' @param meta Sample metadata.
 #' @param cfg The `config$modes$rna` list.
@@ -129,11 +136,31 @@ rna_qc_color_values <- function(cfg) {
 #'   none, the established names).
 #' @param title_tag Text that marks the plots (e.g. "batch-corrected (limma)"),
 #'   or NULL (default) to keep the established titles.
+#' @param reference Matrix in which the variance-ranked gene subsets are
+#'   chosen, or NULL (default) to choose them in `qc_mat`. It must hold the
+#'   same genes and samples as `qc_mat`.
 #' @return list(files, plots)
 draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "rna",
-                                            suffix = "", title_tag = NULL) {
+                                            suffix = "", title_tag = NULL,
+                                            reference = NULL) {
     plots <- list()
     files <- character(0)
+
+    if (!is.null(reference)) {
+        # The subsets are taken from qc_mat by gene ID. A gene or sample that
+        # one matrix lacks would mean a different subset on each side, so
+        # this stops rather than plot whatever is available.
+        missing_genes <- setdiff(rownames(reference), rownames(qc_mat))
+        extra_genes <- setdiff(rownames(qc_mat), rownames(reference))
+        if (is.null(rownames(reference)) || is.null(rownames(qc_mat)) ||
+            length(missing_genes) > 0 || length(extra_genes) > 0 ||
+            !setequal(colnames(reference), colnames(qc_mat))) {
+            stop("[rnaseq QC] The matrix to plot and its reference do not hold the same ",
+                 "genes and samples (", length(missing_genes), " gene(s) only in the ",
+                 "reference, ", length(extra_genes), " only in the plotted matrix), so the ",
+                 "same gene subsets cannot be shown on both sides.", call. = FALSE)
+        }
+    }
 
     out_path <- function(base, ext = "png") {
         file.path(out_qc, sprintf("%s%s.%s", base, suffix, ext))
@@ -242,15 +269,22 @@ draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "
     n_top_values <- c(500, 1000, 2000, 5000)
     cfg_temp <- cfg
     cfg_temp$effects$color <- primary_color
-    gene_vars <- apply(qc_mat, 1, var, na.rm = TRUE)
+    rank_mat <- if (is.null(reference)) qc_mat else reference
+    gene_vars <- apply(rank_mat, 1, var, na.rm = TRUE)
     ranked <- order(gene_vars, decreasing = TRUE)
 
     for (n_top in n_top_values) {
         f_pca_top <- out_path(sprintf("PCA_top%d", n_top))
         p_top <- NULL
         if (n_top <= length(ranked)) {
+            # With a reference, the genes ranked there, taken by ID.
+            top_rows <- if (is.null(reference)) {
+                ranked[seq_len(n_top)]
+            } else {
+                rownames(reference)[ranked[seq_len(n_top)]]
+            }
             p_top <- tryCatch(
-                pca_scatter(qc_mat[ranked[seq_len(n_top)], , drop = FALSE], cfg_temp,
+                pca_scatter(qc_mat[top_rows, , drop = FALSE], cfg_temp,
                             pcs = c(1, 2), out_file = f_pca_top),
                 error = function(e) {
                     warning(sprintf("[rnaseq QC] PCA with top %d variable genes was not generated: %s",
@@ -343,12 +377,19 @@ draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "
             )
         }
 
+        # With a reference, the rows the uncorrected heatmaps show.
+        hm_mat <- if (is.null(reference)) {
+            qc_mat
+        } else {
+            qc_mat[rna_heatmap_rows(reference, max_rows = 2000), , drop = FALSE]
+        }
+
         # Heatmap with column clustering
         f_hm <- out_path("samples_rna_heatmap")
         # Use primary color for heatmap
         cfg_temp <- cfg
         cfg_temp$effects$color <- primary_color
-        hm_clusters <- wrap_qc_heatmap(qc_mat, meta, cfg_temp, stage = stage, out_file = f_hm,
+        hm_clusters <- wrap_qc_heatmap(hm_mat, meta, cfg_temp, stage = stage, out_file = f_hm,
                                        annot_cols = annot_cols,
                                        title = if (!is.null(title_tag)) {
                                            tagged("QC: Sample RNA Expression")
@@ -359,7 +400,7 @@ draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "
         # Heatmap without column clustering
         f_hm_nocol <- out_path("samples_rna_heatmap_wo_col")
         p_hm_nocol <- plot_heatmap_core(
-            expr_mat = qc_mat,
+            expr_mat = hm_mat,
             annotation_col = annot,
             title = tagged("QC: Sample RNA Expression"),
             max_rows = 2000,
@@ -373,7 +414,7 @@ draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "
         # Fully unclustered heatmap (rows + cols both in original order)
         f_hm_uncl <- out_path("samples_rna_heatmap_unclustered")
         p_hm_uncl <- plot_heatmap_core(
-            expr_mat = qc_mat,
+            expr_mat = hm_mat,
             annotation_col = annot,
             title = tagged("QC: Sample RNA Expression"),
             max_rows = 2000,
@@ -389,6 +430,31 @@ draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "
     }
 
     list(files = unique(files), plots = plots)
+}
+
+#' Rows that the QC expression heatmaps show for a matrix
+#'
+#' The rule `plot_heatmap_core()` applies with `max_rows`: rows without
+#' variance are dropped, and when more than `max_rows` remain the most
+#' variable ones are kept, in their input order. Used to choose the rows in
+#' the uncorrected matrix and show the same ones for the batch-corrected
+#' matrix ([draw_rna_sample_structure_plots()]).
+#'
+#' @param mat Numeric matrix (features x samples) with row names.
+#' @param max_rows Largest number of rows to keep.
+#' @return Character vector of row names, in the row order of `mat`.
+#' @examples
+#' m <- rbind(a = c(1, 2, 3), b = c(5, 5, 5), c = c(1, 5, 9), d = c(1, 1, 2))
+#' rna_heatmap_rows(m, max_rows = 2)  # "a" "c"
+rna_heatmap_rows <- function(mat, max_rows = 2000) {
+    mat <- as.matrix(mat)
+    row_vars <- apply(mat, 1, stats::var, na.rm = TRUE)
+    keep <- which(!is.na(row_vars) & row_vars > 0)
+    if (length(keep) > max_rows) {
+        top <- order(row_vars[keep], decreasing = TRUE, na.last = TRUE)[seq_len(max_rows)]
+        keep <- keep[sort(top)]
+    }
+    rownames(mat)[keep]
 }
 
 #' Validate effects configuration for color/shape conflicts
