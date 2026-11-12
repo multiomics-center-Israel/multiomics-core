@@ -120,18 +120,22 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
         compute_rna_batch_correction(rna_pre, config)
       ),
       # Corrected matrix + the record of what ran. Also runs when nothing was
-      # corrected, to remove both from a reused output directory. Not
-      # format = "file": it returns character(0) in that case.
+      # corrected, to remove both from a reused output directory; it then
+      # returns character(0), which a file target accepts. format = "file" so
+      # that a deleted export or record is rewritten: the report reads the
+      # record as its evidence that a correction ran.
       tar_target(
         rna_batch_corr_files,
         write_rna_batch_correction(
           rna_batch_corrected,
           create_legacy_output_dirs(rna_out_dir)$datasets
-        )
+        ),
+        format = "file"
       ),
       # Before/after QC: the batch-corrected side. The uncorrected side is the
       # output of rna_qc_pre_obj / rna_qc_post_obj, which is why this waits for
-      # them: the report shows both sides together.
+      # them: the report shows both sides together. format = "file" so that a
+      # deleted plot is redrawn; with no correction it returns character(0).
       tar_target(
         rna_batch_qc_files,
         {
@@ -144,7 +148,8 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
             config          = config,
             out_dir         = rna_out_dir
           )
-        }
+        },
+        format = "file"
       ),
       # Clustering (run before outputs to provide excel_order)
       tar_target(

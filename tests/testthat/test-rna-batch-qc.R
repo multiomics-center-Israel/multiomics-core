@@ -139,3 +139,69 @@ test_that("draw_rna_top_de_heatmap writes nothing without DE genes", {
         character(0))
     expect_false(file.exists(out_file))
 })
+
+# --- Target tracking ----------------------------------------------------------
+
+test_that("the pipeline tracks the batch-corrected QC plots as files", {
+    skip_if_not_installed("targets")
+    withr::local_package("targets")
+    formats <- vapply(pipe_rnaseq(), function(t) t$settings$format, character(1))
+    names(formats) <- vapply(pipe_rnaseq(), function(t) t$settings$name, character(1))
+    expect_identical(formats[["rna_batch_qc_files"]], "file")
+    expect_identical(formats[["rna_batch_corr_files"]], "file")
+})
+
+test_that("a deleted batch-corrected plot is redrawn, and a disabled run tracks no files", {
+    skip_if_not_installed("targets")
+    skip_if_not_installed("pheatmap")
+    skip_if_not_installed("patchwork")
+    sandbox <- withr::local_tempdir()
+    withr::local_dir(sandbox)
+    out_dir <- file.path(sandbox, "rna")
+    input <- file.path(sandbox, "bc_qc_input.rds")
+    pre <- make_bc_pre()
+    cfg <- bc_config()
+    args <- list(pre = pre, corrected = compute_rna_batch_correction(pre, cfg),
+                 de_res = bc_de(pre), config = cfg)
+    saveRDS(args, input)
+
+    # The functions come from the session (helper.R sourced R/), as tar_make()
+    # is run in this process.
+    writeLines(c(
+        "library(targets)",
+        "list(",
+        sprintf("  tar_target(input_file, %s, format = \"file\"),", deparse(input)),
+        "  tar_target(x, readRDS(input_file)),",
+        "  tar_target(",
+        "    qc_files,",
+        sprintf("    mod_rnaseq_batch_qc(x$pre, x$corrected, x$de_res, x$config, %s),",
+                deparse(out_dir)),
+        "    format = \"file\"",
+        "  )",
+        ")"
+    ), "_targets.R")
+    make <- function() {
+        suppressMessages(targets::tar_make(callr_function = NULL, reporter = "silent"))
+    }
+    outdated <- function() {
+        suppressMessages(targets::tar_outdated(callr_function = NULL, reporter = "silent"))
+    }
+
+    make()
+    files <- targets::tar_read(qc_files)
+    expect_true("PCA_batch_before_after.png" %in% basename(files))
+    expect_true(all(file.exists(files)))
+    expect_length(outdated(), 0)
+
+    file.remove(files[basename(files) == "PCA_batch_before_after.png"])
+    expect_true("qc_files" %in% outdated())
+    make()
+    expect_true(all(file.exists(files)))
+
+    # Correction off: the target still succeeds, with nothing to track.
+    args$corrected <- list(ran = FALSE)
+    saveRDS(args, input)
+    make()
+    expect_identical(targets::tar_read(qc_files), character(0))
+    expect_false(any(file.exists(files)))
+})
