@@ -423,3 +423,204 @@ rna_batch_correction_sentence <- function(record_tbl) {
         "Batch and group can be separated only as far as the experimental design allows, ",
         "and the corrected values do not show that the remaining variation is biological."))
 }
+
+#' How the clustering group column relates to what the correction kept
+#'
+#' The correction keeps one column in its design, the group the DE compares.
+#' Partition clustering and binary patterns then summarize the corrected values
+#' by `clustering$group_col`, which may be another column. Whether its signal
+#' survived the correction depends on how the two relate:
+#'
+#'   * `"same"`: the clustering column is the kept column.
+#'   * `"determined_by_kept_group"`: every kept group falls in one clustering
+#'     group, so the clustering column's effect lies inside the kept design.
+#'   * `"batch_column"`: the clustering column is a column the correction
+#'     removed.
+#'   * `"confounded_with_batch"`: within the kept groups, the clustering column
+#'     cannot be told apart from batch (the design of kept group, clustering
+#'     group and batch is not identifiable), so the correction may have removed
+#'     it.
+#'   * `"not_protected"`: the clustering column is identifiable next to batch,
+#'     but it was not in the correction's model. Identifiable is not the same
+#'     as preserved: its signal was not explicitly protected and may be altered
+#'     by the correction, also when it is balanced across batches.
+#'
+#' The first two and the last allow the corrected clustering to run; the last
+#' one with a warning.
+#'
+#' @param kept Kept-group labels per sample.
+#' @param clustering Clustering-group labels per sample.
+#' @param batch List of one or two vectors of batch labels per sample.
+#' @param kept_col,clustering_col,batch_cols The column names behind them.
+#' @return A list with `relation` (one of the values above) and `proceed`
+#'   (logical).
+#' @examples
+#' classify_rna_clustering_group(
+#'     kept = c("A", "A", "B", "B"), clustering = c("x", "y", "x", "y"),
+#'     batch = list(c("b1", "b2", "b2", "b1")),
+#'     kept_col = "Condition", clustering_col = "Line", batch_cols = "Batch")
+classify_rna_clustering_group <- function(kept, clustering, batch, kept_col,
+                                          clustering_col, batch_cols) {
+    result <- function(relation) {
+        list(relation = relation,
+             proceed = relation %in% c("same", "determined_by_kept_group", "not_protected"))
+    }
+    if (clustering_col %in% batch_cols) return(result("batch_column"))
+    if (identical(clustering_col, kept_col)) return(result("same"))
+
+    as_levels <- function(x) {
+        x <- as.character(x)
+        x[is.na(x)] <- "NA"
+        factor(x)
+    }
+    kept <- as_levels(kept)
+    clustering <- as_levels(clustering)
+    if (all(rowSums(table(kept, clustering) > 0) == 1)) {
+        return(result("determined_by_kept_group"))
+    }
+
+    dummies <- function(f) {
+        if (nlevels(f) < 2) return(NULL)
+        stats::model.matrix(~f)[, -1, drop = FALSE]
+    }
+    keep_design <- cbind(stats::model.matrix(~kept), dummies(clustering))
+    batch_design <- do.call(cbind, lapply(batch, function(b) dummies(as_levels(b))))
+    # The correction already required kept group + batch to be identifiable.
+    # Adding the clustering group must leave every batch column identifiable.
+    n_batch <- if (is.null(batch_design)) 0L else ncol(batch_design)
+    identifiable <- qr(cbind(keep_design, batch_design))$rank ==
+        qr(keep_design)$rank + n_batch
+    result(if (identifiable) "not_protected" else "confounded_with_batch")
+}
+
+#' Record of the clustering of the batch-corrected matrix
+#'
+#' @param status `"completed"` or `"skipped"`.
+#' @param reason Short code for a skip (`"batch_column"`,
+#'   `"confounded_with_batch"`, `"no_output"`), or `NA` when completed.
+#' @param method Correction method that ran.
+#' @param kept_col The group column the correction kept.
+#' @param clustering_col `clustering$group_col`.
+#' @param relation Output `relation` of [classify_rna_clustering_group()].
+#' @param batch_cols Batch column(s) that were corrected for.
+#' @return A one-row data.frame: `status`, `reason`, `method`,
+#'   `kept_group_col`, `clustering_group_col`, `relation`, `batch_cols`
+#'   (`;`-separated), `output_dir`.
+rna_batch_clustering_record <- function(status, reason, method, kept_col, clustering_col,
+                                        relation, batch_cols) {
+    data.frame(
+        status               = status,
+        reason               = reason,
+        method               = method,
+        kept_group_col       = kept_col,
+        clustering_group_col = clustering_col,
+        relation             = relation,
+        batch_cols           = paste(batch_cols, collapse = ";"),
+        output_dir           = file.path(sprintf("Batch_corrected_%s", method), "Clustering"),
+        stringsAsFactors = FALSE
+    )
+}
+
+#' Reader-facing note on the clustering of the batch-corrected matrix
+#'
+#' Says why it was skipped, or, when it ran on a clustering group that the
+#' correction did not protect, what that means. Used for the run log and the
+#' report, from the record of what happened.
+#'
+#' @param record The `clustering_batch_correction.tsv` table
+#'   ([rna_batch_clustering_record()]), or `NULL`.
+#' @return A sentence or two, or `NULL` when there is nothing to say.
+#' @examples
+#' rna_batch_clustering_note(rna_batch_clustering_record(
+#'     "skipped", "batch_column", "limma", "Condition", "Batch", "batch_column", "Batch"))
+rna_batch_clustering_note <- function(record) {
+    if (is.null(record) || nrow(record) == 0) return(NULL)
+    rec <- record[1, , drop = FALSE]
+    clustering_col <- rec$clustering_group_col
+    kept_col <- rec$kept_group_col
+
+    if (identical(as.character(rec$status), "skipped")) {
+        why <- switch(as.character(rec$reason),
+            batch_column = sprintf(paste0(
+                "the clustering group column '%s' is a batch column that the correction ",
+                "removed, so clustering the corrected values by it would not be meaningful"),
+                clustering_col),
+            confounded_with_batch = sprintf(paste0(
+                "within the groups of '%s' (the column the correction kept), the clustering ",
+                "group column '%s' cannot be told apart from batch, so the correction may ",
+                "have removed its signal"), kept_col, clustering_col),
+            no_output = paste0(
+                "the clustering produced no output for the corrected values (for example, ",
+                "too few differentially expressed genes)"),
+            "of a condition recorded as unknown"
+        )
+        return(sprintf(paste0(
+            "The clustering of the batch-corrected values was skipped: %s. The clustering ",
+            "of the uncorrected values is not affected."), why))
+    }
+
+    if (identical(as.character(rec$relation), "not_protected")) {
+        note <- sprintf(paste0(
+            "The clustering groups genes by '%s', which is not the column the correction ",
+            "kept ('%s') and is not determined by it. It can be told apart from batch in ",
+            "this design, but it was not part of the correction's model: its signal was not ",
+            "explicitly protected and may be altered by the correction, also where it is ",
+            "balanced across batches."), clustering_col, kept_col)
+        if (identical(as.character(rec$method), "combat")) {
+            note <- paste(note, paste0(
+                "ComBat also adjusts each batch's spread, which can reduce that signal ",
+                "further."))
+        }
+        return(paste(note, "Read the batch-corrected clusters against the uncorrected ones."))
+    }
+    NULL
+}
+
+#' Partition-clustering directory that holds this run's heatmap
+#'
+#' The partition step writes into `Partition_clustering_<k>_clusters`. A reused
+#' output directory can hold the directory of an earlier run with another `k`;
+#' this returns the one that contains the heatmap, not simply the first.
+#'
+#' @param clustering_root A `Clustering` directory.
+#' @return The directory path, or `NA_character_` when none holds a heatmap.
+rna_partition_heatmap_dir <- function(clustering_root) {
+    dirs <- list.dirs(file.path(clustering_root, "Partition_clustering"), recursive = FALSE)
+    dirs <- dirs[file.exists(file.path(dirs, "Partition_clustering_heatmap.png"))]
+    if (length(dirs) == 0) NA_character_ else sort(dirs)[1]
+}
+
+#' What the report shows for the clustering of the batch-corrected matrix
+#'
+#' Built from the record and the files on disk, independently of whether the
+#' uncorrected clustering produced figures.
+#'
+#' @param record The `clustering_batch_correction.tsv` table, or `NULL` when
+#'   no batch-corrected clustering was attempted.
+#' @param rna_dir The RNA output directory.
+#' @return A list with `show` (logical: the report has something to say),
+#'   `status`, `method`, `note` ([rna_batch_clustering_note()]),
+#'   `partition_heatmap` (path or `NA`) and `binary_heatmaps` (paths).
+rna_batch_clustering_view <- function(record, rna_dir) {
+    empty <- list(show = FALSE, status = NA_character_, method = NA_character_, note = NULL,
+                  partition_heatmap = NA_character_, binary_heatmaps = character(0))
+    if (is.null(record) || nrow(record) == 0) return(empty)
+
+    status <- as.character(record$status[1])
+    view <- empty
+    view$status <- status
+    view$method <- as.character(record$method[1])
+    view$note <- rna_batch_clustering_note(record)
+    if (identical(status, "completed")) {
+        root <- file.path(rna_dir, as.character(record$output_dir[1]))
+        part_dir <- rna_partition_heatmap_dir(root)
+        if (!is.na(part_dir)) {
+            view$partition_heatmap <- file.path(part_dir, "Partition_clustering_heatmap.png")
+        }
+        view$binary_heatmaps <- list.files(file.path(root, "Binary_patterns"),
+                                           pattern = "^Heatmap_[01]+\\.png$", full.names = TRUE)
+    }
+    view$show <- identical(status, "skipped") || !is.na(view$partition_heatmap) ||
+        length(view$binary_heatmaps) > 0
+    view
+}
