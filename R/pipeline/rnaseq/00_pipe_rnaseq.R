@@ -156,6 +156,20 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           out_dir = rna_out_dir
         )
       ),
+      # The same clustering on the batch-corrected matrix, kept next to the
+      # original for comparison. rna_clustering_obj above stays the one behind
+      # the Excel order, the cluster-based ORA and the Shiny payload.
+      tar_target(
+        rna_clustering_batch_corr_obj,
+        mod_rnaseq_clustering_batch_corr(
+          pre             = rna_pre,
+          batch_corrected = rna_batch_corrected,
+          de_res          = rna_de_res,
+          clustering_res  = rna_clustering_obj,
+          config          = config,
+          out_dir         = rna_out_dir
+        )
+      ),
       # Pathway / enrichment with clustering available (GSEA + cluster-based ORA)
       tar_target(
         rna_pathway_res,
@@ -270,6 +284,7 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           force(rna_exec_summary)
           force(rna_batch_corr_files)
           force(rna_batch_qc_files)
+          force(rna_clustering_batch_corr_obj)
           render_rnaseq_report(
             run_dir     = rna_out_dir,
             config      = config,

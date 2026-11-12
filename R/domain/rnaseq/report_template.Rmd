@@ -2810,6 +2810,55 @@ for (bf in binary_pngs_rna) {
 render_commentary("clustering_binary")
 ```
 
+```{r clustering-batch-corrected-rna, eval=clustering_show_rna && bc_show, results='asis'}
+# The clustering of the batch-corrected matrix, written by
+# mod_rnaseq_clustering_batch_corr() next to the original. Shown only with the
+# record of a correction that ran (bc_show) and for the method it names.
+bc_method <- bc_record$method[1]
+bc_clust_root <- file.path(run_dir, "rna", sprintf("Batch_corrected_%s", bc_method), "Clustering")
+bc_part_dirs <- list.dirs(file.path(bc_clust_root, "Partition_clustering"), recursive = FALSE)
+bc_part_dir <- if (length(bc_part_dirs) > 0) bc_part_dirs[1] else NA_character_
+bc_part_hm <- if (!is.na(bc_part_dir)) file.path(bc_part_dir, "Partition_clustering_heatmap.png") else NA_character_
+bc_binary <- list.files(file.path(bc_clust_root, "Binary_patterns"),
+                        pattern = "^Heatmap_[01]+\\.png$", full.names = TRUE)
+bc_cmp_file <- file.path(datasets_dir, "clustering_batch_comparison.tsv")
+bc_has_part <- !is.na(bc_part_hm) && file.exists(bc_part_hm)
+
+if (bc_has_part || length(bc_binary) > 0) {
+  cat(sprintf("## Batch-corrected (%s) {.tabset}\n\n", bc_method))
+  cat("The same differentially expressed genes were clustered again on the batch-corrected expression values, with the same settings. ",
+      "This view is exploratory. The Excel gene order, the cluster-based enrichment and the interactive app use the clusters of the uncorrected data shown in the other tabs. ",
+      "Cluster numbers are assigned separately in each run, so equal numbers do not mean the same cluster.\n\n", sep = "")
+
+  if (bc_has_part) {
+    cat("### Partition heatmap\n\n")
+    cat(sprintf("![Partition clustering heatmap, batch-corrected](%s){width=100%%}\n\n", bc_part_hm))
+    figure_legend(sprintf("Partition clustering heatmap of the batch-corrected (%s) expression values.", bc_method))
+  }
+  if (length(bc_binary) > 0) {
+    cat("\n### Binary patterns {.tabset}\n\n")
+    for (bf in bc_binary) {
+      pat <- sub("^Heatmap_([01]+)\\.png$", "\\1", basename(bf))
+      cat(sprintf("\n#### Pattern %s\n\n", pat))
+      cat(sprintf("![Binary pattern %s, batch-corrected](%s){width=100%%}\n\n", pat, bf))
+    }
+  }
+  if (file.exists(bc_cmp_file)) {
+    bc_cmp <- read.delim(bc_cmp_file, stringsAsFactors = FALSE)
+    cat("\n### Comparison\n\n")
+    cat("Number of genes by their cluster in the uncorrected data (rows) and in the batch-corrected data (columns). ",
+        "Genes that stay together fall in one cell of a row; a row spread over several columns is a cluster that the correction split. ",
+        "The per-gene table is `Datasets/clustering_batch_comparison.tsv`.\n\n", sep = "")
+    bc_tab <- table(Uncorrected = bc_cmp$cluster_uncorrected,
+                    `Batch-corrected` = bc_cmp$cluster_batch_corrected, useNA = "ifany")
+    bc_tab_df <- as.data.frame.matrix(bc_tab)
+    bc_tab_df <- cbind(`Uncorrected (rows) / batch-corrected (columns)` = rownames(bc_tab_df), bc_tab_df)
+    print(knitr::kable(bc_tab_df, row.names = FALSE))
+    cat("\n\n")
+  }
+}
+```
+
 ```{r clustering-divider-rna, eval=clustering_show_rna, results='asis'}
 cat("\n---\n\n")
 ```
