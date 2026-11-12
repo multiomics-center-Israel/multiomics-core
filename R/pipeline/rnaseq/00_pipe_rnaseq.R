@@ -112,6 +112,26 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           out_dir = rna_out_dir
         )
       ),
+      # Batch-corrected copies of the display matrices (modes.rna.batch_correction).
+      # A target of its own: rna_pre is not modified and stays the DE input, and
+      # with the block absent or disabled this is list(ran = FALSE).
+      tar_target(
+        rna_batch_corrected,
+        compute_rna_batch_correction(rna_pre, config)
+      ),
+      # Corrected matrix + the record of what ran. Also runs when nothing was
+      # corrected, to remove both from a reused output directory; it then
+      # returns character(0), which a file target accepts. format = "file" so
+      # that a deleted export or record is rewritten: the report reads the
+      # record as its evidence that a correction ran.
+      tar_target(
+        rna_batch_corr_files,
+        write_rna_batch_correction(
+          rna_batch_corrected,
+          create_legacy_output_dirs(rna_out_dir)$datasets
+        ),
+        format = "file"
+      ),
       # Clustering (run before outputs to provide excel_order)
       tar_target(
         rna_clustering_obj,
