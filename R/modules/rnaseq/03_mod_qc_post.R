@@ -144,8 +144,11 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
 
 #' Draw the top-DE heatmap (z-scored rows) for one expression matrix
 #'
-#' The DE-called genes with the smallest padj across contrasts, up to
-#' `qc_post$max_top_de_features`. Called for the analysis matrix by
+#' Drawn when at least two genes are called DE. The rows are the genes with
+#' the smallest adjusted p-value across contrasts, up to
+#' `qc_post$max_top_de_features`; they are ranked among all genes with an
+#' adjusted p-value, so with fewer called DE genes than that limit the heatmap
+#' also holds genes that were not called DE. Called for the analysis matrix by
 #' [mod_rnaseq_qc_post()] and for its batch-corrected copy by
 #' [mod_rnaseq_batch_qc()]; the genes are chosen from the DE results either
 #' way, so both heatmaps show the same genes.

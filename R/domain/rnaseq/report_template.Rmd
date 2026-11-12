@@ -1233,14 +1233,14 @@ bc_panel <- file.path(diag_dir, "PCA_batch_before_after.png")
 if (file.exists(bc_panel)) {
     cat("\n### PCA by group and batch\n\n")
     cat(sprintf("![PCA before and after batch correction](%s){width=100%%}\n\n", bc_panel))
-    figure_legend("PC1 vs PC2 before (left) and after (right) batch correction, coloured by the experimental group (top) and by batch. PCA is fitted separately for each side, so axes are not comparable between left and right. A batch structure that fades while the group separation remains is the expected pattern; it is a visual check, not a test.")
+    figure_legend("PC1 vs PC2 before (left) and after (right) batch correction. Each row is coloured by one metadata column, named in the panel titles: first the group that the correction kept, then the report's primary colour column when that is a different one, then each batch column. Both sides use the same genes, but PCA is fitted separately for each side, so axes are not comparable between left and right. A batch structure that fades while the group separation remains is the expected pattern; it is a visual check, not a test.")
 }
 bc_pair_tab("PC1 vs PC2", "PCA_PC1.vs.PC2",
             "PCA of the QC matrix, PC1 vs PC2, before and after batch correction.")
 bc_pair_tab("Distance Heatmap", "sample_distance_heatmap",
             "Sample-to-sample Euclidean distances before and after batch correction.")
 bc_pair_tab("Top DE Heatmap", "heatmap_top_DE",
-            "Row z-scores of the same top DE genes before and after batch correction. The genes were selected from the differential expression results, which do not use the corrected values.")
+            "Row z-scores of the same genes before and after batch correction: the genes with the smallest adjusted p-value across contrasts. They are ranked among all tested genes, so the heatmap can include genes that were not called differentially expressed. The ranking comes from the differential expression results, which do not use the corrected values.")
 cat("\n")
 ```
 
