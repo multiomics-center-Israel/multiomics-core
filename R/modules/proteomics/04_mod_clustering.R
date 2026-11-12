@@ -84,8 +84,9 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   )
   
   if (isTRUE(flags$hierarchical)) {
+    annot_hier <- annotation_for_pheatmap(build_proteomics_sample_annotation(pre$meta, cfg), cfg)
     h <- .run_hierarchical_step(expr_mat, pre$meta, de_features, cfg,
-                                annot_col, annot_context,
+                                annot_hier, annot_context,
                                 file.path(clustering_dir, "Hierarchical"))
     written              <- c(written, h$files)
     plots$p_cluster_hier <- h$plot
