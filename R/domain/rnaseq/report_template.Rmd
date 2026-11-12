@@ -2769,7 +2769,20 @@ binary_pngs_rna <- if (dir.exists(binary_dir_rna)) {
 clustering_enabled_rna <- isTRUE(rna_cfg$clustering$enabled)
 has_part_rna   <- !is.na(part_hm_rna) && file.exists(part_hm_rna)
 has_binary_rna <- length(binary_pngs_rna) > 0
-clustering_show_rna <- clustering_enabled_rna && (has_part_rna || has_binary_rna)
+
+# The clustering of the batch-corrected matrix is discovered on its own, from
+# the record mod_rnaseq_clustering_batch_corr() wrote and the files next to it,
+# so it is shown (or its skip is reported) whether or not the uncorrected
+# clustering produced figures.
+.bc_clust_file <- file.path(datasets_dir, "clustering_batch_correction.tsv")
+bc_clust_record <- if (file.exists(.bc_clust_file)) {
+  read.delim(.bc_clust_file, stringsAsFactors = FALSE)
+} else NULL
+bc_clust <- rna_batch_clustering_view(bc_clust_record, rna_dir)
+bc_clust_show_rna <- clustering_enabled_rna && isTRUE(bc_clust$show)
+
+clustering_show_rna <- clustering_enabled_rna &&
+  (has_part_rna || has_binary_rna || bc_clust_show_rna)
 ```
 
 ```{r clustering-header-rna, eval=clustering_show_rna, results='asis'}
@@ -2811,27 +2824,24 @@ for (bf in binary_pngs_rna) {
 render_commentary("clustering_binary")
 ```
 
-```{r clustering-batch-corrected-rna, eval=clustering_show_rna && bc_show, results='asis'}
-# The clustering of the batch-corrected matrix, written by
-# mod_rnaseq_clustering_batch_corr() next to the original. Shown only with the
-# record of a correction that ran (bc_show) and for the method it names.
-bc_method <- bc_record$method[1]
-bc_clust_root <- file.path(run_dir, "rna", sprintf("Batch_corrected_%s", bc_method), "Clustering")
-bc_part_dirs <- list.dirs(file.path(bc_clust_root, "Partition_clustering"), recursive = FALSE)
-bc_part_dir <- if (length(bc_part_dirs) > 0) bc_part_dirs[1] else NA_character_
-bc_part_hm <- if (!is.na(bc_part_dir)) file.path(bc_part_dir, "Partition_clustering_heatmap.png") else NA_character_
-bc_binary <- list.files(file.path(bc_clust_root, "Binary_patterns"),
-                        pattern = "^Heatmap_[01]+\\.png$", full.names = TRUE)
+```{r clustering-batch-corrected-rna, eval=bc_clust_show_rna, results='asis'}
+# Built from clustering_batch_correction.tsv (bc_clust, see the discovery
+# chunk): what ran or why it was skipped, not what the config asked for.
+bc_method <- bc_clust$method
+bc_part_hm <- bc_clust$partition_heatmap
+bc_binary <- bc_clust$binary_heatmaps
 bc_cmp_file <- file.path(datasets_dir, "clustering_batch_comparison.tsv")
-bc_has_part <- !is.na(bc_part_hm) && file.exists(bc_part_hm)
 
-if (bc_has_part || length(bc_binary) > 0) {
-  cat(sprintf("## Batch-corrected (%s) {.tabset}\n\n", bc_method))
+cat(sprintf("## Batch-corrected (%s) {.tabset}\n\n", bc_method))
+if (identical(bc_clust$status, "skipped")) {
+  cat(bc_clust$note, "\n\n")
+} else {
   cat("The same differentially expressed genes were clustered again on the batch-corrected expression values, with the same settings. ",
-      "This view is exploratory. The Excel gene order, the cluster-based enrichment and the interactive app use the clusters of the uncorrected data shown in the other tabs. ",
+      "This view is exploratory. The Excel gene order, the cluster-based enrichment and the interactive app use the clusters of the uncorrected data. ",
       "Cluster numbers are assigned separately in each run, so equal numbers do not mean the same cluster.\n\n", sep = "")
+  if (!is.null(bc_clust$note)) cat("**Note.** ", bc_clust$note, "\n\n", sep = "")
 
-  if (bc_has_part) {
+  if (!is.na(bc_part_hm)) {
     cat("### Partition heatmap\n\n")
     cat(sprintf("![Partition clustering heatmap, batch-corrected](%s){width=100%%}\n\n", bc_part_hm))
     figure_legend(sprintf("Partition clustering heatmap of the batch-corrected (%s) expression values.", bc_method))
