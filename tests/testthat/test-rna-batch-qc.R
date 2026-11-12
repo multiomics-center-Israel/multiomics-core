@@ -381,3 +381,35 @@ test_that("a reference that does not match the plotted matrix is an error", {
     expect_error(draw(fx$after[, -1], fx$before), "same genes and samples")
     expect_length(list.files(out), 0)
 })
+
+# --- Report structure ---------------------------------------------------------
+
+test_that("the report's before/after PCA is the shared-gene panel only", {
+    rmd <- file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd")
+    skip_if_not(file.exists(rmd), "report_template.Rmd not found")
+    src <- readLines(rmd, warn = FALSE)
+    code <- function(label) {
+        lines <- find_rmd_chunk_lines(rmd, label)
+        expect_false(is.null(lines))
+        chunk <- src[seq(lines[1], lines[2])]
+        chunk[!grepl("^\\s*#", chunk)]
+    }
+    qc <- code("batch-correction-qc")
+
+    # The dedicated panel is shown.
+    expect_true(any(grepl("PCA_batch_before_after.png", qc, fixed = TRUE)))
+
+    # The pairs put side by side are the distance and the top-DE heatmaps. A
+    # standalone PCA file is fitted on the genes usable in its own matrix, so
+    # pairing two of them could compare different genes.
+    pair_calls <- grep("bc_pair_tab\\(", qc, value = TRUE)
+    bases <- sub('^.*bc_pair_tab\\("[^"]*",\\s*"([^"]*)".*$', "\\1", pair_calls)
+    expect_setequal(bases, c("sample_distance_heatmap", "heatmap_top_DE"))
+    expect_false(any(grepl("PCA_PC1|PCA_top|PCA_3D", qc)))
+
+    # Nothing else in the report reads a batch-corrected plot: the suffix is
+    # built in the setup chunk and used only by the pair helper there.
+    setup <- code("batch-correction-setup")
+    outside <- setdiff(src[!grepl("^\\s*#", src)], c(qc, setup))
+    expect_false(any(grepl("_batch_corr_|bc_suffix|bc_pair_tab", outside)))
+})

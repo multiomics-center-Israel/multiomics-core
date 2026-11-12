@@ -15,7 +15,10 @@
 #'     ([draw_rna_top_de_heatmap()]), same suffix;
 #'   * `PCA_batch_before_after.png`: PC1 vs PC2 before and after, coloured by
 #'     the group the correction kept, by the primary colour column when that
-#'     is another one, and by each batch column.
+#'     is another one, and by each batch column. This panel is
+#'     the before/after PCA comparison: both sides are fitted on the same
+#'     genes. The standalone PCA files above are each fitted on the genes
+#'     usable in their own matrix, so the report does not pair them.
 #'
 #' Nothing is drawn unless `batch_corrected$ran` records that a correction ran
 #' -- the runtime evidence, not the config that requested it. Plots of this
