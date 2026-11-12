@@ -413,3 +413,58 @@ test_that("the report's before/after PCA is the shared-gene panel only", {
     outside <- setdiff(src[!grepl("^\\s*#", src)], c(qc, setup))
     expect_false(any(grepl("_batch_corr_|bc_suffix|bc_pair_tab", outside)))
 })
+
+test_that("a chosen gene that correction makes constant is reported once, not replaced", {
+    skip_if_not_installed("pheatmap")
+    fx <- make_bc_ranked()
+    # G0001 carries the batch shift: among the most variable genes before
+    # correction, so it is chosen for every top-N PCA and for the heatmaps.
+    # Make it exactly constant after correction.
+    flat <- "G0001"
+    fx$after[flat, ] <- 5
+    cfg <- bc_config()$modes$rna
+    out <- withr::local_tempdir()
+    rec <- local_pca_recorder()
+    draw <- function(mat, ...) {
+        rec$genes <- list()
+        res <- suppressMessages(draw_rna_sample_structure_plots(mat, fx$meta, cfg, out, ...))
+        list(pca = rec$genes, plots = res$plots, excluded = res$excluded)
+    }
+
+    before <- draw(fx$before)
+    expect_identical(before$excluded, list(pca_top = integer(0), heatmap = 0L))
+
+    warned <- character(0)
+    after <- withCallingHandlers(
+        draw(fx$after, suffix = "_batch_corr_limma",
+             title_tag = "batch-corrected (limma)", reference = fx$before),
+        warning = function(w) {
+            warned <<- c(warned, conditionMessage(w))
+            invokeRestart("muffleWarning")
+        }
+    )
+    # One warning for the whole call, with the numbers per kind of plot.
+    expect_length(warned, 1)
+    expect_match(warned, "batch-corrected (limma)", fixed = TRUE)
+    expect_match(warned, "1 of the top 500, 1 of the top 1000, 1 of the top 2000", fixed = TRUE)
+    expect_match(warned, "expression heatmaps: 1 of 2000", fixed = TRUE)
+    expect_match(warned, "not replaced by other genes", fixed = TRUE)
+    expect_identical(after$excluded,
+                     list(pca_top = c(`500` = 1L, `1000` = 1L, `2000` = 1L), heatmap = 1L))
+
+    # The selection is still the uncorrected one: the PCA fits are handed the
+    # same genes, and the heatmap shows them minus the constant gene only.
+    expect_identical(after$pca, before$pca)
+    expect_true(flat %in% after$pca[[3]])
+    heatmap_genes <- function(run, name) sort(run$plots[[name]]$tree_row$labels)
+    for (name in c("heatmap_clusters", "heatmap_nocol")) {
+        expect_true(flat %in% heatmap_genes(before, name))
+        expect_identical(heatmap_genes(after, name),
+                         setdiff(heatmap_genes(before, name), flat))
+    }
+})
+
+test_that("rna_pca_usable_rows applies the PCA's own rule", {
+    m <- rbind(ok = c(1, 2, 3), flat = c(5, 5, 5), one = c(1, NA, Inf), two = c(1, NA, 2))
+    expect_identical(rna_pca_usable_rows(m), c(TRUE, FALSE, FALSE, TRUE))
+})
