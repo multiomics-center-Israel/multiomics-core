@@ -1194,6 +1194,57 @@ if (file.exists(p)) knitr::include_graphics(p)
 figure_legend("Expression heatmap with hierarchical row clustering but without column reordering, preserving the original sample order for comparison with the fully clustered version above.")
 ```
 
+```{r batch-correction-setup, include=FALSE}
+# Built from Datasets/batch_correction.tsv, the record written by the correction
+# that ran -- not from batch_correction in the config, which only asked for it.
+.bc_file <- file.path(datasets_dir, "batch_correction.tsv")
+bc_record <- if (file.exists(.bc_file)) read.delim(.bc_file, stringsAsFactors = FALSE) else NULL
+bc_text <- rna_batch_correction_sentence(bc_record)
+bc_show <- !is.null(bc_text)
+bc_suffix <- if (bc_show) paste0("_batch_corr_", bc_record$method[1]) else ""
+
+# One tab with the uncorrected figure on the left and its batch-corrected
+# counterpart on the right; skipped unless both files exist.
+bc_pair_tab <- function(heading, base, legend) {
+    before <- file.path(diag_dir, paste0(base, ".png"))
+    after  <- file.path(diag_dir, paste0(base, bc_suffix, ".png"))
+    if (!file.exists(before) || !file.exists(after)) return(invisible(NULL))
+    cat(sprintf("\n### %s\n\n", heading))
+    # Markdown images inside the divs, as the clustering section embeds its
+    # figures, so pandoc resolves the paths the same way.
+    side <- function(label, path) {
+        cat(sprintf("<div style='flex: 1; text-align: center;'>\n\n**%s**\n\n![%s](%s){width=100%%}\n\n</div>\n",
+                    label, label, path))
+    }
+    cat("<div style='display: flex; gap: 10px; align-items: flex-start;'>\n")
+    side("Uncorrected", before)
+    side(sprintf("Batch-corrected (%s)", bc_record$method[1]), after)
+    cat("</div>\n\n")
+    figure_legend(legend)
+}
+```
+
+```{r batch-correction-qc, eval=bc_show, results='asis'}
+cat("## Batch Correction (exploratory) {.tabset}\n\n")
+cat(bc_text, "\n\n")
+cat("Each figure is shown before and after the correction. Every other figure, table and statistic in this report uses the uncorrected data.\n\n")
+
+bc_panel <- file.path(diag_dir, "PCA_batch_before_after.png")
+if (file.exists(bc_panel)) {
+    cat("\n### PCA by group and batch\n\n")
+    cat(sprintf("![PCA before and after batch correction](%s){width=100%%}\n\n", bc_panel))
+    figure_legend("PC1 vs PC2 before (left) and after (right) batch correction. Each row is coloured by one metadata column, named in the panel titles: first the group that the correction kept, then the report's primary colour column when that is a different one, then each batch column. Both sides use the same genes, but PCA is fitted separately for each side, so axes are not comparable between left and right. A batch structure that fades while the group separation remains is the expected pattern; it is a visual check, not a test.")
+}
+# No pair of the standalone PCA plots here: each of those is fitted on the
+# genes usable in its own matrix, so the two sides need not hold the same
+# genes. The panel above is the before/after PCA, fitted on shared genes.
+bc_pair_tab("Distance Heatmap", "sample_distance_heatmap",
+            "Sample-to-sample Euclidean distances before and after batch correction.")
+bc_pair_tab("Top DE Heatmap", "heatmap_top_DE",
+            "Row z-scores of the same genes before and after batch correction: the genes with the smallest adjusted p-value across contrasts. They are ranked among all tested genes, so the heatmap can include genes that were not called differentially expressed. The ranking comes from the differential expression results, which do not use the corrected values.")
+cat("\n")
+```
+
 ---
 
 # Differential Expression Analysis
@@ -3160,6 +3211,17 @@ if (has_enrichment) {
     }
 }
 
+if (bc_show) {
+    files_tbl <- rbind(files_tbl, data.frame(
+        File = file.path("Datasets", c(bc_record$output_file[1], "batch_correction.tsv")),
+        Description = c(
+            sprintf("Batch-corrected expression matrix (%s) — exploratory display only, not DE input",
+                    bc_record$method[1]),
+            "Record of the batch correction that ran"),
+        stringsAsFactors = FALSE
+    ))
+}
+
 kable(files_tbl, caption = "Key output files in the rna/ directory")
 ```
 
@@ -3237,6 +3299,8 @@ cat(rna_filt$methods, " ")
 
 cat(norm_sentence, " ")
 
+if (bc_show) cat(bc_text, " ")
+
 cat(sprintf(
 "Differential expression analysis was performed using %s with default parameters. ",
 de_method
@@ -3262,6 +3326,7 @@ cat(sprintf(
 "RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s %s Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). %s",
 rna_filt$methods, norm_sentence, de_method, padj_cut, lfc_cut, pathway_methods_text
 ))
+if (bc_show) cat(" ", bc_text)
 
 cat("\n</div>\n")
 ```

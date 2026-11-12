@@ -132,6 +132,25 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
         ),
         format = "file"
       ),
+      # Before/after QC: the batch-corrected side. The uncorrected side is the
+      # output of rna_qc_pre_obj / rna_qc_post_obj, which is why this waits for
+      # them: the report shows both sides together. format = "file" so that a
+      # deleted plot is redrawn; with no correction it returns character(0).
+      tar_target(
+        rna_batch_qc_files,
+        {
+          force(rna_qc_pre_obj)
+          force(rna_qc_post_obj)
+          mod_rnaseq_batch_qc(
+            pre             = rna_pre,
+            batch_corrected = rna_batch_corrected,
+            de_res          = rna_de_res,
+            config          = config,
+            out_dir         = rna_out_dir
+          )
+        },
+        format = "file"
+      ),
       # Clustering (run before outputs to provide excel_order)
       tar_target(
         rna_clustering_obj,
@@ -254,6 +273,8 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           force(rna_outputs_legacy)
           force(rna_commentary_file)
           force(rna_exec_summary)
+          force(rna_batch_corr_files)
+          force(rna_batch_qc_files)
           render_rnaseq_report(
             run_dir     = rna_out_dir,
             config      = config,

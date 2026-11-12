@@ -374,3 +374,52 @@ write_rna_batch_correction <- function(bc_res, datasets_dir) {
         save_tsv(bc_res$record, datasets_dir, "batch_correction.tsv")
     )
 }
+
+#' Methods sentence for the batch correction, from the record of what ran
+#'
+#' @param record_tbl The `batch_correction.tsv` table
+#'   ([compute_rna_batch_correction()]), or `NULL` when no correction ran.
+#' @return A paragraph, or `NULL` when there is no record.
+#' @examples
+#' rna_batch_correction_sentence(data.frame(
+#'     method = "limma", batch_cols = "Batch", group_col = "Condition",
+#'     mean_only = NA, input_matrix = "VST", n_features_unadjusted = 0,
+#'     n_features_unadjusted_qc = 0))
+rna_batch_correction_sentence <- function(record_tbl) {
+    if (is.null(record_tbl) || nrow(record_tbl) == 0) return(NULL)
+    rec <- record_tbl[1, , drop = FALSE]
+    cols <- strsplit(as.character(rec$batch_cols), ";", fixed = TRUE)[[1]]
+
+    input <- switch(as.character(rec$input_matrix),
+        VST          = "variance-stabilized (VST) expression matrix",
+        TMMlogCPM    = "TMM log-CPM expression matrix",
+        preprocessed = "preprocessed expression matrix, as supplied",
+        "normalized expression matrix"
+    )
+    backend <- if (identical(as.character(rec$method), "combat")) {
+        paste0("sva::ComBat (parametric empirical Bayes",
+               if (isTRUE(as.logical(rec$mean_only))) ", batch means only" else "", ")")
+    } else {
+        "limma::removeBatchEffect"
+    }
+
+    sentence <- sprintf(paste0(
+        "For exploratory display, a batch-corrected copy of the %s was computed with %s ",
+        "(batch column%s %s), with the group column %s kept in the design."),
+        input, backend, if (length(cols) > 1) "s" else "",
+        paste(cols, collapse = " and "), rec$group_col)
+
+    n_unadjusted <- max(as.numeric(rec$n_features_unadjusted),
+                        as.numeric(rec$n_features_unadjusted_qc), na.rm = TRUE)
+    if (is.finite(n_unadjusted) && n_unadjusted > 0) {
+        sentence <- paste(sentence, sprintf(paste0(
+            "Up to %s gene(s) with a constant value within a batch were left uncorrected."),
+            format(n_unadjusted, big.mark = ",")))
+    }
+
+    paste(sentence, paste0(
+        "The corrected values were used only for the outputs labelled batch-corrected; ",
+        "differential expression and every other result used the uncorrected data. ",
+        "Batch and group can be separated only as far as the experimental design allows, ",
+        "and the corrected values do not show that the remaining variation is biological."))
+}
