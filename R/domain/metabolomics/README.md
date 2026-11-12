@@ -95,6 +95,28 @@ There is no separate `normalization:` block.
 | `metab_shiny_payload` | `save_shiny_payload_metabolomics()` → `build_shiny_payload_metabolomics()` | `07_shiny_export.R` |
 | `metab_report` | `mod_metabolomics_report()` | `R/pipeline/metabolomics/templates/report_metabolomics.Rmd` |
 
+## Enrichment reference files
+
+Two files outside the data folder decide enrichment results, and both are
+tracked by `{targets}`:
+
+| Config key | Read by | Target that carries its fingerprint |
+|---|---|---|
+| `enrichment.gmt_file` (one or a list) | `metab_enrichment_res` | `metab_enrichment_gmt_ref` |
+| `enrichment.mapping_file` (HMDB → KEGG) | `met_raw`, `metab_enrichment_res` | `metab_kegg_mapping_ref` |
+
+The fingerprint is the md5 of each existing file, taken each time the plan is
+defined and written into the target's command
+(`06q_enrichment_reference_files.R`). So a library edited in place, or a
+configured library that was missing and now exists, reruns enrichment; a changed
+mapping table reruns `met_raw` and enrichment; and when nothing changed, nothing
+is outdated. A changed GMT does not rerun `met_raw`.
+
+A configured file that does not exist is not tracked and is not an error, as
+before: the enrichment code skips it. For a relative `mapping_file`, `met_raw`
+reads the path as written and the enrichment stage resolves it under the raw
+data folder; both locations are tracked.
+
 ## Enrichment output layout
 
 `mod_metabolomics_enrichment()` writes each result unit to its own directory

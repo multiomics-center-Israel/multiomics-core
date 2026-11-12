@@ -151,7 +151,10 @@ list(
       met_chosen <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
       met_mcg    <- isTRUE(cfg_raw$modes$metabolomics$enrichment$mummichog$enabled)
       met_mcg_engine <- if (met_mcg) mmc_engine(cfg_raw) else "metaboanalyst"
-      mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen, skip_outputs = has_multiomics, mummichog_enabled = met_mcg, mummichog_engine = met_mcg_engine))
+      # Fingerprint the enrichment reference files now, so that an edited or
+      # newly present GMT / mapping file changes the plan and reruns its readers.
+      met_refs   <- metab_reference_fingerprints(cfg_raw)
+      mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen, skip_outputs = has_multiomics, mummichog_enabled = met_mcg, mummichog_engine = met_mcg_engine, reference_files = met_refs))
     }
     
     
