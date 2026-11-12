@@ -73,7 +73,10 @@ mod_rnaseq_batch_qc <- function(pre, batch_corrected, de_res, config, out_dir) {
         out_file   = file.path(out_qc, "PCA_batch_before_after.png")
     ))
 
-    unique(files)
+    # Only what is on disk: the target tracks these paths as files, and a
+    # plot whose device or widget could not be saved is not one of them.
+    files <- unique(files)
+    files[file.exists(files)]
 }
 
 #' Before/after PCA panel, by condition and by batch
