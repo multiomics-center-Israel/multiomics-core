@@ -127,6 +127,13 @@ rna_qc_color_values <- function(cfg) {
 #' the genes are chosen there and those exact genes are plotted from `qc_mat`.
 #' Without a reference the genes are chosen from `qc_mat` itself, as before.
 #'
+#' A chosen gene can be undrawable in `qc_mat`: a PCA needs two finite values
+#' and some variance ([rna_pca_usable_rows()]), a row-scaled heatmap needs
+#' variance. Such a gene is left out by the plotting method and is not
+#' replaced by another gene. With a reference this is reported in one warning
+#' that gives the numbers per kind of plot, so the before/after plots show the
+#' same chosen genes except for these reported exclusions.
+#'
 #' @param qc_mat Matrix to plot (features x samples).
 #' @param meta Sample metadata.
 #' @param cfg The `config$modes$rna` list.
@@ -139,12 +146,16 @@ rna_qc_color_values <- function(cfg) {
 #' @param reference Matrix in which the variance-ranked gene subsets are
 #'   chosen, or NULL (default) to choose them in `qc_mat`. It must hold the
 #'   same genes and samples as `qc_mat`.
-#' @return list(files, plots)
+#' @return list(files, plots, excluded). `excluded` counts the reference-chosen
+#'   genes that could not be drawn from `qc_mat`: `pca_top` (named by the
+#'   number of top genes) and `heatmap`; both are empty/zero without a
+#'   reference.
 draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "rna",
                                             suffix = "", title_tag = NULL,
                                             reference = NULL) {
     plots <- list()
     files <- character(0)
+    excluded <- list(pca_top = integer(0), heatmap = 0L)
 
     if (!is.null(reference)) {
         # The subsets are taken from qc_mat by gene ID. A gene or sample that
@@ -283,6 +294,10 @@ draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "
             } else {
                 rownames(reference)[ranked[seq_len(n_top)]]
             }
+            if (!is.null(reference)) {
+                excluded$pca_top[[as.character(n_top)]] <-
+                    sum(!rna_pca_usable_rows(qc_mat[top_rows, , drop = FALSE]))
+            }
             p_top <- tryCatch(
                 pca_scatter(qc_mat[top_rows, , drop = FALSE], cfg_temp,
                             pcs = c(1, 2), out_file = f_pca_top),
@@ -383,6 +398,10 @@ draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "
         } else {
             qc_mat[rna_heatmap_rows(reference, max_rows = 2000), , drop = FALSE]
         }
+        if (!is.null(reference)) {
+            hm_vars <- apply(hm_mat, 1, stats::var, na.rm = TRUE)
+            excluded$heatmap <- sum(is.na(hm_vars) | hm_vars == 0)
+        }
 
         # Heatmap with column clustering
         f_hm <- out_path("samples_rna_heatmap")
@@ -429,7 +448,45 @@ draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "
                         n_samples, max_samples_expr_heatmap))
     }
 
-    list(files = unique(files), plots = plots)
+    # One report for all plots of this call: the three heatmaps share their
+    # rows and the top-N gene sets are nested, so per-plot warnings would
+    # repeat the same genes.
+    parts <- c(
+        if (any(excluded$pca_top > 0)) {
+            hit <- excluded$pca_top[excluded$pca_top > 0]
+            sprintf("top-variable-gene PCAs: %s (fewer than two finite values or no variance)",
+                    paste(sprintf("%d of the top %s", hit, names(hit)), collapse = ", "))
+        },
+        if (excluded$heatmap > 0) {
+            sprintf("expression heatmaps: %d of %d (no variance, so the row cannot be scaled)",
+                    excluded$heatmap, nrow(hm_mat))
+        }
+    )
+    if (length(parts) > 0) {
+        warning(sprintf(paste0(
+            "[rnaseq QC] %s: genes chosen in the uncorrected matrix that cannot be drawn ",
+            "from the plotted matrix were left out and not replaced by other genes. %s."),
+            title_tag %||% "Plots with a reference", paste(parts, collapse = "; ")),
+            call. = FALSE)
+    }
+
+    list(files = unique(files), plots = plots, excluded = excluded)
+}
+
+#' Rows a PCA can use
+#'
+#' The rule of `compute_pca_scores()`: at least two finite values and some
+#' variance among them.
+#'
+#' @param mat Numeric matrix (features x samples).
+#' @return Logical vector, one per row.
+#' @examples
+#' rna_pca_usable_rows(rbind(c(1, 2, 3), c(5, 5, 5), c(1, NA, Inf)))  # TRUE FALSE FALSE
+rna_pca_usable_rows <- function(mat) {
+    unname(apply(as.matrix(mat), 1, function(x) {
+        v <- x[is.finite(x)]
+        length(v) >= 2 && stats::var(v) > 0
+    }))
 }
 
 #' Rows that the QC expression heatmaps show for a matrix

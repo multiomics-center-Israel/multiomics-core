@@ -10,7 +10,10 @@
 #'     plus `_batch_corr_<method>`, with titles that say batch-corrected.
 #'     Where a plot shows a variance-ranked subset of the genes, the subset
 #'     is the one chosen in the uncorrected matrix, so each before/after pair
-#'     shows the same genes;
+#'     shows the same genes. The one exception is a chosen gene that the
+#'     plotting method cannot draw from the corrected matrix (e.g. it has no
+#'     variance left): it is left out, not replaced, and the run warns with
+#'     the number of such genes;
 #'   * the top-DE heatmap of the analysis matrix
 #'     ([draw_rna_top_de_heatmap()]), same suffix;
 #'   * `PCA_batch_before_after.png`: PC1 vs PC2 before and after, coloured by
@@ -133,14 +136,9 @@ rna_batch_pca_panel_columns <- function(cfg, group_col, batch_cols) {
 #'             dimnames = list(c("g1", "g2"), c("S1", "S2", "S3")))
 #' rna_shared_pca_features(m, m)  # "g1" -- g2 has zero variance
 rna_shared_pca_features <- function(before, after) {
-    usable <- function(m) {
-        apply(m, 1, function(x) {
-            v <- x[is.finite(x)]
-            length(v) >= 2 && stats::var(v) > 0
-        })
-    }
     ids <- intersect(rownames(before), rownames(after))
-    ids[usable(before[ids, , drop = FALSE]) & usable(after[ids, , drop = FALSE])]
+    ids[rna_pca_usable_rows(before[ids, , drop = FALSE]) &
+        rna_pca_usable_rows(after[ids, , drop = FALSE])]
 }
 
 #' Before/after PCA panel, by kept group and by batch
