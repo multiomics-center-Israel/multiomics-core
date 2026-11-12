@@ -385,3 +385,59 @@ test_that("the record and the matrix always reflect the current run", {
     expect_identical(write_rna_batch_correction(list(ran = FALSE), dir), character(0))
     expect_length(list.files(dir), 0)
 })
+
+# --- Target tracking ----------------------------------------------------------
+
+test_that("the pipeline tracks the batch-correction exports as files", {
+    skip_if_not_installed("targets")
+    withr::local_package("targets")
+    formats <- vapply(pipe_rnaseq(), function(t) t$settings$format, character(1))
+    names(formats) <- vapply(pipe_rnaseq(), function(t) t$settings$name, character(1))
+    expect_identical(formats[["rna_batch_corr_files"]], "file")
+})
+
+test_that("a deleted export is rebuilt, and a disabled run tracks no files", {
+    skip_if_not_installed("targets")
+    sandbox <- withr::local_tempdir()
+    withr::local_dir(sandbox)
+    datasets <- file.path(sandbox, "Datasets")
+    input <- file.path(sandbox, "bc_res.rds")
+    saveRDS(compute_rna_batch_correction(make_bc_pre(), bc_config()), input)
+
+    # The functions come from the session (helper.R sourced R/), as tar_make()
+    # is run in this process.
+    writeLines(c(
+        "library(targets)",
+        "list(",
+        sprintf("  tar_target(bc_res_file, %s, format = \"file\"),", deparse(input)),
+        "  tar_target(bc_res, readRDS(bc_res_file)),",
+        sprintf("  tar_target(bc_files, write_rna_batch_correction(bc_res, %s), format = \"file\")",
+                deparse(datasets)),
+        ")"
+    ), "_targets.R")
+    make <- function() {
+        suppressMessages(targets::tar_make(callr_function = NULL, reporter = "silent"))
+    }
+    outdated <- function() {
+        suppressMessages(targets::tar_outdated(callr_function = NULL, reporter = "silent"))
+    }
+
+    make()
+    files <- targets::tar_read(bc_files)
+    expect_identical(basename(files), c("rna_batch_corr_limma_VST.tsv", "batch_correction.tsv"))
+    expect_true(all(file.exists(files)))
+    expect_length(outdated(), 0)
+
+    # The record is the report's evidence of the correction: losing it must
+    # make the target outdated, and the next run must write it again.
+    file.remove(files[2])
+    expect_true("bc_files" %in% outdated())
+    make()
+    expect_true(all(file.exists(files)))
+
+    # Correction off: the target still succeeds, with nothing to track.
+    saveRDS(list(ran = FALSE), input)
+    make()
+    expect_identical(targets::tar_read(bc_files), character(0))
+    expect_length(list.files(datasets), 0)
+})
