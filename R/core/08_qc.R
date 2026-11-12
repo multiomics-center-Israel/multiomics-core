@@ -697,8 +697,7 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
     show_labels = show_labels,
     cluster_rows = cluster_samples,
     cluster_cols = cluster_samples,
-    adjust_scale = adjust_scale,
-    
+    adjust_scale = adjust_scale
   )
   
   # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability
