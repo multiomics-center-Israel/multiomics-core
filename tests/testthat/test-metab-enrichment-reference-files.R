@@ -11,7 +11,9 @@
 #   2. the DAG: which targets depend on which fingerprint;
 #   3. {targets} itself, in a throwaway project: what is rerun when a library
 #      is edited, when a configured library that was missing appears, when the
-#      mapping table changes, and when nothing changes.
+#      mapping table changes, and when nothing changes;
+#   4. the same for the mummichog report sections, which read both files
+#      themselves and so must not rely on an upstream value changing.
 #
 # Everything runs on temporary files and a private store. No project input is
 # read or written.
@@ -204,6 +206,55 @@ test_that("met_raw depends on the mapping file only, enrichment on both", {
     }
 })
 
+test_that("the mummichog sections depend on both fingerprints, the mummichog run on neither", {
+    fp <- list(gmt     = c("/proj/data/refs/a.gmt" = "0123abcd"),
+               mapping = c("/proj/data/refs/map.tsv" = "89abcdef"))
+    refs <- c("metab_kegg_mapping_ref", "metab_enrichment_gmt_ref")
+
+    for (engine in c("metaboanalyst", "python")) {
+        result  <- pipe_metabolomics("pqn", mummichog_enabled = TRUE,
+                                     mummichog_engine = engine, reference_files = fp)
+        by_name <- setNames(result, ref_target_names(result))
+
+        sec <- by_name$metab_mummichog_sections
+        expect_true(all(refs %in% ref_target_deps(sec)), info = engine)
+        # It still calls what it called before, on the same inputs.
+        expect_true("mod_mummichog_sections" %in% all.names(ref_target_command(sec)),
+                    info = engine)
+        expect_true(all(c("metab_mummichog_report_pathways", "metab_mummichog_report_files",
+                          "metab_pre", "metab_de_res", "metab_enrichment_res") %in%
+                            ref_target_deps(sec)), info = engine)
+
+        # The run and the targets that only pass its files on read neither
+        # file, so a changed library must not reach them directly.
+        for (nm in c("metab_mummichog_pinned_files", "metab_mummichog_report_pathways",
+                     "metab_mummichog_report_files", "metab_mummichog_exports")) {
+            expect_false(any(refs %in% ref_target_deps(by_name[[nm]])),
+                         info = sprintf("%s (%s) depends on a reference fingerprint",
+                                        nm, engine))
+        }
+
+        # With mummichog enabled the readers are exactly these three.
+        readers <- names(by_name)[vapply(by_name, function(t) {
+            any(refs %in% ref_target_deps(t))
+        }, logical(1))]
+        expect_setequal(readers, c("met_raw", "metab_enrichment_res",
+                                   "metab_mummichog_sections"))
+    }
+
+    # Under multi-omics the sections are still built, and still tracked.
+    core <- pipe_metabolomics("pqn", skip_outputs = TRUE, mummichog_enabled = TRUE,
+                              reference_files = fp)
+    core <- setNames(core, ref_target_names(core))
+    expect_true(all(refs %in% names(core)))
+    expect_true(all(refs %in% ref_target_deps(core$metab_mummichog_sections)))
+
+    # Disabled: the sections are a constant NULL and depend on nothing.
+    off <- pipe_metabolomics("pqn", reference_files = fp)
+    off <- setNames(off, ref_target_names(off))
+    expect_false(any(refs %in% ref_target_deps(off$metab_mummichog_sections)))
+})
+
 test_that("the reference targets exist in every mode that has their readers", {
     # No argument: the two targets are there with nothing to track, so callers
     # that do not pass fingerprints build the same plan as before plus two
@@ -322,6 +373,111 @@ test_that("{targets} reruns the readers of a changed or newly present reference 
         expect_identical(make(), "toy_enrichment")
 
         # And again nothing changed: nothing is outdated and nothing runs.
+        expect_identical(outdated(), character(0))
+        expect_identical(make(), character(0))
+    })
+})
+
+# ---- 4. the mummichog report sections ---------------------------------------------
+#
+# The sections read the GMT libraries and the mapping table themselves. Before
+# they depended on the fingerprints, they reran only if the enrichment result
+# or the preprocessed data came back different -- and neither has to. Here the
+# stand-ins are built so that neither does:
+#   toy_enrichment  returns NULL, as the enrichment stage does when
+#                   `run_enrichment` is off;
+#   toy_pre         follows toy_met_raw, whose value does not change, so it is
+#                   never rebuilt after the first run.
+# toy_sections_indirect is the sections target as it was: the same inputs
+# without the two fingerprints. It is there to show the gap the dependency
+# closes, and that these scenarios would have caught it.
+
+test_that("{targets} reruns the mummichog sections on a changed reference file when nothing upstream changed", {
+    p <- make_ref_project()
+    log_file <- file.path(withr::local_tempdir(), "ran.log")
+    r_file <- function(...) norm(file.path(root_dir, "R", ...))
+
+    script <- c(
+        "library(targets)",
+        sprintf("source(%s)", deparse(r_file("core", "00_paths.R"))),
+        sprintf("source(%s)", deparse(r_file("domain", "metabolomics",
+                                             "06q_enrichment_reference_files.R"))),
+        sprintf("source(%s)", deparse(r_file("pipeline", "metabolomics",
+                                             "00_pipe_metabolomics.R"))),
+        sprintf("ran <- function(name) cat(name, '\\n', sep = '', file = %s, append = TRUE)",
+                deparse(log_file)),
+        sprintf(paste0("cfg <- list(project = list(dir = %s), paths = list(raw = 'data'), ",
+                       "modes = list(metabolomics = list(enrichment = list(",
+                       "run_enrichment = FALSE, gmt_file = 'refs/a.gmt', ",
+                       "mapping_file = 'refs/map.tsv'))))"), deparse(p$proj)),
+        "refs <- metab_reference_fingerprints(cfg)",
+        "list(",
+        "  metab_reference_target('metab_kegg_mapping_ref', refs$mapping),",
+        "  metab_reference_target('metab_enrichment_gmt_ref', refs$gmt),",
+        "  tar_target(toy_met_raw, { metab_kegg_mapping_ref; ran('toy_met_raw'); 1 }),",
+        "  tar_target(toy_pre, { ran('toy_pre'); toy_met_raw + 1 }),",
+        "  tar_target(toy_enrichment, { metab_kegg_mapping_ref; metab_enrichment_gmt_ref;",
+        "                               toy_pre; ran('toy_enrichment'); NULL }),",
+        "  tar_target(toy_mummichog_run, { ran('toy_mummichog_run'); toy_pre + 1 }),",
+        "  tar_target(toy_sections, { metab_kegg_mapping_ref; metab_enrichment_gmt_ref;",
+        "                             ran('toy_sections');",
+        "                             list(toy_mummichog_run, toy_pre, toy_enrichment) }),",
+        "  tar_target(toy_sections_indirect, { ran('toy_sections_indirect');",
+        "                             list(toy_mummichog_run, toy_pre, toy_enrichment) }),",
+        "  tar_target(toy_exports, { ran('toy_exports'); length(toy_sections) })",
+        ")"
+    )
+
+    targets::tar_dir({
+        writeLines(script, "_targets.R")
+
+        outdated <- function() {
+            targets::tar_outdated(callr_function = NULL, reporter = "silent",
+                                  envir = new.env(parent = globalenv()))
+        }
+        make <- function() {
+            unlink(log_file)
+            suppressMessages(targets::tar_make(callr_function = NULL, reporter = "silent",
+                                               envir = new.env(parent = globalenv())))
+            if (file.exists(log_file)) sort(readLines(log_file)) else character(0)
+        }
+
+        # First run: everything is built once.
+        expect_identical(make(), sort(c("toy_met_raw", "toy_pre", "toy_enrichment",
+                                        "toy_mummichog_run", "toy_sections",
+                                        "toy_sections_indirect", "toy_exports")))
+        expect_null(targets::tar_read(toy_enrichment))
+
+        # No reference change: nothing is outdated, the sections do not rerun.
+        expect_identical(outdated(), character(0))
+        expect_identical(make(), character(0))
+
+        # A GMT changes while identified enrichment is off.
+        cat("P2\tsecond pathway\tC00003\tC00004\n", file = p$a, append = TRUE)
+        out <- outdated()
+        expect_true("toy_sections" %in% out)
+        # Upstream isolation: not the raw stage, not the data, not the run.
+        expect_false(any(c("toy_met_raw", "toy_pre", "toy_mummichog_run") %in% out))
+        ran_now <- make()
+        expect_identical(ran_now, c("toy_enrichment", "toy_sections"))
+        # Enrichment reran and is still NULL: its value gave the sections no
+        # reason to rerun, the fingerprint did. Without it they stay stale.
+        expect_null(targets::tar_read(toy_enrichment))
+        expect_false("toy_sections_indirect" %in% ran_now)
+        expect_identical(outdated(), character(0))
+
+        # The mapping table changes. The raw stage reruns and returns what it
+        # returned before, so the preprocessed data is not rebuilt.
+        cat("HMDB0000002\tC00002\n", file = p$map, append = TRUE)
+        out <- outdated()
+        expect_true(all(c("toy_met_raw", "toy_sections") %in% out))
+        ran_now <- make()
+        expect_identical(ran_now, c("toy_enrichment", "toy_met_raw", "toy_sections"))
+        expect_false(any(c("toy_pre", "toy_mummichog_run", "toy_sections_indirect") %in%
+                             ran_now))
+        expect_identical(outdated(), character(0))
+
+        # And again no reference change: nothing is outdated and nothing runs.
         expect_identical(outdated(), character(0))
         expect_identical(make(), character(0))
     })

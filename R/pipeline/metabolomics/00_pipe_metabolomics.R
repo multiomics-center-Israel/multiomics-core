@@ -29,8 +29,12 @@
 # and the HMDB -> KEGG table, taken while the plan is defined
 # (metab_reference_fingerprints(), called from _targets.R). They become two
 # targets, so that a changed or newly present file reruns what reads it:
-#   metab_kegg_mapping_ref    -> met_raw, metab_enrichment_res
-#   metab_enrichment_gmt_ref  -> metab_enrichment_res
+#   metab_kegg_mapping_ref    -> met_raw, metab_enrichment_res,
+#                                metab_mummichog_sections
+#   metab_enrichment_gmt_ref  -> metab_enrichment_res, metab_mummichog_sections
+# The mummichog report sections are listed because they read both files
+# themselves, to compare mummichog pathways with the identified-metabolite
+# enrichment. Mummichog's own model files are not tracked here.
 # See R/domain/metabolomics/06q_enrichment_reference_files.R.
 pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
                               mummichog_enabled = FALSE,
@@ -356,8 +360,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         out_dir = metab_out_dir
       )
     ),
-    # The GMT libraries are read by the enrichment stage only, so a changed
-    # library reruns enrichment and leaves met_raw alone.
+    # The GMT libraries are not read by met_raw, so a changed library reruns
+    # enrichment (and the mummichog sections, below) and leaves met_raw alone.
     metab_reference_target("metab_enrichment_gmt_ref", reference_files$gmt),
     tar_target(
       metab_enrichment_res,
@@ -454,16 +458,26 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       # rebuilding them -- which also keeps the embedded plot and the exported
       # PNG from drifting apart. Writes nothing. Holds ggplot objects, so it is
       # transient in memory; the store keeps them as RDS.
+      #
+      # The two reference targets are named here, not left to arrive through
+      # metab_enrichment_res or metab_pre: the sections read the GMT libraries
+      # (which pathways are comparable) and the HMDB -> KEGG table (the evidence
+      # layer) themselves, and neither upstream value has to change when a file
+      # does -- enrichment switched off stays NULL whatever the GMT says.
       tar_target(
         metab_mummichog_sections,
-        mod_mummichog_sections(
-          pathways = metab_mummichog_report_pathways,
-          files    = metab_mummichog_report_files,
-          pre      = metab_pre,
-          de_res   = metab_de_res,
-          config   = config,
-          enrichment_res = metab_enrichment_res
-        ),
+        {
+          metab_kegg_mapping_ref
+          metab_enrichment_gmt_ref
+          mod_mummichog_sections(
+            pathways = metab_mummichog_report_pathways,
+            files    = metab_mummichog_report_files,
+            pre      = metab_pre,
+            de_res   = metab_de_res,
+            config   = config,
+            enrichment_res = metab_enrichment_res
+          )
+        },
         memory = "transient"
       ),
       # The sections' standalone exports. In the CORE targets beside the stage

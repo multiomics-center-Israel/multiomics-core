@@ -102,8 +102,8 @@ tracked by `{targets}`:
 
 | Config key | Read by | Target that carries its fingerprint |
 |---|---|---|
-| `enrichment.gmt_file` (one or a list) | `metab_enrichment_res` | `metab_enrichment_gmt_ref` |
-| `enrichment.mapping_file` (HMDB → KEGG) | `met_raw`, `metab_enrichment_res` | `metab_kegg_mapping_ref` |
+| `enrichment.gmt_file` (one or a list) | `metab_enrichment_res`, `metab_mummichog_sections` | `metab_enrichment_gmt_ref` |
+| `enrichment.mapping_file` (HMDB → KEGG) | `met_raw`, `metab_enrichment_res`, `metab_mummichog_sections` | `metab_kegg_mapping_ref` |
 
 The fingerprint is the md5 of each existing file, taken each time the plan is
 defined and written into the target's command
@@ -111,6 +111,19 @@ defined and written into the target's command
 configured library that was missing and now exists, reruns enrichment; a changed
 mapping table reruns `met_raw` and enrichment; and when nothing changed, nothing
 is outdated. A changed GMT does not rerun `met_raw`.
+
+When mummichog is enabled, its report sections (`metab_mummichog_sections`)
+read the same two files themselves: the GMT libraries to decide which mummichog
+pathways can be compared with the identified-metabolite enrichment, and the
+mapping table for the supporting evidence. The sections therefore depend on
+both fingerprints directly, and rerun when either file changes even if the
+enrichment result and the preprocessed data come back unchanged (for example
+with `run_enrichment: false`). The mummichog run itself reads neither file, so
+a changed GMT does not rerun it.
+
+This is separate from **mummichog's own reference files** — the pathway model
+it runs on (the built-in one, or `model_ref` / `model_json`). Those are not
+tracked by these two targets and are outside this mechanism.
 
 A configured file that does not exist is not tracked and is not an error, as
 before: the enrichment code skips it. For a relative `mapping_file`, `met_raw`
