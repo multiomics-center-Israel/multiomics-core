@@ -134,6 +134,35 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     }
 
     # 4. Global Top DE Heatmap (Legacy/Bonus feature)
+    files <- c(files, draw_rna_top_de_heatmap(
+        mat, meta, sumdf, cfg,
+        out_file = file.path(dirs$diagnostic_plots, "heatmap_top_DE.png")
+    ))
+
+    list(files = unique(files), plots = plots)
+}
+
+#' Draw the top-DE heatmap (z-scored rows) for one expression matrix
+#'
+#' The DE-called genes with the smallest padj across contrasts, up to
+#' `qc_post$max_top_de_features`. Called for the analysis matrix by
+#' [mod_rnaseq_qc_post()] and for its batch-corrected copy by
+#' [mod_rnaseq_batch_qc()]; the genes are chosen from the DE results either
+#' way, so both heatmaps show the same genes.
+#'
+#' @param mat Expression matrix (features x samples).
+#' @param meta Sample metadata.
+#' @param sumdf DE summary table (`build_rnaseq_summary_df()`).
+#' @param cfg The `config$modes$rna` list.
+#' @param out_file PNG path.
+#' @param title_tag Text appended to the title (e.g. "batch-corrected
+#'   (limma)"), or NULL (default) for the established title.
+#' @return `out_file` when the heatmap was written, otherwise `character(0)`.
+draw_rna_top_de_heatmap <- function(mat, meta, sumdf, cfg, out_file, title_tag = NULL) {
+    files <- character(0)
+    color_config <- cfg$effects$color %||% "Group"
+    eff_color <- as.character(color_config[[1]])
+
     de_ids <- get_rna_de_features_qc(sumdf)
     de_ids <- de_ids[!is.na(de_ids)]
 
@@ -210,20 +239,19 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
                     ann <- ann[common_samples, , drop = FALSE]
                     m_z <- m_z[, common_samples, drop = FALSE]
 
-                    hm_png <- file.path(dirs$diagnostic_plots, "heatmap_top_DE.png")
-
                     tryCatch(
                         {
                             hm_obj <- plot_heatmap_core(
                                 expr_mat = m_z,
                                 annotation_col = ann,
-                                title = sprintf("Top DE (%d) - Z-score", nrow(m_z)),
+                                title = paste0(sprintf("Top DE (%d) - Z-score", nrow(m_z)),
+                                               if (!is.null(title_tag)) paste0(" — ", title_tag)),
                                 scale_rows = FALSE, # already z-scored
                                 cluster_cols = TRUE,
                                 max_rows = max_top_de
                             )
-                            save_heatmap_to_file(hm_obj, hm_png, width = 2000, height = 1400, res = 150)
-                            files <- c(files, hm_png)
+                            save_heatmap_to_file(hm_obj, out_file, width = 2000, height = 1400, res = 150)
+                            files <- c(files, out_file)
                         },
                         error = function(e) {
                             warning(sprintf("[QC_post] heatmap_top_DE failed: %s", conditionMessage(e)))
@@ -234,8 +262,9 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
         } # Close valid_count > 0 check
     }
 
-    list(files = unique(files), plots = plots)
+    files
 }
+
 
 # ---- Helpers ----
 

@@ -31,135 +31,13 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     # --- Validate color/shape configuration ---
     validate_effects_config(cfg$effects)
 
-    # --- Determine if adaptive plotting is enabled ---
-    adaptive_enabled <- if (!is.null(cfg$qc) && !is.null(cfg$qc$adaptive_plots)) {
-        isTRUE(cfg$qc$adaptive_plots)
-    } else {
-        TRUE  # Default: adaptive plotting ON
-    }
+    primary_color <- rna_qc_color_values(cfg)[1]
 
-    # --- Get thresholds (use defaults if not configured) ---
-    thresh <- if (!is.null(cfg$qc)) cfg$qc$thresholds else NULL
-    thresh <- thresh %||% list()
-    min_samples_pca3d <- thresh$min_samples_for_pca3d %||% 4
-    max_samples_heatmaps <- thresh$max_samples_for_heatmaps %||% 120
-    max_samples_expr_heatmap <- thresh$max_samples_for_expr_heatmap %||% 60
-
-    n_samples <- nrow(meta)
-
-    # --- Parse color configuration (string OR array) ---
-    color_config <- cfg$effects$color
-    if (is.null(color_config)) {
-        stop("Config error: effects$color is required but missing")
-    }
-
-    # Check if color is multi-value (more defensive)
-    n_colors <- length(color_config)
-    is_multi <- n_colors > 1
-
-    color_values <- if (isTRUE(is_multi)) {
-        as.character(color_config)
-    } else {
-        as.character(color_config[1])
-    }
-    primary_color <- color_values[1]
-
-    # ---------- PCA plots (one per color value) ----------
-    # PCA 1v2 (always generated for each color)
-    for (i in seq_along(color_values)) {
-        color_var <- color_values[i]
-
-        # Create temporary config with this color
-        cfg_temp <- cfg
-        cfg_temp$effects$color <- color_var
-
-        # Determine filename
-        if (i == 1) {
-            f_pca12 <- file.path(out_qc, "PCA_PC1.vs.PC2.png")
-        } else {
-            safe_name <- gsub("[^A-Za-z0-9_]", "_", color_var)
-            f_pca12 <- file.path(out_qc, sprintf("PCA_PC1.vs.PC2_by_%s.png", safe_name))
-        }
-
-        p12 <- qc_pca_scatter(qc_mat, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca12)
-        files <- c(files, f_pca12)
-
-        # Store first plot for object extraction later
-        if (i == 1) {
-            plots$pca_1_2 <- p12
-            primary_pca <- p12
-        } else {
-            plots[[sprintf("pca_1_2_by_%s", color_var)]] <- p12
-        }
-    }
-
-    # PCA 1v3 (always generated, all colors)
-    for (i in seq_along(color_values)) {
-        color_var <- color_values[i]
-        cfg_temp <- cfg
-        cfg_temp$effects$color <- color_var
-
-        if (i == 1) {
-            f_pca13 <- file.path(out_qc, "PCA_PC1.vs.PC3.png")
-        } else {
-            safe_name <- gsub("[^A-Za-z0-9_]", "_", color_var)
-            f_pca13 <- file.path(out_qc, sprintf("PCA_PC1.vs.PC3_by_%s.png", safe_name))
-        }
-
-        p13 <- qc_pca_scatter(qc_mat, meta, cfg_temp, pcs = c(1, 3), out_file = f_pca13)
-        files <- c(files, f_pca13)
-
-        if (i == 1) {
-            plots$pca_1_3 <- p13
-        } else {
-            plots[[sprintf("pca_1_3_by_%s", color_var)]] <- p13
-        }
-    }
-
-    # PCA 3D (conditional: requires minimum sample count, primary color only)
-    should_generate_pca3d <- !isTRUE(adaptive_enabled) || (n_samples >= min_samples_pca3d)
-    if (should_generate_pca3d) {
-        f_pca3d <- file.path(out_qc, "PCA_3D.html")
-        cfg_temp <- cfg
-        cfg_temp$effects$color <- primary_color
-        p_3d <- qc_pca_3d(qc_mat, meta, cfg_temp, out_file = f_pca3d)
-        files <- c(files, f_pca3d)
-        if (!is.null(p_3d)) plots$pca_3d <- p_3d
-    } else if (isTRUE(adaptive_enabled)) {
-        message(sprintf("Skipping 3D PCA (%d samples < %d threshold)",
-                        n_samples, min_samples_pca3d))
-    }
-
-    # ---------- PCA with top variable genes (for report dropdown) ----------
-    n_top_values <- c(500, 1000, 2000, 5000)
-    cfg_temp <- cfg
-    cfg_temp$effects$color <- primary_color
-    gene_vars <- apply(qc_mat, 1, var, na.rm = TRUE)
-    ranked <- order(gene_vars, decreasing = TRUE)
-
-    for (n_top in n_top_values) {
-        f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
-        p_top <- NULL
-        if (n_top <= length(ranked)) {
-            p_top <- tryCatch(
-                qc_pca_scatter(qc_mat[ranked[seq_len(n_top)], , drop = FALSE], meta, cfg_temp,
-                               pcs = c(1, 2), out_file = f_pca_top),
-                error = function(e) {
-                    warning(sprintf("[rnaseq QC] PCA with top %d variable genes was not generated: %s",
-                                    n_top, conditionMessage(e)), call. = FALSE)
-                    NULL
-                }
-            )
-        }
-        if (is.null(p_top)) {
-            # A plot left by an earlier run would otherwise be shown as this run's.
-            if (file.exists(f_pca_top)) file.remove(f_pca_top)
-        } else {
-            files <- c(files, f_pca_top)
-            plots[[sprintf("pca_top%d", n_top)]] <- p_top
-            message(sprintf("  Generated PCA with top %d variable genes", n_top))
-        }
-    }
+    # ---------- Sample-structure plots (PCA, sample and expression heatmaps) ----------
+    structure <- draw_rna_sample_structure_plots(qc_mat, meta, cfg, out_qc, stage = stage)
+    files <- c(files, structure$files)
+    plots <- c(plots, structure$plots)
+    primary_pca <- structure$plots$pca_1_2
 
     # ---------- Density (primary color only) ----------
     cfg_temp <- cfg
@@ -191,120 +69,6 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     files <- c(files, f_box)
     plots$boxplot <- p_bp
 
-    # --- Get heatmap annotation columns ---
-    annot_cols <- cfg$effects$heatmap_annotations %||% NULL
-    # Fallback to primary color if no annotations specified
-    if (is.null(annot_cols)) {
-        annot_cols <- NULL  # Will use default single-column in heatmap functions
-    }
-
-    # --- Get heatmap visualization settings ---
-    hm_viz <- cfg$qc$heatmap_viz %||% list()
-    show_labels <- hm_viz$show_sample_labels %||% TRUE  # Default TRUE to show sample names
-    cluster_samples <- hm_viz$cluster_samples %||% TRUE
-    adjust_scale <- hm_viz$adjust_correlation_scale %||% TRUE
-
-    # ---------- Sample distance heatmap (conditional: skip for large datasets) ----------
-    should_generate_dist_heatmap <- !isTRUE(adaptive_enabled) || (n_samples <= max_samples_heatmaps)
-    if (should_generate_dist_heatmap) {
-        f_dist <- file.path(out_qc, "sample_distance_heatmap.png")
-        # Use primary color for heatmap
-        cfg_temp <- cfg
-        cfg_temp$effects$color <- primary_color
-        ph_dist <- qc_sample_distance_heatmap(
-            qc_mat, meta, cfg_temp,
-            annot_cols = annot_cols,
-            out_file = f_dist,
-            show_labels = show_labels,
-            cluster_samples = cluster_samples
-        )
-        files <- c(files, f_dist)
-        plots$dist_heatmap <- ph_dist
-    } else if (isTRUE(adaptive_enabled)) {
-        message(sprintf("Skipping distance heatmap (%d samples > %d threshold)",
-                        n_samples, max_samples_heatmaps))
-    }
-
-    # ---------- Correlation heatmap (conditional: skip for large datasets) ----------
-    should_generate_corr_heatmap <- !isTRUE(adaptive_enabled) || (n_samples <= max_samples_heatmaps)
-    if (should_generate_corr_heatmap) {
-        f_cor <- file.path(out_qc, "sample_correlation_heatmap.png")
-        # Use primary color for heatmap
-        cfg_temp <- cfg
-        cfg_temp$effects$color <- primary_color
-        p_cor <- qc_sample_correlation_heatmap(
-            qc_mat, meta, cfg_temp,
-            annot_cols = annot_cols,
-            out_file = f_cor,
-            show_labels = show_labels,
-            cluster_samples = cluster_samples,
-            adjust_scale = adjust_scale
-        )
-        files <- c(files, f_cor)
-        plots$correlation <- p_cor
-    } else if (isTRUE(adaptive_enabled)) {
-        message(sprintf("Skipping correlation heatmap (%d samples > %d threshold)",
-                        n_samples, max_samples_heatmaps))
-    }
-
-    # ---------- Expression heatmaps (conditional: skip for large datasets) ----------
-    should_generate_expr_heatmap <- !isTRUE(adaptive_enabled) || (n_samples <= max_samples_expr_heatmap)
-    if (should_generate_expr_heatmap) {
-        # Prepare annotations
-        if (!is.null(annot_cols)) {
-            # Use configured annotation columns
-            annot <- meta[, annot_cols, drop = FALSE]
-            rownames(annot) <- meta[[cfg$effects$samples]]
-        } else {
-            # Fallback to primary color
-            annot <- data.frame(
-                Condition = meta[[primary_color]],
-                row.names = meta[[cfg$effects$samples]]
-            )
-        }
-
-        # Heatmap with column clustering
-        f_hm <- file.path(out_qc, "samples_rna_heatmap.png")
-        # Use primary color for heatmap
-        cfg_temp <- cfg
-        cfg_temp$effects$color <- primary_color
-        hm_clusters <- wrap_qc_heatmap(qc_mat, meta, cfg_temp, stage = stage, out_file = f_hm,
-                                       annot_cols = annot_cols)
-        files <- c(files, f_hm)
-        plots$heatmap_clusters <- hm_clusters
-
-        # Heatmap without column clustering
-        f_hm_nocol <- file.path(out_qc, "samples_rna_heatmap_wo_col.png")
-        p_hm_nocol <- plot_heatmap_core(
-            expr_mat = qc_mat,
-            annotation_col = annot,
-            title = "QC: Sample RNA Expression",
-            max_rows = 2000,
-            cluster_rows = TRUE,
-            cluster_cols = FALSE
-        )
-        save_heatmap_to_file(p_hm_nocol, f_hm_nocol)
-        files <- c(files, f_hm_nocol)
-        plots$heatmap_nocol <- p_hm_nocol
-
-        # Fully unclustered heatmap (rows + cols both in original order)
-        f_hm_uncl <- file.path(out_qc, "samples_rna_heatmap_unclustered.png")
-        p_hm_uncl <- plot_heatmap_core(
-            expr_mat = qc_mat,
-            annotation_col = annot,
-            title = "QC: Sample RNA Expression",
-            max_rows = 2000,
-            cluster_rows = FALSE,
-            cluster_cols = FALSE
-        )
-        save_heatmap_to_file(p_hm_uncl, f_hm_uncl)
-        files <- c(files, f_hm_uncl)
-        plots$heatmap_unclustered <- p_hm_uncl
-    } else if (isTRUE(adaptive_enabled)) {
-        message(sprintf("Skipping expression heatmap (%d samples > %d threshold)",
-                        n_samples, max_samples_expr_heatmap))
-    }
-
     # ---------- Extract PCA objects from plot attributes (primary PCA plot) ----------
     pca_obj <- attr(primary_pca, "pca_result")
     scores <- attr(primary_pca, "scores")
@@ -333,6 +97,298 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         # mod_rnaseq_commentary() describes the plots by what ran, not the config.
         expr_work_method = pre$info$expr_work_method
     )
+}
+
+#' Colour columns of the RNA QC plots
+#'
+#' @param cfg The `config$modes$rna` list.
+#' @return Character vector of `effects$color` values; the first is the
+#'   primary colour.
+rna_qc_color_values <- function(cfg) {
+    color_config <- cfg$effects$color
+    if (is.null(color_config)) {
+        stop("Config error: effects$color is required but missing")
+    }
+    as.character(color_config)
+}
+
+#' Draw the RNA sample-structure QC plots for one matrix
+#'
+#' PCA (PC1 vs PC2 and PC1 vs PC3 per colour column, 3D, top variable genes),
+#' the sample distance and correlation heatmaps and the three expression
+#' heatmaps. Called for the QC matrix by [mod_rnaseq_qc_pre()] and, with a
+#' suffix and a title tag, for its batch-corrected copy by
+#' [mod_rnaseq_batch_qc()], so both sets are drawn by the same code.
+#'
+#' @param qc_mat Matrix to plot (features x samples).
+#' @param meta Sample metadata.
+#' @param cfg The `config$modes$rna` list.
+#' @param out_qc Directory for the plots.
+#' @param stage Label used in heatmap titles.
+#' @param suffix Appended to every file name before the extension (default
+#'   none, the established names).
+#' @param title_tag Text that marks the plots (e.g. "batch-corrected (limma)"),
+#'   or NULL (default) to keep the established titles.
+#' @return list(files, plots)
+draw_rna_sample_structure_plots <- function(qc_mat, meta, cfg, out_qc, stage = "rna",
+                                            suffix = "", title_tag = NULL) {
+    plots <- list()
+    files <- character(0)
+
+    out_path <- function(base, ext = "png") {
+        file.path(out_qc, sprintf("%s%s.%s", base, suffix, ext))
+    }
+    tagged <- function(title) {
+        if (is.null(title_tag)) title else sprintf("%s — %s", title, title_tag)
+    }
+    # Untagged: exactly the call made before this helper existed.
+    pca_scatter <- function(mat, plot_cfg, pcs, out_file) {
+        if (is.null(title_tag)) {
+            return(qc_pca_scatter(mat, meta, plot_cfg, pcs = pcs, out_file = out_file))
+        }
+        p <- qc_pca_scatter(mat, meta, plot_cfg, pcs = pcs) + ggplot2::ggtitle(title_tag)
+        ggplot2::ggsave(out_file, plot = p, width = 6, height = 5)
+        p
+    }
+
+
+    # --- Determine if adaptive plotting is enabled ---
+    adaptive_enabled <- if (!is.null(cfg$qc) && !is.null(cfg$qc$adaptive_plots)) {
+        isTRUE(cfg$qc$adaptive_plots)
+    } else {
+        TRUE  # Default: adaptive plotting ON
+    }
+
+    # --- Get thresholds (use defaults if not configured) ---
+    thresh <- if (!is.null(cfg$qc)) cfg$qc$thresholds else NULL
+    thresh <- thresh %||% list()
+    min_samples_pca3d <- thresh$min_samples_for_pca3d %||% 4
+    max_samples_heatmaps <- thresh$max_samples_for_heatmaps %||% 120
+    max_samples_expr_heatmap <- thresh$max_samples_for_expr_heatmap %||% 60
+
+    n_samples <- nrow(meta)
+
+    n_samples <- nrow(meta)
+    color_values <- rna_qc_color_values(cfg)
+    primary_color <- color_values[1]
+
+    # ---------- PCA plots (one per color value) ----------
+    # PCA 1v2 (always generated for each color)
+    for (i in seq_along(color_values)) {
+        color_var <- color_values[i]
+
+        # Create temporary config with this color
+        cfg_temp <- cfg
+        cfg_temp$effects$color <- color_var
+
+        # Determine filename
+        if (i == 1) {
+            f_pca12 <- out_path("PCA_PC1.vs.PC2")
+        } else {
+            safe_name <- gsub("[^A-Za-z0-9_]", "_", color_var)
+            f_pca12 <- out_path(sprintf("PCA_PC1.vs.PC2_by_%s", safe_name))
+        }
+
+        p12 <- pca_scatter(qc_mat, cfg_temp, pcs = c(1, 2), out_file = f_pca12)
+        files <- c(files, f_pca12)
+
+        # Store first plot for object extraction later
+        if (i == 1) {
+            plots$pca_1_2 <- p12
+        } else {
+            plots[[sprintf("pca_1_2_by_%s", color_var)]] <- p12
+        }
+    }
+
+    # PCA 1v3 (always generated, all colors)
+    for (i in seq_along(color_values)) {
+        color_var <- color_values[i]
+        cfg_temp <- cfg
+        cfg_temp$effects$color <- color_var
+
+        if (i == 1) {
+            f_pca13 <- out_path("PCA_PC1.vs.PC3")
+        } else {
+            safe_name <- gsub("[^A-Za-z0-9_]", "_", color_var)
+            f_pca13 <- out_path(sprintf("PCA_PC1.vs.PC3_by_%s", safe_name))
+        }
+
+        p13 <- pca_scatter(qc_mat, cfg_temp, pcs = c(1, 3), out_file = f_pca13)
+        files <- c(files, f_pca13)
+
+        if (i == 1) {
+            plots$pca_1_3 <- p13
+        } else {
+            plots[[sprintf("pca_1_3_by_%s", color_var)]] <- p13
+        }
+    }
+
+    # PCA 3D (conditional: requires minimum sample count, primary color only)
+    should_generate_pca3d <- !isTRUE(adaptive_enabled) || (n_samples >= min_samples_pca3d)
+    if (should_generate_pca3d) {
+        f_pca3d <- out_path("PCA_3D", ext = "html")
+        cfg_temp <- cfg
+        cfg_temp$effects$color <- primary_color
+        p_3d <- qc_pca_3d(qc_mat, meta, cfg_temp, out_file = f_pca3d,
+                          title = if (!is.null(title_tag)) tagged("3D PCA"))
+        files <- c(files, f_pca3d)
+        if (!is.null(p_3d)) plots$pca_3d <- p_3d
+    } else if (isTRUE(adaptive_enabled)) {
+        message(sprintf("Skipping 3D PCA (%d samples < %d threshold)",
+                        n_samples, min_samples_pca3d))
+    }
+
+    # ---------- PCA with top variable genes (for report dropdown) ----------
+    n_top_values <- c(500, 1000, 2000, 5000)
+    cfg_temp <- cfg
+    cfg_temp$effects$color <- primary_color
+    gene_vars <- apply(qc_mat, 1, var, na.rm = TRUE)
+    ranked <- order(gene_vars, decreasing = TRUE)
+
+    for (n_top in n_top_values) {
+        f_pca_top <- out_path(sprintf("PCA_top%d", n_top))
+        p_top <- NULL
+        if (n_top <= length(ranked)) {
+            p_top <- tryCatch(
+                pca_scatter(qc_mat[ranked[seq_len(n_top)], , drop = FALSE], cfg_temp,
+                            pcs = c(1, 2), out_file = f_pca_top),
+                error = function(e) {
+                    warning(sprintf("[rnaseq QC] PCA with top %d variable genes was not generated: %s",
+                                    n_top, conditionMessage(e)), call. = FALSE)
+                    NULL
+                }
+            )
+        }
+        if (is.null(p_top)) {
+            # A plot left by an earlier run would otherwise be shown as this run's.
+            if (file.exists(f_pca_top)) file.remove(f_pca_top)
+        } else {
+            files <- c(files, f_pca_top)
+            plots[[sprintf("pca_top%d", n_top)]] <- p_top
+            message(sprintf("  Generated PCA with top %d variable genes", n_top))
+        }
+    }
+
+    # --- Get heatmap annotation columns ---
+    annot_cols <- cfg$effects$heatmap_annotations %||% NULL
+    # Fallback to primary color if no annotations specified
+    if (is.null(annot_cols)) {
+        annot_cols <- NULL  # Will use default single-column in heatmap functions
+    }
+
+    # --- Get heatmap visualization settings ---
+    hm_viz <- cfg$qc$heatmap_viz %||% list()
+    show_labels <- hm_viz$show_sample_labels %||% TRUE  # Default TRUE to show sample names
+    cluster_samples <- hm_viz$cluster_samples %||% TRUE
+    adjust_scale <- hm_viz$adjust_correlation_scale %||% TRUE
+
+    # ---------- Sample distance heatmap (conditional: skip for large datasets) ----------
+    should_generate_dist_heatmap <- !isTRUE(adaptive_enabled) || (n_samples <= max_samples_heatmaps)
+    if (should_generate_dist_heatmap) {
+        f_dist <- out_path("sample_distance_heatmap")
+        # Use primary color for heatmap
+        cfg_temp <- cfg
+        cfg_temp$effects$color <- primary_color
+        ph_dist <- qc_sample_distance_heatmap(
+            qc_mat, meta, cfg_temp,
+            annot_cols = annot_cols,
+            out_file = f_dist,
+            show_labels = show_labels,
+            cluster_samples = cluster_samples,
+            title = if (!is.null(title_tag)) tagged("Sample distance heatmap")
+        )
+        files <- c(files, f_dist)
+        plots$dist_heatmap <- ph_dist
+    } else if (isTRUE(adaptive_enabled)) {
+        message(sprintf("Skipping distance heatmap (%d samples > %d threshold)",
+                        n_samples, max_samples_heatmaps))
+    }
+
+    # ---------- Correlation heatmap (conditional: skip for large datasets) ----------
+    should_generate_corr_heatmap <- !isTRUE(adaptive_enabled) || (n_samples <= max_samples_heatmaps)
+    if (should_generate_corr_heatmap) {
+        f_cor <- out_path("sample_correlation_heatmap")
+        # Use primary color for heatmap
+        cfg_temp <- cfg
+        cfg_temp$effects$color <- primary_color
+        p_cor <- qc_sample_correlation_heatmap(
+            qc_mat, meta, cfg_temp,
+            annot_cols = annot_cols,
+            out_file = f_cor,
+            show_labels = show_labels,
+            cluster_samples = cluster_samples,
+            adjust_scale = adjust_scale,
+            title = if (!is.null(title_tag)) tagged("Sample correlation heatmap")
+        )
+        files <- c(files, f_cor)
+        plots$correlation <- p_cor
+    } else if (isTRUE(adaptive_enabled)) {
+        message(sprintf("Skipping correlation heatmap (%d samples > %d threshold)",
+                        n_samples, max_samples_heatmaps))
+    }
+
+    # ---------- Expression heatmaps (conditional: skip for large datasets) ----------
+    should_generate_expr_heatmap <- !isTRUE(adaptive_enabled) || (n_samples <= max_samples_expr_heatmap)
+    if (should_generate_expr_heatmap) {
+        # Prepare annotations
+        if (!is.null(annot_cols)) {
+            # Use configured annotation columns
+            annot <- meta[, annot_cols, drop = FALSE]
+            rownames(annot) <- meta[[cfg$effects$samples]]
+        } else {
+            # Fallback to primary color
+            annot <- data.frame(
+                Condition = meta[[primary_color]],
+                row.names = meta[[cfg$effects$samples]]
+            )
+        }
+
+        # Heatmap with column clustering
+        f_hm <- out_path("samples_rna_heatmap")
+        # Use primary color for heatmap
+        cfg_temp <- cfg
+        cfg_temp$effects$color <- primary_color
+        hm_clusters <- wrap_qc_heatmap(qc_mat, meta, cfg_temp, stage = stage, out_file = f_hm,
+                                       annot_cols = annot_cols,
+                                       title = if (!is.null(title_tag)) {
+                                           tagged("QC: Sample RNA Expression")
+                                       })
+        files <- c(files, f_hm)
+        plots$heatmap_clusters <- hm_clusters
+
+        # Heatmap without column clustering
+        f_hm_nocol <- out_path("samples_rna_heatmap_wo_col")
+        p_hm_nocol <- plot_heatmap_core(
+            expr_mat = qc_mat,
+            annotation_col = annot,
+            title = tagged("QC: Sample RNA Expression"),
+            max_rows = 2000,
+            cluster_rows = TRUE,
+            cluster_cols = FALSE
+        )
+        save_heatmap_to_file(p_hm_nocol, f_hm_nocol)
+        files <- c(files, f_hm_nocol)
+        plots$heatmap_nocol <- p_hm_nocol
+
+        # Fully unclustered heatmap (rows + cols both in original order)
+        f_hm_uncl <- out_path("samples_rna_heatmap_unclustered")
+        p_hm_uncl <- plot_heatmap_core(
+            expr_mat = qc_mat,
+            annotation_col = annot,
+            title = tagged("QC: Sample RNA Expression"),
+            max_rows = 2000,
+            cluster_rows = FALSE,
+            cluster_cols = FALSE
+        )
+        save_heatmap_to_file(p_hm_uncl, f_hm_uncl)
+        files <- c(files, f_hm_uncl)
+        plots$heatmap_unclustered <- p_hm_uncl
+    } else if (isTRUE(adaptive_enabled)) {
+        message(sprintf("Skipping expression heatmap (%d samples > %d threshold)",
+                        n_samples, max_samples_expr_heatmap))
+    }
+
+    list(files = unique(files), plots = plots)
 }
 
 #' Validate effects configuration for color/shape conflicts
