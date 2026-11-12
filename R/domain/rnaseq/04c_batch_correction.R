@@ -200,7 +200,7 @@ rna_constant_within_batch <- function(expr, batch) {
         sub <- expr[, idx, drop = FALSE]
         constant <- constant | (rowSums(sub != sub[, 1]) == 0)
     }
-    constant
+    unname(constant)
 }
 
 #' Batch-correct one RNA matrix
