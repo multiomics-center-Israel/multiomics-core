@@ -17,11 +17,22 @@
 #'
 #' @param gmt_file       Path to GMT file.
 #' @param include_descriptions Logical. If TRUE, also return pathway descriptions.
-#' @return If include_descriptions=TRUE: list(sets, descriptions).
+#' @param include_records Logical. If TRUE (with \code{include_descriptions}),
+#'   also return \code{records}: one entry per accepted line, in file order,
+#'   as \code{list(line, pathway_id, description, members)}. \code{sets} keeps
+#'   one entry per pathway id (a repeated id keeps its last line), so this is
+#'   the only place a repeated id can still be seen. Used for provenance; it
+#'   does not change \code{sets} or \code{descriptions}.
+#' @return If include_descriptions=TRUE: list(sets, descriptions), plus
+#'         \code{records} when include_records=TRUE.
 #'         Otherwise: named list of character vectors.
-read_gmt_list <- function(gmt_file, include_descriptions = FALSE) {
+read_gmt_list <- function(gmt_file, include_descriptions = FALSE,
+                          include_records = FALSE) {
     # Return empty containers when the file does not exist
     if (!file.exists(gmt_file)) {
+        if (include_descriptions && include_records) {
+            return(list(sets = list(), descriptions = character(0), records = list()))
+        }
         if (include_descriptions) return(list(sets = list(), descriptions = character(0)))
         return(list())
     }
@@ -29,9 +40,12 @@ read_gmt_list <- function(gmt_file, include_descriptions = FALSE) {
     lines    <- readLines(gmt_file, warn = FALSE)
     gmt_list <- list()
     desc_map <- character(0)
+    records  <- list()
+    line_no  <- 0L
 
     # Each GMT line is: pathway_id <TAB> description <TAB> member1 <TAB> ...
     for (line in lines) {
+        line_no <- line_no + 1L
         parts <- strsplit(line, "\t")[[1]]
         if (length(parts) < 3) next
 
@@ -46,9 +60,17 @@ read_gmt_list <- function(gmt_file, include_descriptions = FALSE) {
             if (nzchar(pathway_desc)) {
                 desc_map[[pathway_id]] <- pathway_desc
             }
+            if (include_records) {
+                records[[length(records) + 1L]] <- list(
+                    line = line_no, pathway_id = pathway_id,
+                    description = pathway_desc, members = members)
+            }
         }
     }
 
+    if (include_descriptions && include_records) {
+        return(list(sets = gmt_list, descriptions = desc_map, records = records))
+    }
     if (include_descriptions) {
         return(list(sets = gmt_list, descriptions = desc_map))
     }
@@ -105,7 +127,11 @@ read_hmdb_kegg_map <- function(path) {
 #'   background matches a KEGG-based GMT's namespace (MetaboAnalyst-style). It is
 #'   a no-op when no KEGG ids are present, so name-only datasets are unaffected.
 #'   Not exposed to config on purpose — this is the fixed, correct default.
-#' @return list(expr_mapped, compound_names, feature_map) with remapped rownames.
+#' @return list(expr_mapped, compound_names, feature_map) with remapped rownames,
+#'   plus \code{feature_compounds}: the per-feature record of which step chose
+#'   each compound id (see \code{describe_metab_feature_compounds()}), or a
+#'   \code{metab_provenance_error} if that record could not be built. The record
+#'   is bookkeeping only; nothing in the mapping depends on it.
 map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL,
                                          annotated_only = TRUE) {
     # Align the expression matrix to the annotation rows. row_data can be a
@@ -132,6 +158,16 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
         compound_names <- rownames(expr_mat)
     }
 
+    # Provenance bookkeeping: which step set each feature's id. Updated beside
+    # every override below with the SAME mask, so it records the selection that
+    # was made rather than re-deriving it afterwards.
+    prov_source <- rep(
+        if (any(c("Name", "Molecule") %in% colnames(row_data))) "name_column"
+        else "matrix_rowname",
+        length(compound_names))
+    prov_kegg_cell  <- rep(NA_character_, length(compound_names))
+    prov_restricted <- rep(FALSE, length(compound_names))
+
     # HMDB-to-KEGG mapping: replace compound names with KEGG IDs when a
     # mapping file is provided, so that IDs match KEGG-based GMT pathways.
     map_vec <- read_hmdb_kegg_map(mapping_file)
@@ -151,6 +187,7 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
             mapped_kegg <- map_vec[hmdb_ids]
             has_map <- !is.na(mapped_kegg) & mapped_kegg != ""
             compound_names[has_map] <- mapped_kegg[has_map]
+            prov_source[has_map] <- "hmdb_mapping"
             message("enrichment: mapped ", sum(has_map), " features to KEGG IDs")
         }
     }
@@ -168,6 +205,8 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
         has_kegg <- grepl("C[0-9]{5}", kegg_raw)
         kegg_id  <- sub(".*?(C[0-9]{5}).*", "\\1", kegg_raw, perl = TRUE)
         compound_names[has_kegg] <- kegg_id[has_kegg]
+        prov_source[has_kegg] <- "kegg_column"
+        prov_kegg_cell <- kegg_raw
         message("enrichment: using KEGG IDs from 'KEGG' for ",
                 sum(has_kegg), " features")
     }
@@ -183,6 +222,7 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
         # dataset with a name-based GMT), so the background is never emptied.
         if (any(is_kegg)) {
             n_drop <- sum(!is_kegg & !is.na(compound_names))
+            prov_restricted <- !is_kegg & !is.na(compound_names)
             compound_names[!is_kegg] <- NA_character_
             message("enrichment: restricting background to ", sum(is_kegg),
                     " KEGG-annotated features (dropped ", n_drop, " name-only).")
@@ -216,7 +256,13 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
     list(
         expr_mapped    = mat_use,
         compound_names = names_use[!dup],
-        feature_map    = feature_map
+        feature_map    = feature_map,
+        feature_compounds = tryCatch(
+            describe_metab_feature_compounds(
+                feature_id = feat_key, compound_id = compound_names,
+                valid = valid, id_source = prov_source,
+                restricted = prov_restricted, kegg_cell = prov_kegg_cell),
+            error = function(e) metab_provenance_error("feature_compounds", e))
     )
 }
 
@@ -951,7 +997,10 @@ run_metabolomics_ssgsea <- function(pre, config, contrast_groups = NULL,
 #' @param contrast Optional contrast name (a key of \code{de_res$de_tables}) to
 #'   test. Defaults to the first contrast; an unknown name falls back to the
 #'   first with a warning.
-#' @return list(table, contrast, method) or NULL.
+#' @return list(table, contrast, method, provenance) or NULL. \code{provenance}
+#'   (see \code{build_metab_ora_provenance()}) records which features,
+#'   compounds and pathway members the test used. It is built from objects the
+#'   test already computed and never changes \code{table}.
 run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
@@ -975,6 +1024,8 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
         lfc_cutoff <- log2(de_cfg$linear_fc_cutoff %||% 1.5)
     }
     mapping_file <- enr_cfg$mapping_file
+    # Provenance: checksum of the mapping table before anything reads it.
+    mapping_md5_read <- .metab_prov_md5(mapping_file)
 
     # ---- Build background (all measured features mapped to IDs) ----
     mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
@@ -1029,6 +1080,7 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
 
     # ---- Load GMT sets ----
     gene_sets <- list()
+    gmt_capture <- list()   # provenance: every library as read, before merging
     gmt_files <- unlist(enr_cfg$gmt_file)
     if (is.null(gmt_files)) {
         message("metabolomics ORA: no GMT files — skipping")
@@ -1036,12 +1088,22 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
     }
     for (gf in gmt_files) {
         if (!file.exists(gf)) next
-        gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE)
+        gmt_md5_before <- .metab_prov_md5(gf)   # provenance: before the read
+        gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE,
+                                    include_records = TRUE)
         gmt <- gmt_parsed$sets
         desc_map <- gmt_parsed$descriptions
         gmt <- translate_gmt_hmdb_to_kegg(gmt, mapping_file)
         names(gmt) <- make_pathway_labels(names(gmt), desc_map)
         lib_label <- tools::file_path_sans_ext(basename(gf))
+        # Recorded before the loop below, where an equal label from a later
+        # library replaces an earlier one.
+        gmt_capture[[length(gmt_capture) + 1L]] <- list(
+            file = gf, library = lib_label, md5 = gmt_md5_before,
+            md5_after_read = .metab_prov_md5(gf),
+            records = gmt_parsed$records,
+            ids = names(gmt_parsed$sets), labels = names(gmt),
+            listed = gmt_parsed$sets, translated = gmt)
         for (nm in names(gmt)) {
             gene_sets[[nm]] <- gmt[[nm]]
             attr(gene_sets[[nm]], "library") <- lib_label
@@ -1053,6 +1115,8 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
         message("metabolomics ORA: no gene sets — skipping")
         return(NULL)
     }
+
+    gene_sets_loaded <- gene_sets   # provenance: the sets before the size filter
 
     # Filter to sets with >= 2 members in background (case-insensitive)
     bg_map <- stats::setNames(bg_ids, tolower(bg_ids))
@@ -1117,7 +1181,18 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
     list(
         table    = result_df,
         contrast = contrast_name,
-        method   = "fisher_ora"
+        method   = "fisher_ora",
+        provenance = build_metab_ora_provenance(
+            contrast = contrast_name, feature_compounds = mapped$feature_compounds,
+            universe = bg_ids, foreground = fg_ids,
+            de_tbl = de_tbl, sig_mask = sig_mask,
+            thresholds = list(pvalue_column = pval_col, p_cutoff = p_cutoff,
+                              logfc_cutoff = lfc_cutoff),
+            gmt_capture = gmt_capture, sets_loaded = gene_sets_loaded,
+            keep = keep, sets_kept = gene_sets, sets_input = gene_sets_filt,
+            lookup = bg_map, result_table = result_df,
+            gmt_files = gmt_files, mapping_file = mapping_file,
+            mapping_md5_read = mapping_md5_read)
     )
 }
 
@@ -1135,7 +1210,10 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
 #' @param contrast Optional contrast name (a key of \code{de_res$de_tables}) to
 #'   rank. Defaults to the first contrast; an unknown name falls back to the
 #'   first with a warning.
-#' @return list(table, ranks, contrast, method) or NULL.
+#' @return list(table, ranks, contrast, method, provenance) or NULL.
+#'   \code{provenance} (see \code{build_metab_gsea_provenance()}) records the
+#'   representative feature of each ranked compound and which pathway members
+#'   fgsea used. It never changes \code{table} or \code{ranks}.
 run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
@@ -1162,6 +1240,8 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     }
 
     mapping_file <- enr_cfg$mapping_file
+    # Provenance: checksum of the mapping table before anything reads it.
+    mapping_md5_read <- .metab_prov_md5(mapping_file)
 
     # ---- Build ranked list from DE log2FC ----
     contrast_name <- .resolve_enrichment_contrast(contrast, de_res, "GSEA")
@@ -1170,6 +1250,7 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     # Map feature IDs to the compound namespace via the aligned per-feature map.
     mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
     de_tbl$compound_id <- mapped$feature_map[de_tbl$feature_id]
+    de_tbl_mapped <- de_tbl   # provenance: every DE row, before the two filters
     de_tbl <- de_tbl[!is.na(de_tbl$compound_id) & nzchar(de_tbl$compound_id), ]
     de_tbl <- de_tbl[!is.na(de_tbl$logFC), ]
 
@@ -1180,11 +1261,22 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
 
     # Ranking metric: log2 fold-change
     ranks <- stats::setNames(de_tbl$logFC, de_tbl$compound_id)
+    # Provenance: the feature behind each entry of `ranks`, carried through the
+    # deduplication below by the same ordering and the same mask, so it names
+    # the feature that was actually kept (ties included).
+    # Bookkeeping only: if it cannot be set up it is NULL, the ranking goes on
+    # unchanged, and the provenance reports that it could not be built.
+    rank_feature <- tryCatch(
+        stats::setNames(as.character(de_tbl$feature_id), de_tbl$compound_id),
+        error = function(e) NULL)
 
     # Deduplicate: keep entry with largest absolute logFC
     if (any(duplicated(names(ranks)))) {
         ord <- order(abs(ranks), decreasing = TRUE)
         ranks <- ranks[ord]
+        if (!is.null(rank_feature)) {
+            rank_feature <- rank_feature[ord][!duplicated(names(ranks))]
+        }
         ranks <- ranks[!duplicated(names(ranks))]
     }
 
@@ -1194,6 +1286,7 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
 
     # ---- Load GMT sets ----
     gene_sets <- list()
+    gmt_capture <- list()   # provenance: every library as read, before merging
     gmt_files <- unlist(enr_cfg$gmt_file)
     if (is.null(gmt_files)) {
         message("metabolomics GSEA: no GMT files — skipping")
@@ -1201,12 +1294,22 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     }
     for (gf in gmt_files) {
         if (!file.exists(gf)) next
-        gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE)
+        gmt_md5_before <- .metab_prov_md5(gf)   # provenance: before the read
+        gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE,
+                                    include_records = TRUE)
         gmt <- gmt_parsed$sets
         desc_map <- gmt_parsed$descriptions
         gmt <- translate_gmt_hmdb_to_kegg(gmt, mapping_file)
         names(gmt) <- make_pathway_labels(names(gmt), desc_map)
         lib_label <- tools::file_path_sans_ext(basename(gf))
+        # Recorded before the loop below, where an equal label from a later
+        # library replaces an earlier one.
+        gmt_capture[[length(gmt_capture) + 1L]] <- list(
+            file = gf, library = lib_label, md5 = gmt_md5_before,
+            md5_after_read = .metab_prov_md5(gf),
+            records = gmt_parsed$records,
+            ids = names(gmt_parsed$sets), labels = names(gmt),
+            listed = gmt_parsed$sets, translated = gmt)
         for (nm in names(gmt)) {
             gene_sets[[nm]] <- gmt[[nm]]
             attr(gene_sets[[nm]], "library") <- lib_label
@@ -1218,6 +1321,8 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
         message("metabolomics GSEA: no gene sets — skipping")
         return(NULL)
     }
+
+    gene_sets_loaded <- gene_sets   # provenance: the sets before the size filter
 
     # Filter to sets with >= 2 members present in ranked list
     # (case-insensitive match — map GMT compound names to actual ranks keys)
@@ -1281,7 +1386,16 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
         table    = result_df,
         ranks    = ranks,
         contrast = contrast_name,
-        method   = "fgsea"
+        method   = "fgsea",
+        provenance = build_metab_gsea_provenance(
+            contrast = contrast_name, feature_compounds = mapped$feature_compounds,
+            de_tbl_mapped = de_tbl_mapped, de_tbl_ranked = de_tbl,
+            ranks = ranks, rank_feature = rank_feature,
+            gmt_capture = gmt_capture, sets_loaded = gene_sets_loaded,
+            keep = keep, sets_kept = gene_sets, sets_input = gene_sets_filt,
+            lookup = avail_map, fgsea_res = fgsea_res, result_table = result_df,
+            gmt_files = gmt_files, mapping_file = mapping_file,
+            mapping_md5_read = mapping_md5_read)
     )
 }
 
