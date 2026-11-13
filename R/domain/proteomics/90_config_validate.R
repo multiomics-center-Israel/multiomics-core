@@ -1,3 +1,19 @@
+#' Keys the pipeline reads under \code{modes$proteomics$de}
+#'
+#' \code{validate_proteomics_config()} refuses any other key: an unread key is
+#' otherwise dropped without a word, and a run that looks configured one way is
+#' fitted another. A new \code{de} setting must be added here in the same
+#' change that first reads it. \code{use_adj} and \code{use_adjusted_pval} are
+#' left out on purpose; they get their own message naming the proteomics key.
+PROTEOMICS_DE_KEYS <- c(
+    "method", "control_condition", "p_cutoff", "linear_fc_cutoff",
+    "p_adjust_method", "fdrtool_correction", "paired", "pairing_col",
+    "block_col", "volcano_n_label", "use_adj_for_pass1", "use_fdr_for_pass1",
+    # Read outside the DE fit: multiomics precomputed-DE loader, PowerPoint
+    # grouping, Shiny payload cutoff, effect-size reference level.
+    "contrasts", "condition_column", "padj_cutoff", "reference_level"
+)
+
 #' Validate Proteomics Configuration
 validate_proteomics_config <- function(cfg) {
     assert_named_list(cfg, "modes$proteomics")
@@ -161,6 +177,15 @@ validate_proteomics_config <- function(cfg) {
                 "metabolomics/lipidomics config) and would be ignored here. ",
                 "Use de$use_adj_for_pass1 to choose the pass-1 p-value."),
                 other_mode[[1]]), call. = FALSE)
+        }
+        unknown <- setdiff(de_keys, PROTEOMICS_DE_KEYS)
+        if (length(unknown) > 0) {
+            stop(sprintf(paste0(
+                "modes$proteomics$de has key(s) the pipeline does not read: %s. ",
+                "They would be ignored, so the run would not be fitted as configured.\n",
+                "  Check the spelling, or remove the key. Known keys: %s."),
+                paste(unknown, collapse = ", "),
+                paste(PROTEOMICS_DE_KEYS, collapse = ", ")), call. = FALSE)
         }
         has_canon <- "use_adj_for_pass1" %in% de_keys
         has_alias <- "use_fdr_for_pass1" %in% de_keys
