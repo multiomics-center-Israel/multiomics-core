@@ -225,7 +225,7 @@ preflight_metab_enrichment_payload <- function(enrichment_res, expr_features,
 #'
 #' @param res    Result of \code{run_metabolomics_ora()} with "ok" provenance.
 #' @param cutoff Adjusted-p threshold of the significant-only display table.
-#' @return list(display, all_tested, membership, pathway_members).
+#' @return list(display, all_tested, membership, pathway_members, no_result).
 #' @noRd
 .metab_payload_ora_unit <- function(res, cutoff) {
     p   <- res$provenance
@@ -275,7 +275,30 @@ preflight_metab_enrichment_payload <- function(enrichment_res, expr_features,
     members$pathway_id <- src$pathway_id[match(members$pathway, src$pathway)]
 
     list(display = display, all_tested = all_tested, membership = membership,
-         pathway_members = members)
+         pathway_members = members,
+         no_result = .metab_payload_no_result(src, tbl))
+}
+
+#' Pathways that were given to a test and came back without a result
+#'
+#' fgsea keeps each member of a set once and then applies its size limits, so a
+#' set that reached it with one compound listed twice is dropped and has no
+#' row in the result. It was not tested, and it was not left out by the
+#' pipeline either: it is listed here so that it does not simply vanish.
+#' Fisher's test returns a row for every set it is given, so this is empty for
+#' ORA.
+#'
+#' @param src Sources given to the test (\code{.metab_payload_tested_sources()}).
+#' @param tbl The result table.
+#' @return data.frame(pathway_id, description, pathway, library, n_listed, reason).
+#' @noRd
+.metab_payload_no_result <- function(src, tbl) {
+    missing <- src[!(src$pathway %in% as.character(tbl$pathway)), , drop = FALSE]
+    data.frame(pathway_id = missing$pathway_id, description = missing$description,
+               pathway = missing$pathway, library = missing$library,
+               n_listed = missing$n_listed,
+               reason = rep("given_to_the_test_no_result_returned", nrow(missing)),
+               stringsAsFactors = FALSE, row.names = NULL)
 }
 
 #' Re-encode one GSEA result
@@ -287,8 +310,9 @@ preflight_metab_enrichment_payload <- function(enrichment_res, expr_features,
 #' @param res    Result of \code{run_metabolomics_gsea()} with "ok" provenance.
 #' @param cutoff Adjusted-p threshold of the significant-only display table.
 #' @return list(display, all_tested, membership, pathway_members, ranking,
-#'   leading_edge): \code{ranking} is list(features, score); \code{leading_edge}
-#'   is a list of feature vectors named by pathway id, for the display rows.
+#'   leading_edge, no_result): \code{ranking} is list(features, score);
+#'   \code{leading_edge} is a list of feature vectors named by pathway id, for
+#'   the display rows.
 #' @noRd
 .metab_payload_gsea_unit <- function(res, cutoff) {
     p   <- res$provenance
@@ -339,7 +363,8 @@ preflight_metab_enrichment_payload <- function(enrichment_res, expr_features,
          membership = metab_pathway_feature_membership(p),
          pathway_members = members,
          ranking = list(features = ranked$representative_feature, score = ranked$logFC),
-         leading_edge = stats::setNames(edges[significant], src$pathway_id[k][significant]))
+         leading_edge = stats::setNames(edges[significant], src$pathway_id[k][significant]),
+         no_result = .metab_payload_no_result(src, tbl))
 }
 
 
@@ -407,10 +432,18 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
     })
 
     # ---- gene_index: the exported matrix first, then anything else referenced ----
-    referenced <- unique(unlist(lapply(built, function(b) {
-        c(b$membership$feature_id, b$ranking$features,
-          unlist(b$leading_edge, use.names = FALSE))
-    }), use.names = FALSE))
+    # Every feature the block or its provenance names, so that all of them can
+    # be resolved and flagged: pathway members, ranked and leading-edge
+    # features, and also features with no compound or outside every pathway.
+    referenced <- unique(c(
+        unlist(lapply(built, function(b) {
+            c(b$membership$feature_id, b$ranking$features,
+              unlist(b$leading_edge, use.names = FALSE))
+        }), use.names = FALSE),
+        unlist(lapply(units, function(u) {
+            c(u$res$provenance$feature_compounds$feature_id,
+              u$res$provenance$features$feature_id)
+        }), use.names = FALSE)))
     referenced <- as.character(referenced)
     referenced <- referenced[!is.na(referenced)]
     gene_index <- c(expr_features, sort(setdiff(referenced, expr_features)))
@@ -498,7 +531,8 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
         u <- units[[i]]; b <- built[[i]]; p <- u$res$provenance
         sources <- p$pathway_sources
         sources$gmt_file <- basename(sources$gmt_file)
-        c(list(all_tested = b$all_tested, membership = b$membership,
+        c(list(all_tested = b$all_tested, no_result = b$no_result,
+               membership = b$membership,
                pathway_members = b$pathway_members, pathway_sources = sources,
                features = p$features, diagnostics = p$diagnostics),
           if (identical(u$method, "ora")) {
@@ -524,6 +558,7 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
                 return(data.frame(analysis = analysis, contrast = contrast,
                                   state = "no_result", n_tested = NA_integer_,
                                   n_significant = NA_integer_,
+                                  n_pathways_without_result = NA_integer_,
                                   provenance_status = NA_character_,
                                   stringsAsFactors = FALSE))
             }
@@ -532,6 +567,7 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
             data.frame(analysis = analysis, contrast = contrast,
                        state = if (n_sig > 0) "significant" else "no_significant_pathways",
                        n_tested = nrow(tested), n_significant = as.integer(n_sig),
+                       n_pathways_without_result = nrow(built[[i]]$no_result),
                        provenance_status = units[[i]]$res$provenance$status,
                        stringsAsFactors = FALSE)
         }))
@@ -540,6 +576,7 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
         status <- data.frame(analysis = character(0), contrast = character(0),
                              state = character(0), n_tested = integer(0),
                              n_significant = integer(0),
+                             n_pathways_without_result = integer(0),
                              provenance_status = character(0), stringsAsFactors = FALSE)
     }
 
@@ -580,7 +617,11 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
 #' Works for every tested pathway, significant or not. Reads only the payload,
 #' so it can be used on a saved RDS without the pipeline's results.
 #'
-#' \code{result} is the pathway's row with its complete original statistics.
+#' \code{state} is \code{"tested"}, or \code{"no_result"} for a pathway that was
+#' given to the test and came back without a result (fgsea drops a set whose
+#' members collapse below its size limit); \code{result} then has no
+#' statistics. Otherwise \code{result} is the pathway's row with its complete
+#' original statistics.
 #' \code{compounds} has one row per member the library lists, duplicates and
 #' unmeasured members included, with what the test did with it. \code{features}
 #' has one row per measured feature of those compounds, with its role:
@@ -598,7 +639,8 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
 #' @param contrast   Contrast name.
 #' @param pathway_id Pathway id (the \code{ID} column of the display tables,
 #'   \code{pathway_id} of \code{all_tested}).
-#' @return list(analysis, contrast, pathway_id, result, compounds, features).
+#' @return list(analysis, contrast, pathway_id, state, result, compounds,
+#'   features).
 metab_enrichment_pathway_detail <- function(payload, analysis, contrast, pathway_id) {
     prov <- payload$enrichment_provenance
     if (is.null(prov)) {
@@ -621,6 +663,13 @@ metab_enrichment_pathway_detail <- function(payload, analysis, contrast, pathway
              paste(names(prov[[key]]), collapse = ", "), ".", call. = FALSE)
     }
     result <- unit$all_tested[unit$all_tested$pathway_id == pathway_id, , drop = FALSE]
+    state  <- "tested"
+    if (nrow(result) == 0) {
+        # Given to the test, and no result came back (see `no_result`): there
+        # are no statistics, but its compounds and features are on record.
+        result <- unit$no_result[unit$no_result$pathway_id == pathway_id, , drop = FALSE]
+        state  <- "no_result"
+    }
     if (nrow(result) == 0) {
         stop("metab_enrichment_pathway_detail(): pathway '", pathway_id, "' was not ",
              "tested by ", toupper(key), " for '", contrast, "'. The tested pathways ",
@@ -659,6 +708,6 @@ metab_enrichment_pathway_detail <- function(payload, analysis, contrast, pathway
     rownames(result) <- NULL; rownames(compounds) <- NULL; rownames(features) <- NULL
 
     list(analysis = toupper(key), contrast = as.character(contrast),
-         pathway_id = as.character(pathway_id),
+         pathway_id = as.character(pathway_id), state = state,
          result = result, compounds = compounds, features = features)
 }

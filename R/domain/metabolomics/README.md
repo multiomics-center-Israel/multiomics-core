@@ -223,11 +223,15 @@ apart throughout:
 -   GSEA rankings and leading edges are in the representative feature of each
     compound; no other feature of a compound appears in them.
 -   `gene_index` starts with the feature ids of the exported matrix, in its row
-    order. Other referenced features follow, and
+    order. Every other feature the block or its provenance names follows, and
     `enrichment_provenance$feature_index$in_expr_norm` tells them apart.
 -   An analysis that ran and found nothing has a manifest row with status
     `empty` and a zero-row table. One with no result has no manifest row and
     is `no_result` in `enrichment_provenance$status`.
+-   A pathway that was given to fgsea and came back without a result (its
+    members collapse below fgsea's size limit once duplicates are dropped) is
+    listed in `enrichment_provenance$gsea[[contrast]]$no_result`, apart from
+    `all_tested`, and the detail reader returns it with state `no_result`.
 -   The manifest rows are the layout's own; `storage_key` here names the unit's
     place in the block, not a directory.
 
