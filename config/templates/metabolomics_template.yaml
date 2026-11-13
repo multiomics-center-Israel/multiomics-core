@@ -264,6 +264,11 @@ modes:
       #   "P.Value"   - raw p-value (default; MetaboAnalyst convention)
       #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
       pvalue_column: "P.Value"
+      # Add the ORA and GSEA results to the Shiny payload in the shape the app
+      # reads for RNA-seq (`enrichment`), with `enrichment_provenance` beside
+      # it. Off by default: the payload is then exactly as before. Needs
+      # run_enrichment: true to have anything to add.
+      shiny_payload: false
 
       # QEA (globaltest) options. QEA and ssGSEA run on the matrix the
       # differential-abundance step tests on (log-normalized, biological samples

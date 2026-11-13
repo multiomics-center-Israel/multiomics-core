@@ -189,8 +189,15 @@ file.
 `build_metab_enrichment_payload()` (`07b_shiny_enrichment_payload.R`) turns a
 run's ORA and GSEA results into the two keys the Shiny payload carries side by
 side. It is a re-encoding of results and provenance: nothing is recomputed, and
-a result whose provenance is not `"ok"` stops it. It is not yet called by
-`build_shiny_payload_metabolomics()`.
+a result whose provenance is not `"ok"` stops it.
+
+It is **opt-in**. `build_shiny_payload_metabolomics()` adds the two keys only
+when `modes.metabolomics.enrichment.shiny_payload: true`. With the key absent or
+false the payload is exactly what it was. With it on, no existing key changes
+(the legacy `enrichment_ora`, `enrichment_gsea`, `enrichment_qea` and
+`enrichment_ssgsea` tables stay), a run without enrichment results adds
+nothing, and a result that cannot be encoded correctly stops the payload target
+with the reason.
 
 -   **`enrichment`** has exactly the nine components the app reads for RNA-seq
     (`available`, `gene_index`, `config`, `manifest`, `ora`, `gsea`,
