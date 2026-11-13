@@ -173,6 +173,27 @@ test_that("gene_index starts with the exported matrix, and flags everything else
     expect_identical(sum(fi$in_expr_norm), n)
 })
 
+test_that("every feature provenance names is in gene_index, pathway member or not", {
+    skip_if_not_installed("fgsea")
+    case <- make_payload_case()
+    # n1 has no compound and is in no pathway; leave it out of the matrix too.
+    case$expr_features <- setdiff(case$expr_features, "n1")
+    out <- build_case_payload(case)
+    gi <- out$enrichment$gene_index
+    prov <- out$enrichment_provenance
+
+    expect_identical(gi[-seq_along(case$expr_features)], c("g30", "n1"))
+    expect_true(all(prov$feature_compounds$feature_id %in% gi))
+    for (method in c("ora", "gsea")) {
+        for (unit in prov[[method]]) expect_true(all(unit$features$feature_id %in% gi))
+    }
+    fi <- prov$feature_index
+    expect_identical(fi$feature_id[!fi$in_expr_norm], c("g30", "n1"))
+    # What the preflight announces is what happens.
+    expect_match(prov$preflight$detail[prov$preflight$check == "features_outside_expr_norm"],
+                 "^2 feature")
+})
+
 # ---- 3. ORA ----------------------------------------------------------------------------
 
 test_that("ORA keeps compound counts and feature lists apart", {
@@ -366,8 +387,9 @@ test_that("the detail reader shows compounds and features behind an ORA pathway"
     out <- build_case_payload(make_payload_case())
 
     d <- metab_enrichment_pathway_detail(out, "ORA", "A vs B", "PW1")
-    expect_identical(names(d), c("analysis", "contrast", "pathway_id", "result",
-                                 "compounds", "features"))
+    expect_identical(names(d), c("analysis", "contrast", "pathway_id", "state",
+                                 "result", "compounds", "features"))
+    expect_identical(d$state, "tested")
     expect_identical(nrow(d$result), 1L)
     expect_true(d$result$significant)
     expect_identical(d$result$overlap, 9L)
@@ -435,6 +457,49 @@ test_that("the detail reader shows representatives and the leading edge of a GSE
     c108 <- pw2$compounds[pw2$compounds$member_as_listed == "C00108", ]
     expect_identical(c(c108$in_input_set, c108$measured), c(FALSE, TRUE))
     expect_true(is.na(c108$rank))
+})
+
+test_that("a pathway fgsea returned nothing for is kept, and told apart from an untested one", {
+    skip_if_not_installed("fgsea")
+    # One compound listed twice: the pipeline's filter counts two matches and
+    # passes it on; fgsea keeps the compound once and drops the set.
+    dup <- paste(c("PW5", "Dup", "C00001", "C00001"), collapse = "\t")
+    out <- build_case_payload(make_payload_case(second_library = dup))
+    prov <- out$enrichment_provenance
+    gsea <- prov$gsea[["A vs B"]]
+
+    expect_identical(names(gsea$no_result), c("pathway_id", "description", "pathway",
+                                              "library", "n_listed", "reason"))
+    expect_identical(gsea$no_result$pathway_id, "PW5")
+    expect_identical(gsea$no_result$n_listed, 2L)
+    expect_false("PW5" %in% gsea$all_tested$pathway_id)
+    expect_false("PW5" %in% out$enrichment$gsea$combined$fc[["A vs B"]]$ID)
+    st <- prov$status
+    expect_identical(
+        st$n_pathways_without_result[st$analysis == "GSEA" & st$contrast == "A vs B"], 1L)
+    expect_identical(st$n_tested[st$analysis == "GSEA" & st$contrast == "A vs B"], 3L)
+
+    d <- metab_enrichment_pathway_detail(out, "GSEA", "A vs B", "PW5")
+    expect_identical(d$state, "no_result")
+    expect_identical(d$result$reason, "given_to_the_test_no_result_returned")
+    expect_identical(d$compounds$in_input_set, c(TRUE, TRUE))
+    expect_identical(d$compounds$in_effective_statistic, c(FALSE, FALSE))
+    expect_identical(d$features$feature_id, "g01")
+    expect_identical(c(d$features$compound_ranked, d$features$contributes_to_score,
+                       d$features$in_leading_edge), c(TRUE, FALSE, FALSE))
+
+    # ORA returns a row for every set it is given, so there the same pathway
+    # is simply a tested one, with the size the test used.
+    ora <- prov$ora[["A vs B"]]
+    expect_identical(nrow(ora$no_result), 0L)
+    o <- metab_enrichment_pathway_detail(out, "ORA", "A vs B", "PW5")
+    expect_identical(o$state, "tested")
+    expect_identical(o$result$pathway_size, 2L)
+    expect_identical(
+        st$n_pathways_without_result[st$analysis == "ORA" & st$contrast == "A vs B"], 0L)
+    # A pathway in no library is still an error.
+    expect_error(metab_enrichment_pathway_detail(out, "GSEA", "A vs B", "PW9"),
+                 "was not tested")
 })
 
 test_that("the detail reader says what is missing", {
