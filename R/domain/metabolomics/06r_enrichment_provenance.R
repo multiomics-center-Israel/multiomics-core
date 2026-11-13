@@ -278,7 +278,9 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 #'
 #' The mapping table is read several times during a test (once for the
 #' features, once per library), so it has no single read to bracket; its
-#' checksum before the first read is compared with the one at the end.
+#' checksum before the first read is compared with the one at the end. A
+#' mapping table that is absent before the first read and present at the end
+#' is treated as changed, because a later read may have used it.
 #'
 #' @param gmt_files        Resolved GMT paths, as the test received them.
 #' @param mapping_file     Resolved HMDB -> KEGG path (or NULL).
@@ -332,8 +334,13 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
     bracketed <- ifelse(used$role == "gmt",
                         !is.na(used$md5_after_read) & used$md5 == used$md5_after_read,
                         TRUE)
+    # A mapping table that did not exist before the first read and exists at the
+    # end may have been created in between and read by a later step (it is read
+    # once per library). Whether it was cannot be told, so this counts as a change.
+    mapping  <- reference_files[reference_files$role == "mapping", , drop = FALSE]
+    appeared <- any(is.na(mapping$md5) & !is.na(mapping$md5_at_end))
     all(!is.na(used$md5) & !is.na(used$md5_at_end) & used$md5 == used$md5_at_end &
-            bracketed)
+            bracketed) && !appeared
 }
 
 

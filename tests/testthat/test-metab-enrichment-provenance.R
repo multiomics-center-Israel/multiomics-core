@@ -723,6 +723,18 @@ test_that("a library must have one checksum before its read, after it and at the
     skipped <- ref(NA_character_, NA_character_, NA_character_)
     skipped$read <- FALSE
     expect_true(.metab_prov_references_unchanged(skipped))
+    # ... unless it is a mapping table that appeared during the run: a later
+    # step may have read it, so the result cannot be tied to "no mapping".
+    appeared <- ref(NA_character_, NA_character_, "a", role = "mapping")
+    appeared$read <- FALSE
+    expect_false(.metab_prov_references_unchanged(appeared))
+    absent <- ref(NA_character_, NA_character_, NA_character_, role = "mapping")
+    absent$read <- FALSE
+    expect_true(.metab_prov_references_unchanged(absent))
+    # A library that appears after the loop skipped it was never read.
+    late_gmt <- ref(NA_character_, NA_character_, "a")
+    late_gmt$read <- FALSE
+    expect_true(.metab_prov_references_unchanged(late_gmt))
 })
 
 test_that("a reference file that changes during the run makes the provenance inconsistent", {
