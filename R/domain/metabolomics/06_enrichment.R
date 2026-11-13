@@ -1088,6 +1088,7 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
     }
     for (gf in gmt_files) {
         if (!file.exists(gf)) next
+        gmt_md5_before <- .metab_prov_md5(gf)   # provenance: before the read
         gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE,
                                     include_records = TRUE)
         gmt <- gmt_parsed$sets
@@ -1098,7 +1099,8 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
         # Recorded before the loop below, where an equal label from a later
         # library replaces an earlier one.
         gmt_capture[[length(gmt_capture) + 1L]] <- list(
-            file = gf, library = lib_label, md5 = .metab_prov_md5(gf),
+            file = gf, library = lib_label, md5 = gmt_md5_before,
+            md5_after_read = .metab_prov_md5(gf),
             records = gmt_parsed$records,
             ids = names(gmt_parsed$sets), labels = names(gmt),
             listed = gmt_parsed$sets, translated = gmt)
@@ -1292,6 +1294,7 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     }
     for (gf in gmt_files) {
         if (!file.exists(gf)) next
+        gmt_md5_before <- .metab_prov_md5(gf)   # provenance: before the read
         gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE,
                                     include_records = TRUE)
         gmt <- gmt_parsed$sets
@@ -1302,7 +1305,8 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
         # Recorded before the loop below, where an equal label from a later
         # library replaces an earlier one.
         gmt_capture[[length(gmt_capture) + 1L]] <- list(
-            file = gf, library = lib_label, md5 = .metab_prov_md5(gf),
+            file = gf, library = lib_label, md5 = gmt_md5_before,
+            md5_after_read = .metab_prov_md5(gf),
             records = gmt_parsed$records,
             ids = names(gmt_parsed$sets), labels = names(gmt),
             listed = gmt_parsed$sets, translated = gmt)

@@ -141,7 +141,7 @@ added to any table or `results.tsv`.
 | Element | What it records |
 |---|---|
 | `status`, `diagnostics`, `error` | `"ok"`, `"inconsistent"` (a check against the result failed) or `"failed"` (could not be built) |
-| `reference_files` | the GMT and mapping files the test was given, whether each was read, and its md5 taken beside the read; a file that changed while the test ran makes the provenance inconsistent |
+| `reference_files` | the GMT and mapping files the test was given, whether each was read, and its md5 taken before the read; a library is hashed again after its read, and a file that changed while the test ran makes the provenance inconsistent |
 | `feature_compounds` | per measured feature: the compound id used, which step chose it (`kegg_column` > `hmdb_mapping` > `name_column`), every KEGG id in the cell, and whether the cell was ambiguous |
 | `pathway_sources` | every GMT line and what became of it: tested, replaced by a later line with the same id, replaced by an equal label earlier in the same file or in a later library, too few matches, or not returned by fgsea |
 | `pathway_members` | every listed member of every set given to the test, duplicates kept |
