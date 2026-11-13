@@ -108,6 +108,8 @@ metab_shiny_enrichment_enabled <- function(config) {
 #'   \item duplicated or empty feature ids in the exported matrix;
 #'   \item two tested pathways of one result sharing a pathway id, or a tested
 #'     pathway without an id;
+#'   \item a pathway id that names different pathways in different analyses or
+#'     contrasts;
 #'   \item a result row that provenance has no source for.
 #' }
 #'
@@ -144,6 +146,7 @@ preflight_metab_enrichment_payload <- function(enrichment_res, expr_features,
     if (length(units) == 0) add("results", "info", "no ORA or GSEA result in this run")
 
     feature_ids <- expr_features
+    id_labels   <- list()   # pathway id -> labels, over every unit
     for (u in units) {
         tag <- paste0(u$analysis, ":", u$contrast)
         problems <- validate_metab_enrichment_provenance(u$res$provenance)
@@ -157,6 +160,9 @@ preflight_metab_enrichment_payload <- function(enrichment_res, expr_features,
 
         src <- .metab_payload_tested_sources(p)
         ids <- src$pathway_id
+        id_labels[[length(id_labels) + 1L]] <- data.frame(
+            pathway_id = src$pathway_id, pathway = src$pathway, unit = rep(tag, nrow(src)),
+            stringsAsFactors = FALSE)
         if (any(is.na(ids) | !nzchar(ids))) {
             add(paste0("pathway_ids:", tag), "blocker", "a tested pathway has no id")
         } else if (anyDuplicated(ids) > 0) {
@@ -182,6 +188,23 @@ preflight_metab_enrichment_payload <- function(enrichment_res, expr_features,
         add(paste0("ambiguous_kegg_cells:", tag), "info",
             paste0(sum(fc$ambiguous), " feature(s) list more than one KEGG id; ",
                    "the first is used"))
+    }
+
+    # The block has ONE namespace of pathway ids for all analyses and contrasts
+    # (pathway_membership is keyed by id alone). An id that names one pathway
+    # in one unit and another pathway in another unit would merge the two.
+    if (length(id_labels) > 0) {
+        pairs <- unique(do.call(rbind, id_labels)[, c("pathway_id", "pathway")])
+        pairs <- pairs[!is.na(pairs$pathway_id) & nzchar(pairs$pathway_id), , drop = FALSE]
+        clash <- unique(pairs$pathway_id[duplicated(pairs$pathway_id)])
+        if (length(clash) > 0) {
+            add("pathway_ids_across_units", "blocker", paste0(
+                "a pathway id names different pathways in different analyses or ",
+                "contrasts, e.g. ", some(clash),
+                ". The block keys pathways by id alone, so they would be merged."))
+        } else {
+            add("pathway_ids_across_units", "ok")
+        }
     }
 
     slash <- unique(feature_ids[!is.na(feature_ids) & grepl("/", feature_ids, fixed = TRUE)])

@@ -554,6 +554,26 @@ test_that("two tested pathways with one id block the payload", {
     expect_error(build_case_payload(case), "two tested pathways share an id")
 })
 
+test_that("an id that names different pathways in different units blocks the payload", {
+    skip_if_not_installed("fgsea")
+    case <- make_payload_case()
+    # In one unit only, PW2 and PW3 trade ids. No unit has a duplicate id, and
+    # across units "PW2" now names two different pathways.
+    src <- case$enrichment_res$gsea_by_contrast[["C vs D"]]$res$provenance$pathway_sources
+    src$pathway_id[match(c("PW2 - Second", "PW3 - Third"), src$pathway)] <- c("PW3", "PW2")
+    case$enrichment_res$gsea_by_contrast[["C vs D"]]$res$provenance$pathway_sources <- src
+
+    pf <- preflight_metab_enrichment_payload(case$enrichment_res, case$expr_features)
+    expect_false(any(pf$level == "blocker" & grepl("^pathway_ids:", pf$check)))
+    expect_identical(pf$level[pf$check == "pathway_ids_across_units"], "blocker")
+    expect_error(build_case_payload(case), "pathway_ids_across_units")
+
+    # A clean run passes the same check.
+    clean <- make_payload_case()
+    ok <- preflight_metab_enrichment_payload(clean$enrichment_res, clean$expr_features)
+    expect_identical(ok$level[ok$check == "pathway_ids_across_units"], "ok")
+})
+
 test_that("a result without usable provenance blocks the payload", {
     skip_if_not_installed("fgsea")
     case <- make_payload_case()
