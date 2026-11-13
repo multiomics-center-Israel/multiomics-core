@@ -34,7 +34,7 @@
 # keeps each member once, so only the first occurrence is effective, and a set
 # fgsea drops for its size has none. Neither behaviour is changed here.
 #
-# Reuses: %||%, fingerprint_reference_files()
+# Reuses: %||%
 
 .METAB_PROVENANCE_SCHEMA <- 1L
 
@@ -80,12 +80,47 @@ metab_provenance_error <- function(step, e) {
 #' @noRd
 .metab_provenance_guard <- function(method, contrast, expr) {
     tryCatch(expr, error = function(e) {
-        warning("metabolomics ", toupper(method), " provenance could not be built",
-                " for '", contrast, "': ", conditionMessage(e),
-                ". The statistical result is unaffected; its provenance has ",
-                "status \"failed\".", call. = FALSE)
+        .metab_prov_warn("metabolomics ", toupper(method),
+                         " provenance could not be built for '", contrast, "': ",
+                         conditionMessage(e), ". The statistical result is ",
+                         "unaffected; its provenance has status \"failed\".")
         .metab_provenance_failed(method, contrast, "build", conditionMessage(e))
     })
+}
+
+#' Warn about provenance without ever stopping the analysis
+#'
+#' Under \code{options(warn = 2)} a warning is raised as an error. Raised from
+#' the provenance code, that error would end the ORA or GSEA call after its
+#' statistics were computed. It is caught here instead: the warning is then
+#' not shown, and the provenance record still carries the status and reason.
+#'
+#' @param ... Pieces of the message, pasted together.
+#' @return NULL, invisibly.
+#' @noRd
+.metab_prov_warn <- function(...) {
+    tryCatch(warning(..., call. = FALSE), error = function(e) NULL)
+    invisible(NULL)
+}
+
+#' Checksum of one file, or NA
+#'
+#' Called from the ORA and GSEA functions beside each read of a reference
+#' file, so it must never fail: anything that is not one existing file gives NA.
+#'
+#' @param path A file path (or NULL).
+#' @return The md5 as a character scalar, or NA_character_.
+#' @noRd
+.metab_prov_md5 <- function(path) {
+    tryCatch({
+        p <- as.character(unlist(path, use.names = FALSE))
+        if (length(p) != 1L || is.na(p) || !nzchar(p) || !file.exists(p) ||
+            dir.exists(p)) {
+            NA_character_
+        } else {
+            unname(tools::md5sum(p))
+        }
+    }, error = function(e) NA_character_)
 }
 
 #' One row of the diagnostics table
@@ -111,11 +146,11 @@ metab_provenance_error <- function(step, e) {
     rownames(diagnostics) <- NULL
     failed <- diagnostics$check[!diagnostics$passed]
     if (length(failed) > 0) {
-        warning("metabolomics ", toupper(prov$method), " provenance for '",
-                prov$contrast, "' does not agree with the result it describes ",
-                "(failed: ", paste(failed, collapse = ", "), "). The statistical ",
-                "result is unaffected; its provenance has status ",
-                "\"inconsistent\".", call. = FALSE)
+        .metab_prov_warn("metabolomics ", toupper(prov$method), " provenance for '",
+                         prov$contrast, "' does not agree with the result it ",
+                         "describes (failed: ", paste(failed, collapse = ", "),
+                         "). The statistical result is unaffected; its ",
+                         "provenance has status \"inconsistent\".")
     }
     head <- list(
         schema_version = .METAB_PROVENANCE_SCHEMA,
@@ -233,12 +268,23 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 
 #' The reference files a test was configured with, and their checksums
 #'
-#' @param gmt_files    Resolved GMT paths, as the test received them.
-#' @param mapping_file Resolved HMDB -> KEGG path (or NULL).
-#' @return data.frame(role, path, md5, read). \code{read} is FALSE, and
-#'   \code{md5} NA, for a configured file that does not exist: the test skips it.
+#' \code{md5} is the checksum taken beside the read, so it describes the
+#' content the statistics were computed from. \code{md5_at_end} is taken when
+#' the provenance is built. They differ when a file was changed while the test
+#' ran, and the provenance is then marked inconsistent: the result is real, but
+#' the file on disk is no longer the one behind it.
+#'
+#' @param gmt_files        Resolved GMT paths, as the test received them.
+#' @param mapping_file     Resolved HMDB -> KEGG path (or NULL).
+#' @param gmt_capture      Per-library capture from the test's GMT loop, with
+#'   the checksum of each library taken when it was read.
+#' @param mapping_md5_read Checksum of the mapping file taken before its first
+#'   read (NA when there is no such file).
+#' @return data.frame(role, path, md5, md5_at_end, read). \code{read} is FALSE,
+#'   and \code{md5} NA, for a configured file the test did not read.
 #' @noRd
-.metab_prov_reference_files <- function(gmt_files, mapping_file) {
+.metab_prov_reference_files <- function(gmt_files, mapping_file, gmt_capture,
+                                        mapping_md5_read) {
     gmt  <- as.character(unlist(gmt_files, use.names = FALSE))
     map  <- as.character(unlist(mapping_file, use.names = FALSE))
     path <- c(gmt, map)
@@ -247,12 +293,28 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
     path <- path[ok]
     role <- role[ok]
 
-    read <- file.exists(path) & !dir.exists(path)
-    md5  <- rep(NA_character_, length(path))
-    if (any(read)) md5[read] <- unname(fingerprint_reference_files(path[read]))
+    read_file <- vapply(gmt_capture, function(g) as.character(g$file), character(1))
+    read_md5  <- vapply(gmt_capture, function(g) {
+        as.character(g$md5 %||% NA_character_)
+    }, character(1))
+    md5 <- ifelse(role == "gmt", read_md5[match(path, read_file)],
+                  as.character(mapping_md5_read %||% NA_character_)[1])
+    read <- ifelse(role == "gmt", path %in% read_file, !is.na(md5))
 
-    data.frame(role = role, path = path, md5 = md5, read = read,
-               stringsAsFactors = FALSE)
+    data.frame(role = role, path = path, md5 = as.character(md5),
+               md5_at_end = vapply(path, .metab_prov_md5, character(1),
+                                   USE.NAMES = FALSE),
+               read = as.logical(read), stringsAsFactors = FALSE)
+}
+
+#' Whether every file that was read still has the content that was read
+#'
+#' @param reference_files Result of \code{.metab_prov_reference_files()}.
+#' @return TRUE or FALSE.
+#' @noRd
+.metab_prov_references_unchanged <- function(reference_files) {
+    used <- reference_files[reference_files$read, , drop = FALSE]
+    all(!is.na(used$md5) & !is.na(used$md5_at_end) & used$md5 == used$md5_at_end)
 }
 
 
@@ -285,6 +347,9 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 #'
 #' One row per accepted GMT line, so that a line replaced by a later line with
 #' the same id, or by an equal label in a later library, is still on record.
+#' Two different ids of one file can also give the same label ("A" described as
+#' "b - c", and "A - b" described as "c"). The merge then keeps the first of
+#' them, and the others are recorded as replaced.
 #'
 #' @param gmt_capture Per-library capture from the test's GMT loop.
 #' @param sets_loaded The merged sets, before the size filter.
@@ -312,6 +377,10 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
             pos   <- match(label, names(sets_loaded))
             fate <- if (any(rec_ids[seq_along(rec_ids) > j] == r$pathway_id)) {
                 "replaced_same_id_in_file"
+            } else if (!identical(g$ids[[match(label, g$labels)]], r$pathway_id)) {
+                # Another id of this file has the same label and comes first:
+                # the merge looks sets up by label and finds that one.
+                "replaced_same_label_in_file"
             } else if (label %in% later) {
                 "replaced_same_label_later_library"
             } else if (is.na(pos)) {
@@ -426,14 +495,18 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 #' @param lookup            Lower-case lookup of the universe (\code{bg_map}).
 #' @param result_table      The result table.
 #' @param gmt_files,mapping_file Resolved reference file paths.
+#' @param mapping_md5_read  Checksum of the mapping file before its first read.
 #' @return A provenance list (see the file header); never an error.
 build_metab_ora_provenance <- function(contrast, feature_compounds,
                                        universe, foreground, de_tbl, sig_mask,
                                        thresholds, gmt_capture, sets_loaded, keep,
                                        sets_kept, sets_input, lookup, result_table,
-                                       gmt_files, mapping_file) {
+                                       gmt_files, mapping_file,
+                                       mapping_md5_read = NA_character_) {
     .metab_provenance_guard("ora", contrast, {
         fc      <- .metab_prov_feature_compounds(feature_compounds)
+        refs    <- .metab_prov_reference_files(gmt_files, mapping_file, gmt_capture,
+                                               mapping_md5_read)
         sources <- .metab_prov_pathway_sources(gmt_capture, sets_loaded, keep)
         mem     <- .metab_prov_pathway_members(gmt_capture, sets_kept, sets_input, lookup)
 
@@ -486,6 +559,8 @@ build_metab_ora_provenance <- function(contrast, feature_compounds,
             .metab_prov_check("foreground_from_significant_features",
                 setequal(foreground, unique(features$compound_id[
                     features$significant & features$compound_in_universe]))),
+            .metab_prov_check("reference_files_unchanged",
+                .metab_prov_references_unchanged(refs)),
             .metab_prov_check("library_sources",
                 .metab_prov_sources_match(gmt_capture, sets_loaded) &&
                     !any(sources$fate == "not_loaded")),
@@ -511,7 +586,7 @@ build_metab_ora_provenance <- function(contrast, feature_compounds,
         .metab_prov_finish(list(
             method            = "ora",
             contrast          = contrast,
-            reference_files   = .metab_prov_reference_files(gmt_files, mapping_file),
+            reference_files   = refs,
             feature_compounds = fc,
             pathway_sources   = sources,
             pathway_members   = members,
@@ -557,14 +632,18 @@ build_metab_ora_provenance <- function(contrast, feature_compounds,
 #' @param fgsea_res         fgsea's result.
 #' @param result_table      The result table.
 #' @param gmt_files,mapping_file Resolved reference file paths.
+#' @param mapping_md5_read  Checksum of the mapping file before its first read.
 #' @return A provenance list (see the file header); never an error.
 build_metab_gsea_provenance <- function(contrast, feature_compounds, de_tbl_mapped,
                                         de_tbl_ranked, ranks, rank_feature,
                                         gmt_capture, sets_loaded, keep, sets_kept,
                                         sets_input, lookup, fgsea_res, result_table,
-                                        gmt_files, mapping_file) {
+                                        gmt_files, mapping_file,
+                                        mapping_md5_read = NA_character_) {
     .metab_provenance_guard("gsea", contrast, {
         fc       <- .metab_prov_feature_compounds(feature_compounds)
+        refs     <- .metab_prov_reference_files(gmt_files, mapping_file, gmt_capture,
+                                                mapping_md5_read)
         returned <- as.character(fgsea_res$pathway)
         sources  <- .metab_prov_pathway_sources(gmt_capture, sets_loaded, keep,
                                                 returned = returned)
@@ -669,6 +748,8 @@ build_metab_gsea_provenance <- function(contrast, feature_compounds, de_tbl_mapp
                 !anyNA(rep_row) && all(cand_logfc[rep_row] == unname(ranks))),
             .metab_prov_check("representative_is_largest_abs_logfc",
                 all(abs(unname(ranks)) == unname(max_abs[compound_ids]))),
+            .metab_prov_check("reference_files_unchanged",
+                .metab_prov_references_unchanged(refs)),
             .metab_prov_check("library_sources",
                 .metab_prov_sources_match(gmt_capture, sets_loaded) &&
                     !any(sources$fate == "not_loaded")),
@@ -691,7 +772,7 @@ build_metab_gsea_provenance <- function(contrast, feature_compounds, de_tbl_mapp
         .metab_prov_finish(list(
             method            = "gsea",
             contrast          = contrast,
-            reference_files   = .metab_prov_reference_files(gmt_files, mapping_file),
+            reference_files   = refs,
             feature_compounds = fc,
             pathway_sources   = sources,
             pathway_members   = members,

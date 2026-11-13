@@ -141,9 +141,9 @@ added to any table or `results.tsv`.
 | Element | What it records |
 |---|---|
 | `status`, `diagnostics`, `error` | `"ok"`, `"inconsistent"` (a check against the result failed) or `"failed"` (could not be built) |
-| `reference_files` | the GMT and mapping files the test was given, with md5, and whether each was read |
+| `reference_files` | the GMT and mapping files the test was given, whether each was read, and its md5 taken beside the read; a file that changed while the test ran makes the provenance inconsistent |
 | `feature_compounds` | per measured feature: the compound id used, which step chose it (`kegg_column` > `hmdb_mapping` > `name_column`), every KEGG id in the cell, and whether the cell was ambiguous |
-| `pathway_sources` | every GMT line and what became of it: tested, replaced by a later line with the same id, replaced by an equal label in a later library, too few matches, or not returned by fgsea |
+| `pathway_sources` | every GMT line and what became of it: tested, replaced by a later line with the same id, replaced by an equal label earlier in the same file or in a later library, too few matches, or not returned by fgsea |
 | `pathway_members` | every listed member of every set given to the test, duplicates kept |
 | ORA: `thresholds`, `compounds`, `features` | universe and foreground per compound; significance per feature, separately |
 | GSEA: `ranked`, `features` | the final ranking with the representative feature of each compound; every feature's role |
@@ -175,7 +175,9 @@ the score or the leading edge.
 
 Code that needs provenance calls `require_metab_enrichment_provenance(res)`,
 which stops unless the status is `"ok"`. A failed or inconsistent provenance
-leaves the statistical result untouched and raises a warning.
+leaves the statistical result untouched and raises a warning. The warning can
+never end the analysis: where warnings are turned into errors
+(`options(warn = 2)`) it is dropped, and the status stays on the record.
 
 `upstream_origin = "not_tracked"` on an id taken from the `KEGG` column means
 the enrichment stage read the column as it found it: it cannot tell whether

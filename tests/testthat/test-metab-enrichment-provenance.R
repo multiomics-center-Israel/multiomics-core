@@ -341,7 +341,7 @@ test_that("ORA provenance has the agreed elements and passes its own checks", {
     expect_setequal(p$diagnostics$check,
                     c("universe_size", "universe_is_measured_compounds",
                       "foreground_size", "foreground_from_significant_features",
-                      "library_sources", "pathway_inputs", "pathway_size", "overlap",
+                      "reference_files_unchanged", "library_sources", "pathway_inputs", "pathway_size", "overlap",
                       "overlap_compounds"))
     expect_identical(p$thresholds, list(pvalue_column = "P.Value", p_cutoff = 0.05,
                                         logfc_cutoff = log2(1.5)))
@@ -454,7 +454,8 @@ test_that("GSEA provenance has the agreed elements and passes its own checks", {
     expect_true(all(p$diagnostics$passed))
     expect_setequal(p$diagnostics$check,
                     c("ranked_follows_ranks", "ranked_universe", "representative_logfc",
-                      "representative_is_largest_abs_logfc", "library_sources",
+                      "representative_is_largest_abs_logfc",
+                      "reference_files_unchanged", "library_sources",
                       "pathway_inputs", "pathway_size", "leading_edge"))
     expect_identical(require_metab_enrichment_provenance(res), p)
 })
@@ -682,7 +683,7 @@ test_that("the reference files that were read are recorded with their checksums"
     case <- make_prov_case()
     ref <- run_ora(case)$provenance$reference_files
 
-    expect_identical(names(ref), c("role", "path", "md5", "read"))
+    expect_identical(names(ref), c("role", "path", "md5", "md5_at_end", "read"))
     expect_identical(ref$role, c("gmt", "gmt", "gmt", "mapping"))
     expect_identical(ref$path, c(case$files$lib_a, case$files$lib_b,
                                  case$files$missing, case$files$mapping))
@@ -691,6 +692,61 @@ test_that("the reference files that were read are recorded with their checksums"
         c(case$files$lib_a, case$files$lib_b, case$files$mapping))))
     # A configured library that does not exist was skipped, and says so.
     expect_true(is.na(ref$md5[3]))
+    # Nothing changed while the test ran: the checksum taken at the read and
+    # the one taken at the end agree.
+    expect_identical(ref$md5_at_end, ref$md5)
+})
+
+test_that("a reference file that changes during the run makes the provenance inconsistent", {
+    case <- make_prov_case()
+    base <- run_ora(case, prov_env$baseline_run_metabolomics_ora)
+    # Every checksum differs from the one before it, as if each file had been
+    # rewritten between its read and the end of the run.
+    calls <- 0L
+    local_prov_stub(".metab_prov_md5", function(path) {
+        calls <<- calls + 1L
+        sprintf("checksum-%d", calls)
+    })
+
+    expect_warning(res <- run_ora(case), "does not agree with the result")
+    expect_identical(res[names(base)], base)
+
+    p <- res$provenance
+    expect_identical(p$status, "inconsistent")
+    expect_identical(p$diagnostics$check[!p$diagnostics$passed],
+                     "reference_files_unchanged")
+    # The checksum on record is the one taken at the read, not the later one.
+    ref <- p$reference_files[p$reference_files$read, ]
+    expect_identical(ref$md5, c("checksum-2", "checksum-3", "checksum-1"))
+    expect_false(any(ref$md5 == ref$md5_at_end))
+    expect_error(require_metab_enrichment_provenance(res), "reference_files_unchanged")
+})
+
+test_that("two ids of one file with the same label: the first is tested, the other is on record", {
+    case <- make_prov_case()
+    # "PW9" described as "Twin - Pair" and "PW9 - Twin" described as "Pair"
+    # both get the label "PW9 - Twin - Pair".
+    cat(paste(c("PW9", "Twin - Pair", sprintf("C%05d", 21:25)), collapse = "\t"), "\n",
+        paste(c("PW9 - Twin", "Pair", sprintf("C%05d", 26:30)), collapse = "\t"), "\n",
+        sep = "", file = case$files$lib_b, append = TRUE)
+
+    res  <- run_ora(case)
+    base <- run_ora(case, prov_env$baseline_run_metabolomics_ora)
+    expect_identical(res[names(base)], base)
+    expect_identical(res$provenance$status, "ok")
+
+    s <- res$provenance$pathway_sources
+    twins <- s[s$pathway == "PW9 - Twin - Pair", ]
+    expect_identical(twins$pathway_id, c("PW9", "PW9 - Twin"))
+    expect_identical(twins$fate, c("tested", "replaced_same_label_in_file"))
+
+    # One result for the label, computed from the first id's members.
+    expect_identical(sum(res$table$pathway == "PW9 - Twin - Pair"), 1L)
+    m <- res$provenance$pathway_members
+    expect_identical(m$member_as_listed[m$pathway == "PW9 - Twin - Pair"],
+                     sprintf("C%05d", 21:25))
+    mb <- metab_pathway_feature_membership(res$provenance)
+    expect_identical(unique(mb$pathway_id[mb$pathway == "PW9 - Twin - Pair"]), "PW9")
 })
 
 # ---- feature membership for display --------------------------------------------------------
@@ -833,6 +889,34 @@ test_that("a provenance that disagrees with the result is marked, kept and refus
     expect_error(require_metab_enrichment_provenance(res),
                  "does not agree with the result it describes \\(failed: library_sources\\)")
     expect_error(metab_pathway_feature_membership(p), "cannot be used")
+})
+
+test_that("a provenance problem never stops the analysis when warnings are errors", {
+    case <- make_prov_case()
+    base <- run_ora(case, prov_env$baseline_run_metabolomics_ora)
+    withr::local_options(warn = 2)
+
+    # Could not be built.
+    local_prov_stub("describe_metab_feature_compounds", function(...) stop("boom"))
+    expect_error(failed <- suppressMessages(run_metabolomics_ora(
+        case$pre, case$de_res, case$config, contrast = "A vs B")), NA)
+    expect_identical(failed[names(base)], base)
+    expect_identical(failed$provenance$status, "failed")
+    expect_match(failed$provenance$error$message, "boom")
+})
+
+test_that("an inconsistent provenance never stops the analysis when warnings are errors", {
+    case <- make_prov_case()
+    base <- run_ora(case, prov_env$baseline_run_metabolomics_ora)
+    withr::local_options(warn = 2)
+
+    local_prov_stub(".metab_prov_sources_match", function(...) FALSE)
+    expect_error(res <- suppressMessages(run_metabolomics_ora(
+        case$pre, case$de_res, case$config, contrast = "A vs B")), NA)
+    expect_identical(res[names(base)], base)
+    expect_identical(res$provenance$status, "inconsistent")
+    expect_identical(res$provenance$diagnostics$check[!res$provenance$diagnostics$passed],
+                     "library_sources")
 })
 
 test_that("provenance that is absent or of another version is refused, never assumed", {

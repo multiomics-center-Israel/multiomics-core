@@ -1024,6 +1024,8 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
         lfc_cutoff <- log2(de_cfg$linear_fc_cutoff %||% 1.5)
     }
     mapping_file <- enr_cfg$mapping_file
+    # Provenance: checksum of the mapping table before anything reads it.
+    mapping_md5_read <- .metab_prov_md5(mapping_file)
 
     # ---- Build background (all measured features mapped to IDs) ----
     mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
@@ -1096,7 +1098,8 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
         # Recorded before the loop below, where an equal label from a later
         # library replaces an earlier one.
         gmt_capture[[length(gmt_capture) + 1L]] <- list(
-            file = gf, library = lib_label, records = gmt_parsed$records,
+            file = gf, library = lib_label, md5 = .metab_prov_md5(gf),
+            records = gmt_parsed$records,
             ids = names(gmt_parsed$sets), labels = names(gmt),
             listed = gmt_parsed$sets, translated = gmt)
         for (nm in names(gmt)) {
@@ -1186,7 +1189,8 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
             gmt_capture = gmt_capture, sets_loaded = gene_sets_loaded,
             keep = keep, sets_kept = gene_sets, sets_input = gene_sets_filt,
             lookup = bg_map, result_table = result_df,
-            gmt_files = gmt_files, mapping_file = mapping_file)
+            gmt_files = gmt_files, mapping_file = mapping_file,
+            mapping_md5_read = mapping_md5_read)
     )
 }
 
@@ -1234,6 +1238,8 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     }
 
     mapping_file <- enr_cfg$mapping_file
+    # Provenance: checksum of the mapping table before anything reads it.
+    mapping_md5_read <- .metab_prov_md5(mapping_file)
 
     # ---- Build ranked list from DE log2FC ----
     contrast_name <- .resolve_enrichment_contrast(contrast, de_res, "GSEA")
@@ -1296,7 +1302,8 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
         # Recorded before the loop below, where an equal label from a later
         # library replaces an earlier one.
         gmt_capture[[length(gmt_capture) + 1L]] <- list(
-            file = gf, library = lib_label, records = gmt_parsed$records,
+            file = gf, library = lib_label, md5 = .metab_prov_md5(gf),
+            records = gmt_parsed$records,
             ids = names(gmt_parsed$sets), labels = names(gmt),
             listed = gmt_parsed$sets, translated = gmt)
         for (nm in names(gmt)) {
@@ -1383,7 +1390,8 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
             gmt_capture = gmt_capture, sets_loaded = gene_sets_loaded,
             keep = keep, sets_kept = gene_sets, sets_input = gene_sets_filt,
             lookup = avail_map, fgsea_res = fgsea_res, result_table = result_df,
-            gmt_files = gmt_files, mapping_file = mapping_file)
+            gmt_files = gmt_files, mapping_file = mapping_file,
+            mapping_md5_read = mapping_md5_read)
     )
 }
 
