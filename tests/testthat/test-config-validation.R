@@ -50,6 +50,18 @@ test_that("validate_proteomics_config passes with valid config", {
     expect_true(validate_proteomics_config(cfg))
 })
 
+test_that("validate_proteomics_config rejects the removed fdrtool option", {
+    cfg <- create_mock_proteomics_config()
+    cfg$de$fdrtool_correction <- TRUE
+    expect_error(validate_proteomics_config(cfg), "fdrtool_correction was removed")
+})
+
+test_that("validate_proteomics_config accepts a leftover fdrtool_correction: false", {
+    cfg <- create_mock_proteomics_config()
+    cfg$de$fdrtool_correction <- FALSE
+    expect_true(validate_proteomics_config(cfg))
+})
+
 test_that("validate_proteomics_config errors on missing protein_id", {
     cfg <- create_mock_proteomics_config()
     cfg$id_columns$protein_id <- NULL

@@ -112,6 +112,22 @@ validate_proteomics_config <- function(cfg) {
 
     # 4. de Settings
     if (!is.null(cfg$de)) {
+        # Removed option. Failing rather than ignoring: a project that asked for
+        # fdrtool expects its p-values, and silently giving BH ones instead would
+        # change the results under the same config. false is accepted, since it
+        # asked for what still happens.
+        if (isTRUE(cfg$de$fdrtool_correction)) {
+            stop(paste0(
+                "de$fdrtool_correction was removed and can no longer be set to true.\n",
+                "  fdrtool re-estimates the null distribution from the t-statistics ",
+                "themselves; when they are narrower than expected (for example an ",
+                "unmodelled pairing) it calls proteins whose p-values are far from ",
+                "significant.\n",
+                "  Delete the key (or set it to false) to use limma p-values with ",
+                "de$p_adjust_method. If the t-statistics look miscalibrated, fix the ",
+                "design (de$block_col, de$paired) rather than the null."
+            ), call. = FALSE)
+        }
         if (!is.null(cfg$de$method)) {
             assert_one_of(cfg$de$method, "de$method", c("limma", "limma_percontrast", "ttest", "welch", "anova"), allow_null = TRUE)
         }

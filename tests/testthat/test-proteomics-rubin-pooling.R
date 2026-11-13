@@ -114,20 +114,6 @@ test_that("DE methods without a limma fit are rejected with a clear message", {
     expect_error(pool_limma_imputations(toy$runs, "B_vs_A"), "de.method 'limma'")
 })
 
-test_that("fdrtool's p-value replacement does not change the pooled z", {
-    skip_if_not_installed("fdrtool")
-    toy <- make_toy_runs(m = 3)
-    before <- pool_limma_imputations(toy$runs, "B_vs_A")
-    # As run_limma_proteomics() applies it: only fit2$p.value is rewritten.
-    corrected <- lapply(toy$runs, function(r) {
-        r$fit2$p.value[, 1] <- fdrtool::fdrtool(r$fit2$t[, 1], statistic = "normal",
-                                                plot = FALSE, verbose = FALSE)$pval
-        r
-    })
-    after <- pool_limma_imputations(corrected, "B_vs_A")
-    expect_identical(after$z_pooled, before$z_pooled)
-})
-
 test_that("observed counts follow the contrast sides of the design", {
     toy <- make_toy_runs(m = 2)
     res <- pool_limma_imputations(toy$runs, "B_vs_A", observed = toy$observed)
