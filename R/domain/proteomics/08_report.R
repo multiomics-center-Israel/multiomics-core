@@ -690,6 +690,8 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     norm_m <- tolower(as.character(cfg$normalization$method %||% "none"))
     dp <- paste(dp, if (identical(norm_m, "median")) {
         "Sample intensities were median-centred on the log2 scale."
+    } else if (identical(norm_m, "vsn")) {
+        "Intensities were normalized with variance-stabilizing normalization (vsn) and analysed on its generalized-log2 scale."
     } else {
         "No between-sample normalization was applied."
     })
