@@ -130,6 +130,58 @@ before: the enrichment code skips it. For a relative `mapping_file`, `met_raw`
 reads the path as written and the enrichment stage resolves it under the raw
 data folder; both locations are tracked.
 
+## ORA and GSEA provenance
+
+ORA and GSEA test **compounds**, and several measured features can map to one
+compound. Each result therefore carries a `provenance` element beside its
+unchanged `table` (and `ranks`), built in `06r_enrichment_provenance.R` from
+the objects the test computed. It never changes a statistic, and no column is
+added to any table or `results.tsv`.
+
+| Element | What it records |
+|---|---|
+| `status`, `diagnostics`, `error` | `"ok"`, `"inconsistent"` (a check against the result failed) or `"failed"` (could not be built) |
+| `reference_files` | the GMT and mapping files the test was given, with md5, and whether each was read |
+| `feature_compounds` | per measured feature: the compound id used, which step chose it (`kegg_column` > `hmdb_mapping` > `name_column`), every KEGG id in the cell, and whether the cell was ambiguous |
+| `pathway_sources` | every GMT line and what became of it: tested, replaced by a later line with the same id, replaced by an equal label in a later library, too few matches, or not returned by fgsea |
+| `pathway_members` | every listed member of every set given to the test, duplicates kept |
+| ORA: `thresholds`, `compounds`, `features` | universe and foreground per compound; significance per feature, separately |
+| GSEA: `ranked`, `features` | the final ranking with the representative feature of each compound; every feature's role |
+
+Three distinctions the tables cannot make:
+
+-   **Feature roles in ORA.** A feature can be non-significant and still belong
+    to a foreground compound, because another feature of that compound is
+    significant. Counts are per compound; `features` keeps significance,
+    universe and foreground as separate flags.
+-   **The GSEA representative.** When several features share a compound, the
+    ranking keeps the one with the largest |logFC|, and on a tie the one that
+    comes first in the DE table. `ranked$representative_feature` is the
+    feature that was kept, recorded during the deduplication, not worked out
+    again from the logFC. Ties are flagged, including ties of opposite sign,
+    where the row order decides the sign the compound is ranked with.
+-   **Given to the test versus used by it.** A set can list one compound
+    twice, typically after HMDB ids are translated to KEGG. `in_input_set`
+    marks every occurrence in the vector the test received;
+    `in_effective_statistic` marks what counted. ORA counts every occurrence in
+    the pathway size, so the two are equal. fgsea keeps each member once, and
+    drops a set that is then too small. Both behaviours are as they were.
+
+`metab_pathway_feature_membership(provenance)` lists every measured feature of
+every pathway compound for display, with those roles per row. It shows more
+than the test used: in GSEA a feature that did not represent its compound, or
+a compound that was not ranked, is listed and never marked as contributing to
+the score or the leading edge.
+
+Code that needs provenance calls `require_metab_enrichment_provenance(res)`,
+which stops unless the status is `"ok"`. A failed or inconsistent provenance
+leaves the statistical result untouched and raises a warning.
+
+`upstream_origin = "not_tracked"` on an id taken from the `KEGG` column means
+the enrichment stage read the column as it found it: it cannot tell whether
+the value came with the input annotation or was filled earlier from a mapping
+file.
+
 ## Enrichment output layout
 
 `mod_metabolomics_enrichment()` writes each result unit to its own directory
