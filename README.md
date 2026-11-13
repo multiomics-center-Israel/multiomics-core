@@ -194,10 +194,12 @@ tar_make()
 To run a single mode:
 
 ``` r
-tar_make(names = starts_with("prot_"))  # proteomics only
-tar_make(names = starts_with("rna_"))   # RNA-seq only
-tar_make(names = starts_with("met"))    # metabolomics only (matches met_* and metab_*)
+tar_make(names = c(execution_info_files, starts_with("prot_")))  # proteomics only
+tar_make(names = c(execution_info_files, starts_with("rna_")))   # RNA-seq only
+tar_make(names = c(execution_info_files, starts_with("met")))    # metabolomics only (matches met_* and metab_*)
 ```
+
+Naming `execution_info_files` refreshes `execution_info/` for the partial run; without it the folder keeps describing the previous run that wrote it.
 
 Targets are named by mode prefix: `prot_`, `rna_`, `met_`/`metab_`, `multiomics_`, `dei_` (DE-table integration) and `lipid_`. The `lipid_` targets exist in the code but are not currently added to the plan by `_targets.R`.
 
@@ -268,7 +270,7 @@ qc_pca_scatter(
 -   All package versions are locked in `renv.lock`
 -   Outputs and caches are excluded from git
 -   `{targets}` provides deterministic, restartable pipelines
--   The pipeline writes `execution_info/` into the results folder: the config used, its path, a timestamp, `sessionInfo()`, a copy of `_targets.R`, and the git commit when git is available. It is a cached target, so after code-only changes or partial runs it can describe an earlier build. See [onboarding §5](docs/onboarding.md#5-where-the-results-are)
+-   The pipeline writes `execution_info/` into the results folder: the config used, its path, a timestamp, `sessionInfo()`, a copy of `_targets.R`, and the git commit when git is available. It is rewritten at the start of every `tar_make()` that includes `execution_info_files`, and `run_status.txt` says whether that run finished (`completed`/`failed` are recorded only by `run.R`; a plain `tar_make()` leaves `started`). See [onboarding §5](docs/onboarding.md#5-where-the-results-are)
 
 ------------------------------------------------------------------------
 
