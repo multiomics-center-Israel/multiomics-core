@@ -184,6 +184,53 @@ the enrichment stage read the column as it found it: it cannot tell whether
 the value came with the input annotation or was filled earlier from a mapping
 file.
 
+## ORA and GSEA in the Shiny payload
+
+`build_metab_enrichment_payload()` (`07b_shiny_enrichment_payload.R`) turns a
+run's ORA and GSEA results into the two keys the Shiny payload carries side by
+side. It is a re-encoding of results and provenance: nothing is recomputed, and
+a result whose provenance is not `"ok"` stops it. It is not yet called by
+`build_shiny_payload_metabolomics()`.
+
+-   **`enrichment`** has exactly the nine components the app reads for RNA-seq
+    (`available`, `gene_index`, `config`, `manifest`, `ora`, `gsea`,
+    `gsea_leading_edge`, `gsea_rankings`, `pathway_membership`), under database
+    `combined` and ranking `fc`. Ids are feature ids.
+-   **`enrichment_provenance`** holds what that shape cannot: every tested
+    pathway with its full statistics (`all_tested`), compounds, per-feature
+    roles, pathway members with multiplicity, and the state of each analysis.
+
+The two are joined by analysis, contrast and pathway id. Four things are kept
+apart throughout:
+
+| What | Where |
+|---|---|
+| Significant measured features behind the ORA foreground | `geneID` and `n_features` of an ORA row; `features$significant` |
+| Compounds the ORA test counted | `Count`, `GeneRatio`, `BgRatio`, `FoldEnrichment` |
+| Pathways significant in a result | the tables under `enrichment$ora` / `enrichment$gsea` |
+| Exploratory membership, significant or not, ranked or not | `enrichment$pathway_membership` |
+
+-   The display tables hold the significant pathways only, at the threshold
+    the enrichment stage itself reports with (`.METAB_ENRICHMENT_SIG_FDR`).
+    Non-significant tested pathways are in `all_tested`.
+-   GSEA rankings and leading edges are in the representative feature of each
+    compound; no other feature of a compound appears in them.
+-   `gene_index` starts with the feature ids of the exported matrix, in its row
+    order. Other referenced features follow, and
+    `enrichment_provenance$feature_index$in_expr_norm` tells them apart.
+-   An analysis that ran and found nothing has a manifest row with status
+    `empty` and a zero-row table. One with no result has no manifest row and
+    is `no_result` in `enrichment_provenance$status`.
+-   The manifest rows are the layout's own; `storage_key` here names the unit's
+    place in the block, not a directory.
+
+`preflight_metab_enrichment_payload()` reports, without stopping, what would
+block the build on a given run: results without usable provenance, a feature id
+containing `/`, duplicated ids in the exported matrix, or two tested pathways
+sharing an id. `metab_enrichment_pathway_detail(payload, analysis, contrast,
+pathway_id)` returns the result row, the listed compounds and the measured
+features behind any tested pathway, from the payload alone.
+
 ## Enrichment output layout
 
 `mod_metabolomics_enrichment()` writes each result unit to its own directory
