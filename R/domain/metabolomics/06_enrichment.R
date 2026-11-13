@@ -1179,8 +1179,8 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
         method   = "fisher_ora",
         provenance = build_metab_ora_provenance(
             contrast = contrast_name, feature_compounds = mapped$feature_compounds,
-            feature_map = mapped$feature_map, universe = bg_ids,
-            foreground = fg_ids, de_tbl = de_tbl, sig_mask = sig_mask,
+            universe = bg_ids, foreground = fg_ids,
+            de_tbl = de_tbl, sig_mask = sig_mask,
             thresholds = list(pvalue_column = pval_col, p_cutoff = p_cutoff,
                               logfc_cutoff = lfc_cutoff),
             gmt_capture = gmt_capture, sets_loaded = gene_sets_loaded,

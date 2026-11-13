@@ -413,7 +413,6 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 #'
 #' @param contrast          Contrast name.
 #' @param feature_compounds \code{map_compounds_for_enrichment()$feature_compounds}.
-#' @param feature_map       Its \code{feature_map} (feature id -> compound).
 #' @param universe          Background compounds (\code{bg_ids}).
 #' @param foreground        Foreground compounds (\code{fg_ids}).
 #' @param de_tbl            The contrast's DE table.
@@ -428,7 +427,7 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 #' @param result_table      The result table.
 #' @param gmt_files,mapping_file Resolved reference file paths.
 #' @return A provenance list (see the file header); never an error.
-build_metab_ora_provenance <- function(contrast, feature_compounds, feature_map,
+build_metab_ora_provenance <- function(contrast, feature_compounds,
                                        universe, foreground, de_tbl, sig_mask,
                                        thresholds, gmt_capture, sets_loaded, keep,
                                        sets_kept, sets_input, lookup, result_table,
