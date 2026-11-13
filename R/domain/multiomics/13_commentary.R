@@ -195,21 +195,6 @@ build_figures_table <- function(mae,
     # Concordance Figures
     # ---------------------------------------------------------------------------
     if (!is.null(concordance_results$rna_protein)) {
-        # Correlation distribution
-        fig_path <- file.path(plots_dir, "rna_protein_concordance.png")
-        if (file.exists(fig_path)) {
-            figures[["rna_protein_concordance"]] <- list(
-                figure_id = "rna_protein_concordance",
-                file_path = fig_path,
-                plot_type = "histogram",
-                title = "RNA-Protein Concordance Distribution",
-                description = "Distribution of correlation coefficients between RNA and protein expression",
-                section = "Cross-Omics Concordance",
-                x_axis = "Pearson Correlation",
-                y_axis = "Count"
-            )
-        }
-
         # DE scatter plot
         fig_path <- file.path(plots_dir, "rna_protein_de_scatter.png")
         if (file.exists(fig_path)) {
