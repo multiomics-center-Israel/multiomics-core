@@ -268,11 +268,17 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 
 #' The reference files a test was configured with, and their checksums
 #'
-#' \code{md5} is the checksum taken beside the read, so it describes the
-#' content the statistics were computed from. \code{md5_at_end} is taken when
-#' the provenance is built. They differ when a file was changed while the test
-#' ran, and the provenance is then marked inconsistent: the result is real, but
-#' the file on disk is no longer the one behind it.
+#' \code{md5} is the checksum taken just before the file is read. For a GMT
+#' library, \code{md5_after_read} is taken again just after it was parsed, so
+#' the two bracket the read: when they agree, the parsed content is the content
+#' with that checksum. \code{md5_at_end} is taken when the provenance is built.
+#' Any difference among them means the file changed while the test ran, and the
+#' provenance is then marked inconsistent: the result is real, but it cannot be
+#' tied to one version of the file.
+#'
+#' The mapping table is read several times during a test (once for the
+#' features, once per library), so it has no single read to bracket; its
+#' checksum before the first read is compared with the one at the end.
 #'
 #' @param gmt_files        Resolved GMT paths, as the test received them.
 #' @param mapping_file     Resolved HMDB -> KEGG path (or NULL).
@@ -280,8 +286,9 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 #'   the checksum of each library taken when it was read.
 #' @param mapping_md5_read Checksum of the mapping file taken before its first
 #'   read (NA when there is no such file).
-#' @return data.frame(role, path, md5, md5_at_end, read). \code{read} is FALSE,
-#'   and \code{md5} NA, for a configured file the test did not read.
+#' @return data.frame(role, path, md5, md5_after_read, md5_at_end, read).
+#'   \code{read} is FALSE, and \code{md5} NA, for a configured file the test
+#'   did not read; \code{md5_after_read} is NA for the mapping table.
 #' @noRd
 .metab_prov_reference_files <- function(gmt_files, mapping_file, gmt_capture,
                                         mapping_md5_read) {
@@ -297,11 +304,17 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
     read_md5  <- vapply(gmt_capture, function(g) {
         as.character(g$md5 %||% NA_character_)
     }, character(1))
-    md5 <- ifelse(role == "gmt", read_md5[match(path, read_file)],
+    after_md5 <- vapply(gmt_capture, function(g) {
+        as.character(g$md5_after_read %||% NA_character_)
+    }, character(1))
+    at  <- match(path, read_file)
+    md5 <- ifelse(role == "gmt", read_md5[at],
                   as.character(mapping_md5_read %||% NA_character_)[1])
     read <- ifelse(role == "gmt", path %in% read_file, !is.na(md5))
 
     data.frame(role = role, path = path, md5 = as.character(md5),
+               md5_after_read = as.character(ifelse(role == "gmt", after_md5[at],
+                                                    NA_character_)),
                md5_at_end = vapply(path, .metab_prov_md5, character(1),
                                    USE.NAMES = FALSE),
                read = as.logical(read), stringsAsFactors = FALSE)
@@ -314,7 +327,13 @@ describe_metab_feature_compounds <- function(feature_id, compound_id, valid,
 #' @noRd
 .metab_prov_references_unchanged <- function(reference_files) {
     used <- reference_files[reference_files$read, , drop = FALSE]
-    all(!is.na(used$md5) & !is.na(used$md5_at_end) & used$md5 == used$md5_at_end)
+    # A library must have the same checksum before and after its read; the
+    # mapping table has no after-read checksum to compare.
+    bracketed <- ifelse(used$role == "gmt",
+                        !is.na(used$md5_after_read) & used$md5 == used$md5_after_read,
+                        TRUE)
+    all(!is.na(used$md5) & !is.na(used$md5_at_end) & used$md5 == used$md5_at_end &
+            bracketed)
 }
 
 

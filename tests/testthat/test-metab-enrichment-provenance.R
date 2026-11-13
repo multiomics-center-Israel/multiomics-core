@@ -683,7 +683,8 @@ test_that("the reference files that were read are recorded with their checksums"
     case <- make_prov_case()
     ref <- run_ora(case)$provenance$reference_files
 
-    expect_identical(names(ref), c("role", "path", "md5", "md5_at_end", "read"))
+    expect_identical(names(ref), c("role", "path", "md5", "md5_after_read",
+                                   "md5_at_end", "read"))
     expect_identical(ref$role, c("gmt", "gmt", "gmt", "mapping"))
     expect_identical(ref$path, c(case$files$lib_a, case$files$lib_b,
                                  case$files$missing, case$files$mapping))
@@ -695,6 +696,33 @@ test_that("the reference files that were read are recorded with their checksums"
     # Nothing changed while the test ran: the checksum taken at the read and
     # the one taken at the end agree.
     expect_identical(ref$md5_at_end, ref$md5)
+    # Each library was hashed before and after its read; the mapping table has
+    # no single read to bracket.
+    expect_identical(ref$md5_after_read[1:2], ref$md5[1:2])
+    expect_true(all(is.na(ref$md5_after_read[3:4])))
+})
+
+test_that("a library must have one checksum before its read, after it and at the end", {
+    ref <- function(md5, after, end, role = "gmt") {
+        data.frame(role = role, path = "x", md5 = md5, md5_after_read = after,
+                   md5_at_end = end, read = TRUE, stringsAsFactors = FALSE)
+    }
+    expect_true(.metab_prov_references_unchanged(ref("a", "a", "a")))
+    # Rewritten while it was being read: the parsed content has no known checksum.
+    expect_false(.metab_prov_references_unchanged(ref("a", "b", "b")))
+    expect_false(.metab_prov_references_unchanged(ref("a", "b", "a")))
+    # Rewritten after it was read.
+    expect_false(.metab_prov_references_unchanged(ref("a", "a", "b")))
+    expect_false(.metab_prov_references_unchanged(ref("a", NA_character_, "a")))
+    # The mapping table is compared before its first read and at the end.
+    expect_true(.metab_prov_references_unchanged(
+        ref("a", NA_character_, "a", role = "mapping")))
+    expect_false(.metab_prov_references_unchanged(
+        ref("a", NA_character_, "b", role = "mapping")))
+    # A file that was not read does not count.
+    skipped <- ref(NA_character_, NA_character_, NA_character_)
+    skipped$read <- FALSE
+    expect_true(.metab_prov_references_unchanged(skipped))
 })
 
 test_that("a reference file that changes during the run makes the provenance inconsistent", {
@@ -715,9 +743,12 @@ test_that("a reference file that changes during the run makes the provenance inc
     expect_identical(p$status, "inconsistent")
     expect_identical(p$diagnostics$check[!p$diagnostics$passed],
                      "reference_files_unchanged")
-    # The checksum on record is the one taken at the read, not the later one.
+    # The checksum on record is the one taken before the read, not a later
+    # one. Order of the calls: the mapping table, then each library before and
+    # after its read.
     ref <- p$reference_files[p$reference_files$read, ]
-    expect_identical(ref$md5, c("checksum-2", "checksum-3", "checksum-1"))
+    expect_identical(ref$md5, c("checksum-2", "checksum-4", "checksum-1"))
+    expect_identical(ref$md5_after_read, c("checksum-3", "checksum-5", NA))
     expect_false(any(ref$md5 == ref$md5_at_end))
     expect_error(require_metab_enrichment_provenance(res), "reference_files_unchanged")
 })
