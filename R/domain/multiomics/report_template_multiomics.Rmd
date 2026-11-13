@@ -363,6 +363,92 @@ figure_legend("RNA vs protein differential expression scatter plot per contrast.
 render_commentary("rna_protein_de_scatter")
 ```
 
+```{r rna-prot-pathway-setup, include=FALSE}
+# Written by write_pathway_rna_protein_correlation() (06c) only when
+# modes$multiomics$rna_protein_correlation$pathway_gmt is set.
+pw_stats_csv   <- file.path(rna_prot_dir, "tables", "rna_protein_pathway_correlation.csv")
+pw_members_csv <- file.path(rna_prot_dir, "tables", "rna_protein_pathway_members.csv")
+pw_pairs_csv   <- file.path(rna_prot_dir, "tables", "rna_protein_log2FC_pairs.csv")
+has_pw_scatter <- has_rna_prot && file.exists(pw_stats_csv) &&
+    file.exists(pw_members_csv) && file.exists(pw_pairs_csv)
+```
+
+`r if (has_pw_scatter) "## log2FC Scatter by Pathway"`
+
+```{r rna-prot-pathway-scatter, eval=has_pw_scatter}
+pw_stats   <- read.csv(pw_stats_csv, stringsAsFactors = FALSE)
+pw_members <- read.csv(pw_members_csv, stringsAsFactors = FALSE)
+pw_pairs   <- read.csv(pw_pairs_csv, stringsAsFactors = FALSE)
+pw_pairs   <- pw_pairs[is.finite(pw_pairs$rna_log2FC) & is.finite(pw_pairs$protein_log2FC), , drop = FALSE]
+pw_pairs$label <- if ("gene_symbol" %in% names(pw_pairs)) pw_pairs$gene_symbol else pw_pairs$gene_id
+for (col in c("rna_padj", "protein_padj")) {
+    if (!col %in% names(pw_pairs)) pw_pairs[[col]] <- NA_real_
+}
+
+pw_hover <- function(d) {
+    sprintf("%s<br>gene %s | protein %s<br>RNA log2FC %.3f (padj %s)<br>protein log2FC %.3f (padj %s)",
+            d$label, d$gene_id, d$protein_id, d$rna_log2FC, signif(d$rna_padj, 3),
+            d$protein_log2FC, signif(d$protein_padj, 3))
+}
+
+# One widget per contrast. The table is already ordered by pearson_r, highest
+# first; the dropdown keeps that order.
+pw_widgets <- lapply(unique(pw_stats$contrast), function(cname) {
+    st  <- pw_stats[pw_stats$contrast == cname, , drop = FALSE]
+    all <- pw_pairs[pw_pairs$contrast == cname, , drop = FALSE]
+    p <- plotly::plot_ly()
+    p <- plotly::add_markers(p, data = all, x = ~rna_log2FC, y = ~protein_log2FC,
+                             text = pw_hover(all), hoverinfo = "text",
+                             marker = list(color = "rgba(160,160,160,0.35)", size = 5),
+                             name = "all pairs")
+    for (i in seq_len(nrow(st))) {
+        m <- pw_members[pw_members$contrast == cname & pw_members$pathway_id == st$pathway_id[i], ,
+                        drop = FALSE]
+        d <- merge(all, m[, c("gene_id", "protein_id")], by = c("gene_id", "protein_id"))
+        p <- plotly::add_markers(p, data = d, x = ~rna_log2FC, y = ~protein_log2FC,
+                                 text = pw_hover(d), hoverinfo = "text",
+                                 marker = list(color = "#1f77b4", size = 8,
+                                               line = list(color = "white", width = 0.5)),
+                                 name = st$pathway_id[i], visible = i == 1)
+    }
+    btn_label <- sprintf("%s %s | r = %.2f, rho = %.2f, n = %d",
+                         st$pathway_id, substr(sub(" - .*$", "", st$pathway_name), 1, 45),
+                         st$pearson_r, st$spearman_rho, st$n_pairs)
+    buttons <- lapply(seq_len(nrow(st)), function(i) {
+        list(method = "restyle", label = btn_label[i],
+             args = list("visible", as.list(c(TRUE, seq_len(nrow(st)) == i))))
+    })
+    plotly::layout(p,
+        title = list(text = cname, x = 0.02, font = list(size = 14)),
+        xaxis = list(title = "RNA log2FC", zeroline = TRUE),
+        yaxis = list(title = "protein log2FC", zeroline = TRUE),
+        showlegend = FALSE, height = 600, margin = list(t = 90),
+        updatemenus = list(list(type = "dropdown", buttons = buttons,
+                                x = 0, xanchor = "left", y = 1.12, yanchor = "top")))
+})
+htmltools::tagList(pw_widgets)
+```
+
+```{r rna-prot-pathway-legend, eval=has_pw_scatter, results='asis'}
+figure_legend(sprintf(paste(
+    "RNA log2FC vs protein log2FC, one point per gene-protein pair (grey); the pathway chosen",
+    "in the menu is drawn on top. Pathways from %s with at least %d mapped pairs in the contrast,",
+    "listed by Pearson r of the two log2FCs within the pathway, highest first. Spearman's rho and",
+    "n pairs are shown beside it; p-values are per pathway and not adjusted across pathways, and",
+    "pathways share genes. Source: rna_protein_pathway_correlation.csv and",
+    "rna_protein_log2FC_pairs.csv."),
+    pw_stats$gmt_file[1], pw_stats$min_pairs[1]))
+```
+
+```{r rna-prot-pathway-table, eval=has_pw_scatter}
+pw_show <- pw_stats[, c("contrast", "pathway_id", "pathway_name", "n_pairs", "pearson_r",
+                        "pearson_p", "spearman_rho", "spearman_p", "same_sign_frac")]
+num <- vapply(pw_show, is.numeric, logical(1)) & names(pw_show) != "n_pairs"
+pw_show[num] <- lapply(pw_show[num], signif, 3)
+make_dt(pw_show, caption = "Per-pathway RNA-protein log2FC correlation (rna_protein_pathway_correlation.csv)",
+        pageLength = 10)
+```
+
 ```{r rna-prot-per-contrast-setup, include=FALSE}
 # A contrast that joined nothing writes no files, and per_contrast/ exists only
 # for successful DE joins. One predicate decides both which contrasts get a tab
