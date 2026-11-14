@@ -191,13 +191,20 @@ run's ORA and GSEA results into the two keys the Shiny payload carries side by
 side. It is a re-encoding of results and provenance: nothing is recomputed, and
 a result whose provenance is not `"ok"` stops it.
 
-It is **opt-in**. `build_shiny_payload_metabolomics()` adds the two keys only
-when `modes.metabolomics.enrichment.shiny_payload: true`. With the key absent or
-false the payload is exactly what it was. With it on, no existing key changes
-(the legacy `enrichment_ora`, `enrichment_gsea`, `enrichment_qea` and
-`enrichment_ssgsea` tables stay), a run without enrichment results adds
-nothing, and a result that cannot be encoded correctly stops the payload target
-with the reason.
+There is **no option to set**. `build_shiny_payload_metabolomics()` adds the two
+keys whenever the run has enrichment results (`run_enrichment: true`):
+
+-   No existing key changes: the legacy `enrichment_ora`, `enrichment_gsea`,
+    `enrichment_qea` and `enrichment_ssgsea` tables stay, and `mummichog` is
+    built on its own, with or without enrichment results.
+-   A run without enrichment adds nothing.
+-   A run whose ORA and GSEA produced no result gets a block with
+    `available = FALSE` and every contrast listed as `no_result`.
+-   Results that cannot be encoded correctly (for example results cached
+    before provenance was recorded) are not added: the payload is still
+    written with every other key, a warning names the reasons, and
+    `enrichment_provenance` holds `available = FALSE`, `reason = "blocked"`
+    and the preflight table.
 
 -   **`enrichment`** has exactly the nine components the app reads for RNA-seq
     (`available`, `gene_index`, `config`, `manifest`, `ora`, `gsea`,

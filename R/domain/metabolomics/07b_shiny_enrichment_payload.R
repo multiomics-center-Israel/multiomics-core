@@ -23,9 +23,8 @@
 # and as the app's validator requires. Every TESTED pathway, with its complete
 # original statistics, is in `enrichment_provenance$<analysis>$<contrast>$all_tested`.
 #
-# build_shiny_payload_metabolomics() adds the two keys only when
-# modes.metabolomics.enrichment.shiny_payload is TRUE (see
-# metab_shiny_enrichment_enabled()); it is off by default.
+# build_shiny_payload_metabolomics() adds the two keys whenever the run has
+# enrichment results (see metab_shiny_enrichment_keys()); there is no option.
 #
 # Reuses: %||%, .encode_genes(), validate_enrichment_payload() (RNA-seq payload),
 #   build_metab_enrichment_manifest(), .METAB_ENRICHMENT_DB,
@@ -40,21 +39,6 @@
 
 # Where the non-directional ORA table of a contrast lives in the RNA-seq schema.
 .METAB_ENRICHMENT_ORA_GROUP <- "contrasts_without_direction"
-
-
-# ==== SWITCH ===================================================================
-
-#' Whether the Shiny payload should carry the enrichment block
-#'
-#' The one place that reads \code{modes.metabolomics.enrichment.shiny_payload}.
-#' Only a literal \code{TRUE} turns it on; a missing key, \code{FALSE} or
-#' anything else leaves the payload as it was.
-#'
-#' @param config Full pipeline config.
-#' @return TRUE or FALSE.
-metab_shiny_enrichment_enabled <- function(config) {
-    isTRUE(config$modes$metabolomics$enrichment$shiny_payload)
-}
 
 
 # ==== UNITS ====================================================================
@@ -633,6 +617,57 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
 }
 
 
+#' The enrichment keys to add to a metabolomics Shiny payload
+#'
+#' What \code{build_shiny_payload_metabolomics()} adds, decided in one place:
+#' \itemize{
+#'   \item no enrichment in the run (\code{enrichment_res} is NULL): nothing;
+#'   \item results that can be encoded: \code{enrichment} and
+#'     \code{enrichment_provenance}. A run whose ORA and GSEA produced no
+#'     result gets a block with \code{available = FALSE}, and each contrast
+#'     listed as \code{no_result}; no statistic is made up for it;
+#'   \item results that cannot be encoded correctly (the preflight reports a
+#'     blocker, for instance results computed before provenance was recorded):
+#'     no \code{enrichment} block, a warning, and an
+#'     \code{enrichment_provenance} that says so:
+#'     \code{list(schema_version, available = FALSE, reason = "blocked",
+#'     preflight)}. The rest of the payload is unaffected.
+#' }
+#' The payload is always written: an enrichment problem must not cost the app
+#' every other key. It is never dropped without a trace either.
+#'
+#' @param enrichment_res Result of \code{mod_metabolomics_enrichment()}, or NULL.
+#' @param expr_features  Feature ids of the exported matrix, in its row order.
+#' @param contrasts      Names of all DE contrasts (or NULL).
+#' @param config         Passed on to \code{build_metab_enrichment_payload()}.
+#' @return A named list of payload keys to set; empty when there is nothing to add.
+metab_shiny_enrichment_keys <- function(enrichment_res, expr_features,
+                                        contrasts = NULL, config = NULL) {
+    if (is.null(enrichment_res)) return(list())
+
+    preflight <- preflight_metab_enrichment_payload(enrichment_res, expr_features,
+                                                    contrasts)
+    blockers <- preflight[preflight$level == "blocker", , drop = FALSE]
+    if (nrow(blockers) > 0) {
+        warning("metabolomics Shiny payload: the ORA/GSEA enrichment block was not ",
+                "added, because the results cannot be encoded correctly:\n",
+                paste0("  - ", blockers$check, ": ", blockers$detail, collapse = "\n"),
+                "\nEvery other key of the payload is written as usual.",
+                call. = FALSE)
+        return(list(enrichment_provenance = list(
+            schema_version = .METAB_ENRICHMENT_PAYLOAD_SCHEMA,
+            available      = FALSE,
+            reason         = "blocked",
+            preflight      = preflight)))
+    }
+
+    built <- build_metab_enrichment_payload(enrichment_res, expr_features,
+                                            contrasts = contrasts, config = config)
+    list(enrichment            = built$enrichment,
+         enrichment_provenance = built$enrichment_provenance)
+}
+
+
 # ==== READING THE PAYLOAD ============================================================
 
 #' Everything behind one pathway of one contrast
@@ -669,6 +704,11 @@ metab_enrichment_pathway_detail <- function(payload, analysis, contrast, pathway
     if (is.null(prov)) {
         stop("metab_enrichment_pathway_detail(): this payload has no ",
              "enrichment_provenance.", call. = FALSE)
+    }
+    if (isFALSE(prov$available)) {
+        stop("metab_enrichment_pathway_detail(): this payload has no enrichment ",
+             "block (reason: ", prov$reason %||% "not recorded", "). See ",
+             "enrichment_provenance$preflight for what blocked it.", call. = FALSE)
     }
     key <- tolower(as.character(analysis))
     if (length(key) != 1L || !key %in% c("ora", "gsea")) {

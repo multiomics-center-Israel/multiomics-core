@@ -1,14 +1,14 @@
 # tests/testthat/test-metab-shiny-export-enrichment.R
 #
-# The opt-in enrichment block of the metabolomics Shiny payload
-# (modes.metabolomics.enrichment.shiny_payload).
+# The enrichment block of the metabolomics Shiny payload. It is added whenever
+# the run has enrichment results; there is no option to set.
 #
-#   1. off (the default): the payload is what it was, and the block's builder
-#      is not even called;
-#   2. on: the nine-component `enrichment` block and `enrichment_provenance`
-#      are added, and no other key changes;
-#   3. on without enrichment results: nothing is added, or the block says so;
-#   4. on with a result that cannot be encoded: the payload stops;
+#   1. with results: the nine-component `enrichment` block and
+#      `enrichment_provenance` are added, and no other key changes;
+#   2. without results: nothing is added, or the block says there are none;
+#   3. results that cannot be encoded: the payload is still written, with a
+#      warning and the reasons on record;
+#   4. mummichog is built on its own, with or without enrichment results;
 #   5. the saved RDS carries the block and can be read back;
 #   6. the {targets} wiring of the payload target.
 #
@@ -19,7 +19,7 @@
 # Features g01..g30 are compounds C00001..C00030; m1a, m1b, m1c are three
 # features of C00101. One contrast, "A_vs_B", in which g01..g08, m1a and m1c are
 # significant, so that PW1 (C00001..10 + C00101) is over-represented.
-make_export_enrichment_fixture <- function(shiny_payload = NULL, env = parent.frame()) {
+make_export_enrichment_fixture <- function(env = parent.frame()) {
     dir <- withr::local_tempdir(.local_envir = env)
     samples <- paste0("s", 1:6)
     feats   <- c(sprintf("g%02d", 1:30), "m1a", "m1b", "m1c")
@@ -60,8 +60,6 @@ make_export_enrichment_fixture <- function(shiny_payload = NULL, env = parent.fr
                  gmt_line("PW2", "Second", kegg[11:20]),
                  gmt_line("PW3", "Third",  kegg[21:30])), lib)
 
-    enrichment <- list(run_enrichment = TRUE, gmt_file = lib)
-    if (!is.null(shiny_payload)) enrichment$shiny_payload <- shiny_payload
     config <- list(
         project = list(dir = dir), paths = list(raw = "data"),
         modes = list(metabolomics = list(
@@ -70,7 +68,7 @@ make_export_enrichment_fixture <- function(shiny_payload = NULL, env = parent.fr
             preprocessing = list(chosen_norm = "pqn", transform = "log2", scaling = "none"),
             effects       = list(samples = "sample_id", color = "grp"),
             excel         = list(group_cv = FALSE),
-            enrichment    = enrichment)))
+            enrichment    = list(run_enrichment = TRUE, gmt_file = lib))))
 
     quiet <- function(expr) suppressWarnings(suppressMessages(expr))
     ora  <- quiet(run_metabolomics_ora(pre, de_res, config, contrast = "A_vs_B"))
@@ -85,16 +83,33 @@ make_export_enrichment_fixture <- function(shiny_payload = NULL, env = parent.fr
          enrichment_res = enrichment_res, feats = feats)
 }
 
-with_option <- function(fx, value) {
-    fx$config$modes$metabolomics$enrichment$shiny_payload <- value
-    fx
-}
-
-build_export <- function(fx, enrichment_res = fx$enrichment_res, include_legacy = TRUE) {
+build_export <- function(fx, enrichment_res = fx$enrichment_res, include_legacy = TRUE,
+                         ...) {
     suppressMessages(suppressWarnings(
         build_shiny_payload_metabolomics(
             pre = fx$pre, de_res = fx$de_res, inputs = fx$inputs, config = fx$config,
-            enrichment_res = enrichment_res, include_legacy = include_legacy)))
+            enrichment_res = enrichment_res, include_legacy = include_legacy, ...)))
+}
+
+# The payload as it was before the enrichment block existed: the same build,
+# with the block's keys left out.
+build_export_without_block <- function(fx, ...) {
+    local_export_stub("metab_shiny_enrichment_keys", function(...) list())
+    build_export(fx, ...)
+}
+
+# Build the payload and return it together with every warning it raised.
+build_export_with_warnings <- function(fx, enrichment_res) {
+    warnings <- character(0)
+    payload <- withCallingHandlers(
+        suppressMessages(build_shiny_payload_metabolomics(
+            pre = fx$pre, de_res = fx$de_res, inputs = fx$inputs, config = fx$config,
+            enrichment_res = enrichment_res, include_legacy = TRUE)),
+        warning = function(w) {
+            warnings <<- c(warnings, conditionMessage(w))
+            invokeRestart("muffleWarning")
+        })
+    list(payload = payload, warnings = warnings)
 }
 
 # Replace a function where the pipeline functions live, for one test.
@@ -113,66 +128,26 @@ comparable <- function(payload) {
     payload[setdiff(names(payload), "payload_created_at")]
 }
 
-# ---- the switch -------------------------------------------------------------------
+# ---- 1. with results ---------------------------------------------------------------
 
-test_that("only a literal TRUE turns the enrichment block on", {
-    cfg <- function(value) {
-        list(modes = list(metabolomics = list(enrichment = list(shiny_payload = value))))
-    }
-    expect_true(metab_shiny_enrichment_enabled(cfg(TRUE)))
-    for (value in list(FALSE, NULL, NA, "true", "yes", 1, c(TRUE, TRUE))) {
-        expect_false(metab_shiny_enrichment_enabled(cfg(value)))
-    }
-    expect_false(metab_shiny_enrichment_enabled(list()))
-    expect_false(metab_shiny_enrichment_enabled(
-        list(modes = list(metabolomics = list(enrichment = list(run_enrichment = TRUE))))))
-
-    # The shipped template leaves it off.
-    template <- file.path(root_dir, "config", "templates", "metabolomics_template.yaml")
-    skip_if_not_installed("yaml")
-    expect_false(metab_shiny_enrichment_enabled(yaml::read_yaml(template)))
-    expect_identical(
-        yaml::read_yaml(template)$modes$metabolomics$enrichment$shiny_payload, FALSE)
-})
-
-# ---- 1. off ------------------------------------------------------------------------
-
-test_that("with the option absent or false the payload is what it was", {
+test_that("the block is added without any option, and nothing else changes", {
     skip_if_not_installed("fgsea")
     fx <- make_export_enrichment_fixture()
-    # If the builder were reached at all, this would fail the test.
-    local_export_stub("build_metab_enrichment_payload", function(...) {
-        stop("the enrichment block must not be built when the option is off")
-    })
+    # The config has run_enrichment and the library, and no Shiny setting.
+    expect_identical(names(fx$config$modes$metabolomics$enrichment),
+                     c("run_enrichment", "gmt_file"))
 
-    absent <- build_export(fx)
-    off    <- build_export(with_option(fx, FALSE))
-
-    expect_identical(comparable(off), comparable(absent))
-    expect_null(absent$enrichment)
-    expect_false("enrichment_provenance" %in% names(absent))
-    # The canonical key is still there, as it always was, and still NULL.
-    expect_true("enrichment" %in% names(absent))
-    # The legacy tables are the run's own.
-    expect_identical(absent$enrichment_ora, fx$enrichment_res$ora$table)
-    expect_identical(absent$enrichment_gsea, fx$enrichment_res$gsea$table)
-})
-
-# ---- 2. on -------------------------------------------------------------------------
-
-test_that("with the option on the block is added and nothing else changes", {
-    skip_if_not_installed("fgsea")
-    fx  <- make_export_enrichment_fixture()
-    off <- build_export(fx)
-    on  <- build_export(with_option(fx, TRUE))
+    on <- build_export(fx)
+    before <- build_export_without_block(fx)
 
     # Same keys in the same order, plus the provenance; every other key equal.
-    expect_identical(setdiff(names(on), names(off)), "enrichment_provenance")
-    expect_identical(names(on)[names(on) != "enrichment_provenance"], names(off))
-    others <- setdiff(names(off), c(new_keys, "payload_created_at"))
-    expect_identical(on[others], off[others])
+    expect_identical(setdiff(names(on), names(before)), "enrichment_provenance")
+    expect_identical(names(on)[names(on) != "enrichment_provenance"], names(before))
+    others <- setdiff(names(before), c(new_keys, "payload_created_at"))
+    expect_identical(on[others], before[others])
     # ... the legacy enrichment tables among them.
     expect_true(all(c("enrichment_ora", "enrichment_gsea") %in% others))
+    expect_null(before$enrichment)
 
     enr <- on$enrichment
     expect_identical(names(enr),
@@ -201,7 +176,7 @@ test_that("with the option on the block is added and nothing else changes", {
 
 test_that("the block is the same with or without the legacy keys", {
     skip_if_not_installed("fgsea")
-    fx <- with_option(make_export_enrichment_fixture(), TRUE)
+    fx <- make_export_enrichment_fixture()
     with_legacy    <- build_export(fx, include_legacy = TRUE)
     without_legacy <- build_export(fx, include_legacy = FALSE)
 
@@ -209,28 +184,35 @@ test_that("the block is the same with or without the legacy keys", {
     expect_false("enrichment_ora" %in% names(without_legacy))
 })
 
-# ---- 3. on, without results ------------------------------------------------------------
+# ---- 2. without results ------------------------------------------------------------------
 
-test_that("with enrichment disabled the option adds nothing", {
+test_that("a run without enrichment gets no block and no provenance", {
     skip_if_not_installed("fgsea")
-    fx  <- make_export_enrichment_fixture()
-    off <- build_export(fx, enrichment_res = NULL)
-    on  <- build_export(with_option(fx, TRUE), enrichment_res = NULL)
+    fx <- make_export_enrichment_fixture()
+    none   <- build_export(fx, enrichment_res = NULL)
+    before <- build_export_without_block(fx, enrichment_res = NULL)
 
-    expect_identical(comparable(on), comparable(off))
-    expect_null(on$enrichment)
-    expect_false("enrichment_provenance" %in% names(on))
+    expect_identical(comparable(none), comparable(before))
+    expect_null(none$enrichment)
+    expect_true("enrichment" %in% names(none))
+    expect_false("enrichment_provenance" %in% names(none))
+    expect_identical(metab_shiny_enrichment_keys(NULL, rownames(fx$pre$expr_work)), list())
 })
 
 test_that("an enrichment run with no ORA or GSEA result gives an unavailable block", {
     skip_if_not_installed("fgsea")
-    fx <- with_option(make_export_enrichment_fixture(), TRUE)
+    fx <- make_export_enrichment_fixture()
     none <- list(ora = NULL, gsea = NULL, ora_by_contrast = list(),
                  gsea_by_contrast = list())
     on <- build_export(fx, enrichment_res = none)
 
     expect_false(on$enrichment$available)
     expect_identical(nrow(on$enrichment$manifest), 0L)
+    # Nothing is made up: no table, no ranking, no membership.
+    expect_identical(on$enrichment$ora, list())
+    expect_identical(on$enrichment$gsea, list())
+    expect_identical(on$enrichment$gsea_rankings, list())
+    expect_identical(on$enrichment$pathway_membership, list())
     expect_true(validate_enrichment_payload(on$enrichment, strict = TRUE))
     expect_identical(on$enrichment$gene_index, rownames(on$expr_norm))
     # Every contrast is on record as having no result, for both analyses.
@@ -241,7 +223,7 @@ test_that("an enrichment run with no ORA or GSEA result gives an unavailable blo
 
 test_that("ORA without GSEA gives a block with the ORA part only", {
     skip_if_not_installed("fgsea")
-    fx <- with_option(make_export_enrichment_fixture(), TRUE)
+    fx <- make_export_enrichment_fixture()
     only_ora <- fx$enrichment_res
     only_ora$gsea <- NULL
     only_ora$gsea_by_contrast <- list()
@@ -257,9 +239,9 @@ test_that("ORA without GSEA gives a block with the ORA part only", {
     expect_true(validate_enrichment_payload(on$enrichment, strict = TRUE))
 })
 
-# ---- 4. on, with a result that cannot be encoded ----------------------------------------
+# ---- 3. results that cannot be encoded ------------------------------------------------------
 
-test_that("a result without usable provenance stops the payload when the option is on", {
+test_that("results that cannot be encoded leave the payload whole, with the reason on record", {
     skip_if_not_installed("fgsea")
     fx <- make_export_enrichment_fixture()
     broken <- fx$enrichment_res
@@ -267,19 +249,90 @@ test_that("a result without usable provenance stops the payload when the option 
     broken$ora_by_contrast$A_vs_B$res$provenance$error <- list(step = "build",
                                                                message = "boom")
 
-    expect_error(build_export(with_option(fx, TRUE), enrichment_res = broken),
-                 "provenance:ORA:A_vs_B: it could not be built: boom")
-    # With the option off the same run builds its payload as before.
-    off <- build_export(fx, enrichment_res = broken)
-    expect_null(off$enrichment)
-    expect_identical(off$enrichment_ora, fx$enrichment_res$ora$table)
+    built <- build_export_with_warnings(fx, broken)
+    p <- built$payload
+    # One warning says the block was left out, and why.
+    about_block <- grep("enrichment block was not added", built$warnings, value = TRUE)
+    expect_length(about_block, 1L)
+    expect_match(about_block, "provenance:ORA:A_vs_B: it could not be built: boom",
+                 fixed = TRUE)
+    expect_match(about_block, "Every other key of the payload is written as usual",
+                 fixed = TRUE)
+    before <- build_export_without_block(fx, enrichment_res = broken)
+
+    # No block, and every other key exactly as without it.
+    expect_null(p$enrichment)
+    others <- setdiff(names(before), "payload_created_at")
+    expect_identical(p[others], before[others])
+    expect_identical(p$enrichment_ora, fx$enrichment_res$ora$table)
+
+    # Not dropped quietly: the provenance key says what happened.
+    prov <- p$enrichment_provenance
+    expect_identical(names(prov), c("schema_version", "available", "reason", "preflight"))
+    expect_false(prov$available)
+    expect_identical(prov$reason, "blocked")
+    expect_identical(prov$preflight$check[prov$preflight$level == "blocker"],
+                     "provenance:ORA:A_vs_B")
+    expect_error(metab_enrichment_pathway_detail(p, "ORA", "A_vs_B", "PW1"),
+                 "no enrichment block \\(reason: blocked\\)")
+})
+
+test_that("results cached before provenance existed are reported, not guessed at", {
+    skip_if_not_installed("fgsea")
+    fx <- make_export_enrichment_fixture()
+    legacy <- fx$enrichment_res
+    legacy$ora_by_contrast$A_vs_B$res$provenance  <- NULL
+    legacy$gsea_by_contrast$A_vs_B$res$provenance <- NULL
+
+    built <- build_export_with_warnings(fx, legacy)
+    p <- built$payload
+    expect_length(grep("enrichment block was not added", built$warnings), 1L)
+    expect_null(p$enrichment)
+    expect_false(p$enrichment_provenance$available)
+    blocked <- p$enrichment_provenance$preflight
+    expect_setequal(blocked$check[blocked$level == "blocker"],
+                    c("provenance:ORA:A_vs_B", "provenance:GSEA:A_vs_B"))
+    # The legacy tables are still exported as before.
+    expect_identical(p$enrichment_ora, fx$enrichment_res$ora$table)
+    expect_identical(p$enrichment_gsea, fx$enrichment_res$gsea$table)
+})
+
+# ---- 4. mummichog --------------------------------------------------------------------------
+
+test_that("mummichog is exported on its own, with or without enrichment results", {
+    skip_if_not_installed("fgsea")
+    fx <- make_export_enrichment_fixture()
+    pathways <- list(A_vs_B = data.frame(
+        check.names = FALSE, stringsAsFactors = FALSE,
+        pathway = c("Pathway one", "Pathway two", "Pathway three"),
+        overlap_size = c(5, 3, 8), pathway_size = c(10, 6, 12),
+        "p-value" = c(0.02, 0.20, 0.60)))
+
+    with_enrichment    <- build_export(fx, mummichog_pathways = pathways)
+    without_enrichment <- build_export(fx, enrichment_res = NULL,
+                                       mummichog_pathways = pathways)
+    no_mummichog       <- build_export(fx)
+
+    # Mummichog without identified-metabolite enrichment.
+    expect_named(without_enrichment$mummichog, "A_vs_B")
+    expect_null(without_enrichment$enrichment)
+    # Enrichment without mummichog.
+    expect_null(no_mummichog$mummichog)
+    expect_true(no_mummichog$enrichment$available)
+    # Both: each is what it is alone.
+    expect_named(with_enrichment$mummichog, "A_vs_B")
+    expect_identical(names(with_enrichment$mummichog$A_vs_B),
+                     names(without_enrichment$mummichog$A_vs_B))
+    expect_identical(with_enrichment$mummichog$A_vs_B$table,
+                     without_enrichment$mummichog$A_vs_B$table)
+    expect_identical(with_enrichment[new_keys], no_mummichog[new_keys])
 })
 
 # ---- 5. the saved RDS ---------------------------------------------------------------------
 
 test_that("the saved RDS carries the block and can be inspected from the file alone", {
     skip_if_not_installed("fgsea")
-    fx <- with_option(make_export_enrichment_fixture(), TRUE)
+    fx <- make_export_enrichment_fixture()
     out_file <- file.path(withr::local_tempdir(), "shiny_payload.rds")
 
     saved <- suppressMessages(suppressWarnings(save_shiny_payload_metabolomics(
@@ -343,6 +396,15 @@ test_that("the payload builder reaches the block builder, so {targets} tracks it
     body_names <- function(fn) all.names(body(fn))
     expect_true("build_shiny_payload_metabolomics" %in%
                     body_names(save_shiny_payload_metabolomics))
-    expect_true(all(c("metab_shiny_enrichment_enabled", "build_metab_enrichment_payload") %in%
-                        body_names(build_shiny_payload_metabolomics)))
+    expect_true("metab_shiny_enrichment_keys" %in%
+                    body_names(build_shiny_payload_metabolomics))
+    expect_true(all(c("preflight_metab_enrichment_payload",
+                      "build_metab_enrichment_payload") %in%
+                        body_names(metab_shiny_enrichment_keys)))
+    # The option and its reader are gone, from the code and from the template.
+    expect_false(exists("metab_shiny_enrichment_enabled"))
+    skip_if_not_installed("yaml")
+    template <- yaml::read_yaml(file.path(root_dir, "config", "templates",
+                                          "metabolomics_template.yaml"))
+    expect_false("shiny_payload" %in% names(template$modes$metabolomics$enrichment))
 })
