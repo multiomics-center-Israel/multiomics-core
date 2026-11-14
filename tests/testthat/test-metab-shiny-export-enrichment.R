@@ -306,6 +306,9 @@ test_that("the saved RDS carries the block and can be inspected from the file al
 # ---- 6. {targets} wiring ---------------------------------------------------------------------
 
 skip_if_not_installed("targets")
+# pipe_metabolomics() calls tar_target() unqualified, as _targets.R does after
+# attaching {targets}; attach it here so the file runs in a fresh session.
+suppressPackageStartupMessages(library(targets))
 
 test_that("the payload target depends on what the enrichment block is built from", {
     plan <- pipe_metabolomics("pqn")
