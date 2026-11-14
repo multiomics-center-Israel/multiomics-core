@@ -204,7 +204,32 @@ keys whenever the run has enrichment results (`run_enrichment: true`):
     before provenance was recorded) are not added: the payload is still
     written with every other key, a warning names the reasons, and
     `enrichment_provenance` holds `available = FALSE`, `reason = "blocked"`
-    and the preflight table.
+    and the complete preflight table. Blocked results are never shown as
+    results: `enrichment` stays `NULL`.
+
+A reader of the payload can tell these states apart, and must not treat them
+alike:
+
+| State | `enrichment` | `enrichment_provenance` |
+|---|---|---|
+| Enrichment was not run | `NULL` | key absent |
+| **Blocked**: results exist and could not be encoded | `NULL` | `available = FALSE`, `reason = "blocked"`, `preflight` |
+| Ran, ORA and GSEA produced no result | `available = FALSE`, empty components | `status$state` is `no_result` for every contrast |
+| Ran, a contrast has no significant pathway | `available = TRUE`; manifest status `empty`, zero-row table | `status$state` is `no_significant_pathways`; the tested pathways are in `all_tested` |
+| Ran, significant pathways | `available = TRUE`; manifest status `significant` | `status$state` is `significant` |
+
+"Blocked" says nothing about the biology: it means the results could not be
+re-encoded safely, and the reasons are in `preflight`. `enrichment` being `NULL`
+is therefore not enough to conclude that enrichment was not run; the
+`enrichment_provenance` key decides.
+
+The blocked fallback covers what the preflight detects: results without
+usable provenance, a feature id containing `/`, duplicated or empty ids in the
+exported matrix, and pathway ids that clash within or across results. It is
+not a catch-all. An unexpected error while building the block (a bug, or a
+state the preflight does not check) is not caught: it stops the payload
+target with its own message, so that it is seen and fixed instead of being
+recorded as "blocked".
 
 -   **`enrichment`** has exactly the nine components the app reads for RNA-seq
     (`available`, `gene_index`, `config`, `manifest`, `ora`, `gsea`,

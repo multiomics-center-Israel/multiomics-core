@@ -633,8 +633,20 @@ build_metab_enrichment_payload <- function(enrichment_res, expr_features,
 #'     \code{list(schema_version, available = FALSE, reason = "blocked",
 #'     preflight)}. The rest of the payload is unaffected.
 #' }
-#' The payload is always written: an enrichment problem must not cost the app
-#' every other key. It is never dropped without a trace either.
+#' The payload is always written: an enrichment problem the preflight detects
+#' must not cost the app every other key. It is never dropped without a trace
+#' either, and blocked results are never returned as results:
+#' \code{enrichment} is then not set at all.
+#'
+#' Blocked is its own state. It differs from enrichment that was not run (no
+#' \code{enrichment_provenance} key), from a run without any ORA or GSEA
+#' result (\code{enrichment$available} is FALSE and every contrast is
+#' \code{no_result}) and from a run without significant pathways (manifest
+#' status \code{empty}).
+#'
+#' The fallback is for blockers the preflight reports, not for every possible
+#' failure. An unexpected error inside \code{build_metab_enrichment_payload()}
+#' is deliberately not caught here: it stops the payload with its own message.
 #'
 #' @param enrichment_res Result of \code{mod_metabolomics_enrichment()}, or NULL.
 #' @param expr_features  Feature ids of the exported matrix, in its row order.
