@@ -191,13 +191,45 @@ run's ORA and GSEA results into the two keys the Shiny payload carries side by
 side. It is a re-encoding of results and provenance: nothing is recomputed, and
 a result whose provenance is not `"ok"` stops it.
 
-It is **opt-in**. `build_shiny_payload_metabolomics()` adds the two keys only
-when `modes.metabolomics.enrichment.shiny_payload: true`. With the key absent or
-false the payload is exactly what it was. With it on, no existing key changes
-(the legacy `enrichment_ora`, `enrichment_gsea`, `enrichment_qea` and
-`enrichment_ssgsea` tables stay), a run without enrichment results adds
-nothing, and a result that cannot be encoded correctly stops the payload target
-with the reason.
+There is **no option to set**. `build_shiny_payload_metabolomics()` adds the two
+keys whenever the run has enrichment results (`run_enrichment: true`):
+
+-   No existing key changes: the legacy `enrichment_ora`, `enrichment_gsea`,
+    `enrichment_qea` and `enrichment_ssgsea` tables stay, and `mummichog` is
+    built on its own, with or without enrichment results.
+-   A run without enrichment adds nothing.
+-   A run whose ORA and GSEA produced no result gets a block with
+    `available = FALSE` and every contrast listed as `no_result`.
+-   Results that cannot be encoded correctly (for example results cached
+    before provenance was recorded) are not added: the payload is still
+    written with every other key, a warning names the reasons, and
+    `enrichment_provenance` holds `available = FALSE`, `reason = "blocked"`
+    and the complete preflight table. Blocked results are never shown as
+    results: `enrichment` stays `NULL`.
+
+A reader of the payload can tell these states apart, and must not treat them
+alike:
+
+| State | `enrichment` | `enrichment_provenance` |
+|---|---|---|
+| Enrichment was not run | `NULL` | key absent |
+| **Blocked**: results exist and could not be encoded | `NULL` | `available = FALSE`, `reason = "blocked"`, `preflight` |
+| Ran, ORA and GSEA produced no result | `available = FALSE`, empty components | `status$state` is `no_result` for every contrast |
+| Ran, a contrast has no significant pathway | `available = TRUE`; manifest status `empty`, zero-row table | `status$state` is `no_significant_pathways`; the tested pathways are in `all_tested` |
+| Ran, significant pathways | `available = TRUE`; manifest status `significant` | `status$state` is `significant` |
+
+"Blocked" says nothing about the biology: it means the results could not be
+re-encoded safely, and the reasons are in `preflight`. `enrichment` being `NULL`
+is therefore not enough to conclude that enrichment was not run; the
+`enrichment_provenance` key decides.
+
+The blocked fallback covers what the preflight detects: results without
+usable provenance, a feature id containing `/`, duplicated or empty ids in the
+exported matrix, and pathway ids that clash within or across results. It is
+not a catch-all. An unexpected error while building the block (a bug, or a
+state the preflight does not check) is not caught: it stops the payload
+target with its own message, so that it is seen and fixed instead of being
+recorded as "blocked".
 
 -   **`enrichment`** has exactly the nine components the app reads for RNA-seq
     (`available`, `gene_index`, `config`, `manifest`, `ora`, `gsea`,
