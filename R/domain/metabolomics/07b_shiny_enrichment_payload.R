@@ -23,7 +23,9 @@
 # and as the app's validator requires. Every TESTED pathway, with its complete
 # original statistics, is in `enrichment_provenance$<analysis>$<contrast>$all_tested`.
 #
-# Not wired into build_shiny_payload_metabolomics(): that is a separate step.
+# build_shiny_payload_metabolomics() adds the two keys only when
+# modes.metabolomics.enrichment.shiny_payload is TRUE (see
+# metab_shiny_enrichment_enabled()); it is off by default.
 #
 # Reuses: %||%, .encode_genes(), validate_enrichment_payload() (RNA-seq payload),
 #   build_metab_enrichment_manifest(), .METAB_ENRICHMENT_DB,
@@ -38,6 +40,21 @@
 
 # Where the non-directional ORA table of a contrast lives in the RNA-seq schema.
 .METAB_ENRICHMENT_ORA_GROUP <- "contrasts_without_direction"
+
+
+# ==== SWITCH ===================================================================
+
+#' Whether the Shiny payload should carry the enrichment block
+#'
+#' The one place that reads \code{modes.metabolomics.enrichment.shiny_payload}.
+#' Only a literal \code{TRUE} turns it on; a missing key, \code{FALSE} or
+#' anything else leaves the payload as it was.
+#'
+#' @param config Full pipeline config.
+#' @return TRUE or FALSE.
+metab_shiny_enrichment_enabled <- function(config) {
+    isTRUE(config$modes$metabolomics$enrichment$shiny_payload)
+}
 
 
 # ==== UNITS ====================================================================
