@@ -281,22 +281,23 @@ test_that("both gene-ORA wiring paths accept an exclusion list", {
 test_that("excluding a class leaves the retained rows' p-values untouched", {
     cache <- with_fixture_cache()
 
-    # Two metabolites per pathway, one of them significant, so the compound ORA
+    # Three metabolites per pathway -- the compound floor, see
+    # compound_min_measured() -- one of them significant, so the compound ORA
     # has something to test in each. Synthetic throughout.
     de <- data.frame(
-        feature_id = paste0("m", 1:6),
-        KEGG_ID = c("C00001", "C00002", "C00003", "C00004", "C00005", "C00006"),
-        padj = c(0.001, 0.9, 0.001, 0.9, 0.001, 0.9),
-        log2fc = c(2, 0.1, 2, 0.1, 2, 0.1),
+        feature_id = paste0("m", 1:9),
+        KEGG_ID = sprintf("C%05d", 1:9),
+        padj = rep(c(0.001, 0.9, 0.9), 3),
+        log2fc = rep(c(2, 0.1, 0.1), 3),
         stringsAsFactors = FALSE
     )
     # The shape get_kegg_compound_pathways() caches: one row per
     # (pathway, compound), with a readable name alongside.
     sets <- data.frame(
-        pathway  = rep(c("00010", "04260", "04620"), each = 2),
-        compound = paste0("C0000", 1:6),
+        pathway  = rep(c("00010", "04260", "04620"), each = 3),
+        compound = sprintf("C%05d", 1:9),
         name     = rep(c("Glycolysis", "Cardiac muscle contraction",
-                         "Toll-like receptor signaling"), each = 2),
+                         "Toll-like receptor signaling"), each = 3),
         stringsAsFactors = FALSE
     )
     saveRDS(sets, file.path(cache, "kegg_compound_pathways.rds"))
