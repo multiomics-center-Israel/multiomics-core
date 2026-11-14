@@ -297,6 +297,22 @@ test_that("results cached before provenance existed are reported, not guessed at
     expect_identical(p$enrichment_gsea, fx$enrichment_res$gsea$table)
 })
 
+test_that("blocked results never stop the payload, even when warnings are errors", {
+    skip_if_not_installed("fgsea")
+    fx <- make_export_enrichment_fixture()
+    legacy <- fx$enrichment_res
+    legacy$ora_by_contrast$A_vs_B$res$provenance  <- NULL
+    legacy$gsea_by_contrast$A_vs_B$res$provenance <- NULL
+    withr::local_options(warn = 2)
+
+    # The decision itself, under warn = 2: no error, and the reasons returned.
+    expect_error(keys <- metab_shiny_enrichment_keys(
+        legacy, rownames(fx$pre$expr_work), contrasts = "A_vs_B"), NA)
+    expect_identical(names(keys), "enrichment_provenance")
+    expect_false(keys$enrichment_provenance$available)
+    expect_identical(keys$enrichment_provenance$reason, "blocked")
+})
+
 # ---- 4. mummichog --------------------------------------------------------------------------
 
 test_that("mummichog is exported on its own, with or without enrichment results", {

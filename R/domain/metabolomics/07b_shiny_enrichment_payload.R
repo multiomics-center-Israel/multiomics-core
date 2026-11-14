@@ -649,11 +649,13 @@ metab_shiny_enrichment_keys <- function(enrichment_res, expr_features,
                                                     contrasts)
     blockers <- preflight[preflight$level == "blocker", , drop = FALSE]
     if (nrow(blockers) > 0) {
-        warning("metabolomics Shiny payload: the ORA/GSEA enrichment block was not ",
-                "added, because the results cannot be encoded correctly:\n",
-                paste0("  - ", blockers$check, ": ", blockers$detail, collapse = "\n"),
-                "\nEvery other key of the payload is written as usual.",
-                call. = FALSE)
+        # Raised so that it can never stop the payload: where warnings are
+        # turned into errors it is dropped, and the reasons stay on record.
+        .metab_prov_warn(
+            "metabolomics Shiny payload: the ORA/GSEA enrichment block was not ",
+            "added, because the results cannot be encoded correctly:\n",
+            paste0("  - ", blockers$check, ": ", blockers$detail, collapse = "\n"),
+            "\nEvery other key of the payload is written as usual.")
         return(list(enrichment_provenance = list(
             schema_version = .METAB_ENRICHMENT_PAYLOAD_SCHEMA,
             available      = FALSE,
