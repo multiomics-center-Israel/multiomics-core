@@ -283,17 +283,18 @@ modes:
         # current default; evaluate TRUE vs FALSE on your data before relying on it.
         standardize: false
 
-      # Mummichog m/z-based pathway analysis (ORA + GSEA). Opt-in. When enabled,
-      # `engine` is REQUIRED (it is never defaulted or guessed). New configs:
-      # engine: metaboanalyst — a native R reimplementation of MetaboAnalyst's
-      # MS Peaks-to-Pathways mummichog; needs a custom model (model_ref /
-      # model_json below). The legacy python engine (engine: python, pinned
-      # mummichog==2.7.0 via processx, built-in human_mfn model available)
+      # Mummichog m/z-based pathway analysis (ORA + GSEA). Opt-in. The default
+      # engine is metaboanalyst — a native R reimplementation of MetaboAnalyst's
+      # MS Peaks-to-Pathways mummichog; it needs a custom model (model_ref /
+      # model_json below) and runs when `engine` is metaboanalyst or absent.
+      # The python engine (engine: python, pinned mummichog==2.7.0 via
+      # processx, built-in human_mfn model available) runs only when named, and
       # needs the pinned venv: `make mummichog-venv` then
       # `export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"`.
+      # When disabled, no engine is selected.
       mummichog:
         enabled: false
-        engine: metaboanalyst          # metaboanalyst | python (legacy; reproduces configs written before this key)
+        engine: metaboanalyst          # metaboanalyst (default when absent) | python
         p_cutoff: 0.05
         n_permutations: 100
         tolerance_ppm: 10
@@ -314,11 +315,16 @@ modes:
 
         # Engine. metaboanalyst is a native R reimplementation of MetaboAnalyst's
         # MS Peaks-to-Pathways mummichog (MetaboAnalystR @ 398476ae), validated
-        # against that version's output; python (legacy) is the pinned
-        # mummichog 2.7.0 engine, described by the comments that do not say
-        # otherwise. Configs written before the `engine` key ran python: an
-        # enabled config without `engine` stops and asks for it — add
-        # engine: python to reproduce its earlier results. Under
+        # against that version's output; python is the pinned mummichog 2.7.0
+        # engine, described by the comments that do not say otherwise.
+        # An enabled config without `engine` runs metaboanalyst (the stage logs
+        # that the default applied) and never falls back to python: if a
+        # metaboanalyst prerequisite below is missing, the stage stops. The
+        # engine selected is recorded in mummichog_pinned/mummichog_engine.json.
+        # REPRODUCING AN OLDER ANALYSIS: a config without `engine` does not say
+        # which engine it ran (that depended on the code version), so set
+        # `engine` to the engine that analysis actually used — see
+        # "Backward compatibility" in docs/mummichog.md. Under
         # engine: metaboanalyst:
         #   * ionization_mode: positive | negative | mixed. mixed is ONE joint
         #     analysis of both polarities (one EC grouping, one background, one

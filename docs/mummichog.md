@@ -2,7 +2,7 @@
 
 > Moved here from the top-level README; the stochasticity caveat has since been corrected to match the code. Back to the [docs index](README.md).
 
-> **Choose the engine explicitly.** With mummichog enabled, `engine` is required: `engine: metaboanalyst` (the MetaboAnalyst-compatible engine, ORA + GSEA with joint mixed polarity — what the template selects for new configs; [below](#metaboanalyst-compatible-engine-joint-mixed-polarity)) or `engine: python` (the legacy pinned mummichog engine described in the next sections). Configs written before the `engine` key ran the python engine; an enabled config without `engine` now stops with a message instead of switching engines, and nothing (polarity, model, ion list) is used to guess. **To keep earlier results, add `engine: python`.** A disabled config needs no engine.
+> **Engine.** `engine: metaboanalyst` (the MetaboAnalyst-compatible engine, ORA + GSEA with joint mixed polarity; [below](#metaboanalyst-compatible-engine-joint-mixed-polarity)) is the **default**: an enabled config that names no engine runs it, and the stage says so in its log. `engine: python` selects the pinned python mummichog engine described in the next sections, and must be named to be used. The default is not a fallback: if the MetaboAnalyst-compatible engine's prerequisites are missing (a model JSON, a supported `ionization_mode`, `fitdistrplus`), the stage stops; it never switches to python. A disabled config selects no engine. The engine selected for a run is recorded in `mummichog_pinned/mummichog_engine.json`. **Re-running an older config that has no `engine` may not reproduce it** — see [Backward compatibility](#backward-compatibility-configs-without-engine).
 
 The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
 
@@ -97,7 +97,7 @@ This per-polarity behaviour is the **python engine's**. For one joint analysis o
 - empirical compounds;
 - permutations and pathway statistics.
 
-New configs select this engine (`engine: metaboanalyst`, as in the template). The python engine is untouched and selectable with `engine: python`.
+This engine is the default: it runs when `engine` is `metaboanalyst` or absent. The python engine is untouched and selectable with `engine: python`.
 
 What only the python engine provides (lost if it is ever removed): the Pathway Evidence section (supporting features and annotation agreement), mummichog's modular/network analysis outputs and `result.html`, the `pos_default` ion list, the built-in `human_mfn` model, and its own GSEA variant on python mummichog's m/z-merged ECs.
 
@@ -154,6 +154,39 @@ Limits:
 - Pathway names must be unique in the model, because MetaboAnalyst identifies pathways by name. A model that repeats a name stops the stage.
 - MetaboAnalyst's custom-adduct and currency-customisation options are not offered. The default currency list is applied.
 
+## Backward compatibility: configs without `engine`
+
+What an enabled config with no `engine` key does has changed more than once, so **the absence of the key does not tell you which engine an older analysis used**:
+
+| Code | Enabled config with no `engine` |
+|---|---|
+| Before the `engine` key existed | ran the python engine (the only one) |
+| Development commits of the MetaboAnalyst-compatible engine, before it was merged to `main` | first ran **python** (the key was opt-in), then ran **metaboanalyst** (stopping only if the config had `ionization_mode: pos_default` or `positive_mode`), then stopped |
+| `main`, from the merge of the MetaboAnalyst-compatible engine until this change | stopped and asked for the key; nothing ran |
+| Now | runs **metaboanalyst**, and records `engine_source: "default"` |
+
+In addition, the real-data validation scripts in `tests/testthat/fixtures/mummichog_ma_parity/` (`validate_real_run.R`, `build_ma_report_run.R`) set `engine: metaboanalyst` in memory on top of a stored run, so their outputs are MetaboAnalyst-compatible while the run's config file names no engine.
+
+So an older analysis whose config has no `engine` may have used either engine. **To reproduce an older analysis, set `engine` explicitly to the engine that analysis actually used.** Leaving the key out now always means `metaboanalyst`: an analysis that ran python will give different results (different statistics, headline p-value, ion lists and mixed-polarity handling — see the table above), or will stop on a MetaboAnalyst prerequisite such as the missing model JSON.
+
+To find out which engine an older run used, read the run, not the config:
+
+- **Its report.** The mummichog methodology text names the MetaboAnalyst-compatible engine (joint-polarity ORA and GSEA, FET and Holm columns) when that engine produced the results; a python run has the Pathway Evidence section and, for mixed data, one tab per polarity.
+- **Its output tree.** `mummichog_pinned/<contrast>/metaboanalyst/ma_run_info.json` exists only for the MetaboAnalyst-compatible engine; `mummichog_pinned/<contrast>/v2/` (with `mummichog_manifest.tsv`) only for python.
+- **Its code version.** `execution_info/git_commit.txt` gives the commit the run was made from.
+
+From this change on, `mummichog_pinned/mummichog_engine.json` answers the question directly:
+
+``` json
+{
+  "engine": "metaboanalyst",
+  "engine_source": "default",
+  "configured_engine": null
+}
+```
+
+`engine` is the engine selected for the run; `engine_source` is `"config"` when the config named it and `"default"` when it did not; `configured_engine` is the config value as written. The file records the selection, not that the stage completed — the engine's own result files show that. It is written by its own target (`metab_mummichog_engine_info`) and only when mummichog is enabled.
+
 ## Choosing a metabolic model
 
 The `-n` model is selected from the `mummichog` config block with this precedence:
@@ -183,6 +216,8 @@ Under `<metab_out_dir>/mummichog_pinned/`, one subdirectory per contrast (`<cont
 -   `<contrast>/input.tsv` and `<contrast>/input.tsv.idmap.tsv` — the exact table sent to mummichog for that contrast (m/z, retention time, p-value, statistic, **feature\_id as the 5th column**) plus a provenance id-map.
 -   `<contrast>/v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
 -   `<contrast>/v2/mummichog_manifest.tsv` and `<contrast>/v2/runner.log`.
+
+Directly under `mummichog_pinned/`, `mummichog_engine.json` records the engine selected for the run (see [Backward compatibility](#backward-compatibility-configs-without-engine)).
 
 Plus, directly under `mummichog_pinned/`, the presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), the GSEA exports described below, the `mummichog_evidence_*_<contrast>.{tsv,csv}` supporting-evidence tables, `mummichog_summary_<contrast>.{tsv,csv}` (the Summary table, described below), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
 

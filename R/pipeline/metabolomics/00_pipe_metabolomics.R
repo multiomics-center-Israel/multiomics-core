@@ -403,8 +403,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       #
       # The engine is chosen at plan-definition time (mmc_engine() on
       # modes.metabolomics.enrichment.mummichog.engine): metaboanalyst (05d,
-      # the MetaboAnalyst-compatible engine) or python (legacy, this
-      # command unchanged). Both fill this one target and write under mummichog_pinned/, so
+      # the MetaboAnalyst-compatible engine, also the default when the key
+      # is absent) or python (this command unchanged). Both fill this one target and write under mummichog_pinned/, so
       # every downstream target reads either the same way.
       if (identical(mummichog_engine, "metaboanalyst")) {
         tar_target(
@@ -429,6 +429,14 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
           format = "file"
         )
       },
+      # Which engine the config selected and whether it named it or took the
+      # default (06n). The config snapshot holds the config as written, so a
+      # defaulted engine is recorded only here.
+      tar_target(
+        metab_mummichog_engine_info,
+        write_mummichog_engine_info(config = config, out_dir = metab_out_dir),
+        format = "file"
+      ),
       # Report-facing pathways: read each contrast's pathway table back from the
       # tracked files (grouped by contrast dir). Always-defined so the report
       # target depends on one stable symbol (NULL in the disabled branch below).

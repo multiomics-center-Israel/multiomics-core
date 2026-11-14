@@ -56,9 +56,9 @@ ma_run_stage <- function(ref, mode) {
 
 # ---- engine switch -------------------------------------------------------------
 
-# ---- engine selection and migration -------------------------------------------
-# Configs written before the `engine` key ran the python engine, so an enabled
-# config must name its engine; it is never guessed or defaulted.
+# ---- engine selection, default and record -------------------------------------
+# An enabled config that names no engine gets metaboanalyst; python stays an
+# explicit choice; a disabled config selects nothing.
 
 test_that("an explicit engine is honoured whatever the other settings", {
   for (m in c("pos_default", "positive", "negative", "mixed")) {
@@ -76,24 +76,112 @@ test_that("an explicit engine is honoured whatever the other settings", {
   expect_error(mmc_engine(ma_cfg(engine = "mummichog3")), "must be")
 })
 
-test_that("an enabled config without an engine stops, whatever its polarity", {
+test_that("an enabled config without an engine defaults to metaboanalyst", {
+  # Whatever else the config says: python-only settings (pos_default,
+  # positive_mode) do not steer the choice. They make the MetaboAnalyst stage
+  # stop instead (next test).
   for (m in list("positive", "negative", "mixed", "pos_default", NULL)) {
     cfg <- ma_cfg(engine = NULL)
     cfg$modes$metabolomics$enrichment$mummichog$ionization_mode <- m
-    err <- tryCatch(mmc_engine(cfg), error = conditionMessage)
     lab <- if (is.null(m)) "no ionization_mode" else m
-    expect_match(err, "no engine is chosen", label = lab)
-    expect_match(err, "engine: python", fixed = TRUE, label = lab)
-    expect_match(err, "engine: metaboanalyst", fixed = TRUE, label = lab)
-    expect_match(err, "reproduces", label = lab)
+    expect_identical(mmc_engine(cfg), "metaboanalyst", label = lab)
   }
+  expect_identical(mmc_engine(ma_cfg(engine = NULL, positive_mode = "positive")),
+                   "metaboanalyst")
 })
 
-test_that("a disabled config needs no engine", {
-  expect_identical(mmc_engine(list()), "metaboanalyst")
-  expect_identical(mmc_engine(ma_cfg(engine = NULL, enabled = FALSE)), "metaboanalyst")
-  expect_identical(mmc_engine(ma_cfg(engine = NULL, enabled = FALSE,
-                                     ionization_mode = "pos_default")), "metaboanalyst")
+test_that("a defaulted engine says so, and stops rather than falling back to python", {
+  si <- list(pre = list(row_data = data.frame(feature_id = "F1")),
+             de_res = list(de_tables = list(a = data.frame())))
+  # A config shaped for the python engine (built-in human model, pos_default)
+  # with no engine: the default is announced, then the stage stops on its own
+  # prerequisite. No python stage is reached from here.
+  human <- ma_cfg(engine = NULL, ionization_mode = "positive")
+  human$modes$metabolomics$organism <- "Homo sapiens"
+  msgs <- character(0)
+  err <- tryCatch(
+    withCallingHandlers(
+      mod_mummichog_metaboanalyst(si$pre, si$de_res, human, tempfile("ma_def_")),
+      message = function(m) {
+        msgs <<- c(msgs, conditionMessage(m))
+        invokeRestart("muffleMessage")
+      }),
+    error = conditionMessage)
+  expect_true(any(grepl("names no engine", msgs)))
+  expect_true(any(grepl("engine: python", msgs, fixed = TRUE)))
+  expect_match(err, "readable metabolic model")
+  expect_error(suppressMessages(mod_mummichog_metaboanalyst(
+    si$pre, si$de_res, ma_cfg(engine = NULL, ionization_mode = "pos_default"),
+    tempfile("ma_def_"))), "pos_default")
+
+  # An explicit engine is not announced as a default.
+  msgs <- character(0)
+  human$modes$metabolomics$enrichment$mummichog$engine <- "metaboanalyst"
+  try(withCallingHandlers(
+    mod_mummichog_metaboanalyst(si$pre, si$de_res, human, tempfile("ma_def_")),
+    message = function(m) {
+      msgs <<- c(msgs, conditionMessage(m))
+      invokeRestart("muffleMessage")
+    }), silent = TRUE)
+  expect_false(any(grepl("names no engine", msgs)))
+})
+
+test_that("a disabled config selects no engine and validates none", {
+  expect_null(mmc_engine_record(list()))
+  expect_null(mmc_engine_record(ma_cfg(engine = NULL, enabled = FALSE)))
+  expect_null(mmc_engine_record(ma_cfg(engine = "python", enabled = FALSE)))
+  # not even an unknown engine is looked at
+  expect_null(mmc_engine_record(ma_cfg(engine = "mummichog3", enabled = FALSE)))
+
+  out <- tempfile("ma_engine_off_")
+  expect_null(write_mummichog_engine_info(
+    ma_cfg(engine = "mummichog3", enabled = FALSE), out))
+  expect_false(dir.exists(out))
+})
+
+test_that("the engine record names both engines and tells explicit from default", {
+  expect_identical(mmc_engine_record(ma_cfg(engine = NULL)),
+                   list(engine = "metaboanalyst", engine_source = "default",
+                        configured_engine = NULL))
+  expect_identical(mmc_engine_record(ma_cfg(engine = "metaboanalyst")),
+                   list(engine = "metaboanalyst", engine_source = "config",
+                        configured_engine = "metaboanalyst"))
+  # the resolved engine is normalised; the configured value is kept as written
+  expect_identical(mmc_engine_record(ma_cfg(engine = " Python ")),
+                   list(engine = "python", engine_source = "config",
+                        configured_engine = " Python "))
+  expect_error(mmc_engine_record(ma_cfg(engine = "mummichog3")), "must be")
+})
+
+test_that("the engine record is written beside the mummichog outputs", {
+  read_rec <- function(cfg) {
+    out <- tempfile("ma_engine_")
+    path <- write_mummichog_engine_info(cfg, out)
+    expect_identical(path, file.path(out, "mummichog_pinned",
+                                     "mummichog_engine.json"))
+    expect_true(file.exists(path))
+    list(rec = jsonlite::read_json(path), text = readLines(path, warn = FALSE))
+  }
+  def <- read_rec(ma_cfg(engine = NULL))
+  expect_identical(def$rec$engine, "metaboanalyst")
+  expect_identical(def$rec$engine_source, "default")
+  expect_null(def$rec$configured_engine)
+  # the absent key is written as an explicit null, not dropped
+  expect_true(any(grepl("\"configured_engine\": null", def$text)))
+
+  ma <- read_rec(ma_cfg(engine = "metaboanalyst"))
+  expect_identical(ma$rec$engine, "metaboanalyst")
+  expect_identical(ma$rec$engine_source, "config")
+  expect_identical(ma$rec$configured_engine, "metaboanalyst")
+
+  py <- read_rec(ma_cfg(engine = "python", ionization_mode = "pos_default"))
+  expect_identical(py$rec$engine, "python")
+  expect_identical(py$rec$engine_source, "config")
+  expect_identical(py$rec$configured_engine, "python")
+
+  # same selection, same bytes: nothing in the record depends on when it ran
+  expect_identical(read_rec(ma_cfg(engine = "python"))$text,
+                   read_rec(ma_cfg(engine = "python"))$text)
 })
 
 test_that("the template selects the MetaboAnalyst-compatible engine explicitly", {
@@ -164,6 +252,20 @@ test_that("the DAG runs the MA stage by default and the python stage on request"
   expect_match(cmd(ma), "mod_mummichog_metaboanalyst\\(")
   names_of <- function(tl) sort(vapply(tl, function(t) t$settings$name, character(1)))
   expect_identical(names_of(ma), names_of(py))
+
+  # the engine record: a file target under either engine, absent when disabled
+  for (tl in list(ma, py)) {
+    nm <- vapply(tl, function(t) t$settings$name, character(1))
+    expect_identical(sum(nm == "metab_mummichog_engine_info"), 1L)
+    expect_identical(
+      tl[[which(nm == "metab_mummichog_engine_info")]]$settings$format, "file")
+  }
+  off <- pipe_metabolomics("pqn", mummichog_enabled = FALSE)
+  expect_false("metab_mummichog_engine_info" %in% names_of(off))
+  # _targets.R passes no engine for a disabled config
+  expect_identical(names_of(pipe_metabolomics("pqn", mummichog_enabled = FALSE,
+                                              mummichog_engine = NULL)),
+                   names_of(off))
 })
 
 # ---- the stage end to end, against MetaboAnalystR's own output -------------------

@@ -20,46 +20,92 @@
 #' Which mummichog engine a config selects
 #'
 #' The single resolver for `modes.metabolomics.enrichment.mummichog.engine`:
-#' `"metaboanalyst"` (the MetaboAnalyst-compatible engine, which new configs
-#' select) or `"python"` (the pinned mummichog 2.7.0 engine, kept as a legacy
-#' option). Every consumer — the DAG, the stage, the report sections, the
-#' report text, the polarity-label resolver — asks this rather than reading the
-#' key itself.
+#' `"metaboanalyst"` (the MetaboAnalyst-compatible engine) or `"python"` (the
+#' pinned mummichog 2.7.0 engine, kept as an explicit option). Every consumer
+#' — the DAG, the stage, the report text, the polarity-label resolver, the
+#' engine record — asks this rather than reading the key itself.
 #'
-#' When mummichog is enabled the engine must be named. Before the key existed
-#' every config ran the python engine, so an enabled config without `engine`
-#' is a python config whose results a silent default would change; it stops
-#' instead, and nothing about it (polarity, model, ion list) is used to guess.
-#' A disabled config never stops: nothing runs, so `"metaboanalyst"` is
-#' returned only so callers have a value.
+#' A config that names no engine gets `"metaboanalyst"`. That is a default,
+#' not a fallback: if the MetaboAnalyst-compatible engine's prerequisites are
+#' missing, its stage stops; nothing reroutes the run to python.
+#'
+#' The resolver does not look at `enabled`. A disabled config runs no engine,
+#' so its callers do not ask (see `mmc_engine_record()`).
 #'
 #' @param config Full pipeline config.
-#' @return `"metaboanalyst"` or `"python"`. An unknown engine, or no engine on
-#'   an enabled config, stops.
+#' @return `"metaboanalyst"` or `"python"`. An unknown engine stops.
 #' @examples
 #' mmc_engine(list(modes = list(metabolomics = list(enrichment = list(
 #'   mummichog = list(enabled = TRUE, engine = "python"))))))
 mmc_engine <- function(config) {
   mm <- config$modes$metabolomics$enrichment$mummichog %||% list()
-  if (is.null(mm$engine)) {
-    if (!isTRUE(mm$enabled)) return("metaboanalyst")
-    .mmc_stop(
-      "mummichog is enabled but no engine is chosen. Add one line to the ",
-      "mummichog block of your config (modes > metabolomics > enrichment > ",
-      "mummichog):\n",
-      "    engine: python          # keep earlier results: configs without ",
-      "'engine' ran the python mummichog engine, so this reproduces them\n",
-      "    engine: metaboanalyst   # the MetaboAnalyst-compatible engine (ORA + ",
-      "GSEA, joint mixed polarity); results will differ from python runs\n",
-      "The engine is never guessed from other settings. See docs/mummichog.md.")
-  }
+  if (is.null(mm$engine)) return(.MMC_DEFAULT_ENGINE)
   eng <- tolower(trimws(as.character(mm$engine)))
   if (length(eng) != 1L || is.na(eng) || !eng %in% c("python", "metaboanalyst")) {
     .mmc_stop("mummichog.engine must be \"metaboanalyst\" (the MetaboAnalyst-",
-              "compatible engine) or \"python\" (the pinned mummichog 2.7.0 ",
-              "engine, legacy); got '", paste(mm$engine, collapse = ", "), "'.")
+              "compatible engine, the default) or \"python\" (the pinned ",
+              "mummichog 2.7.0 engine); got '",
+              paste(mm$engine, collapse = ", "), "'.")
   }
   eng
+}
+
+# The engine an enabled config gets when it names none.
+.MMC_DEFAULT_ENGINE <- "metaboanalyst"
+
+# The engine record, at the top of mummichog_pinned/ (beside the contrast
+# directories, which the stages own and clear).
+.MMC_ENGINE_INFO_FILE <- "mummichog_engine.json"
+
+#' The engine an enabled mummichog config selects, and where the choice came from
+#'
+#' What `write_mummichog_engine_info()` writes, and what the stage reads to say
+#' that the default was applied. A disabled config selects nothing: the engine
+#' key is neither resolved nor validated, and the result is NULL.
+#'
+#' @param config Full pipeline config.
+#' @return NULL when mummichog is not enabled; otherwise a list with `engine`
+#'   (as `mmc_engine()`), `engine_source` (`"config"` when the config names the
+#'   engine, `"default"` when it does not) and `configured_engine` (the config
+#'   value as written, NULL when absent).
+#' @examples
+#' mmc_engine_record(list(modes = list(metabolomics = list(enrichment = list(
+#'   mummichog = list(enabled = TRUE))))))
+mmc_engine_record <- function(config) {
+  mm <- config$modes$metabolomics$enrichment$mummichog %||% list()
+  if (!isTRUE(mm$enabled)) return(NULL)
+  list(engine            = mmc_engine(config),
+       engine_source     = if (is.null(mm$engine)) "default" else "config",
+       configured_engine = mm$engine)
+}
+
+#' Record the selected mummichog engine beside the run's mummichog outputs
+#'
+#' Writes `mummichog_pinned/mummichog_engine.json`. The config snapshot in
+#' `execution_info/` holds the config as written, so an engine that was
+#' defaulted is not in it; this file names the engine either way and says
+#' whether the config chose it. It records the selection for the run, not that
+#' the stage completed — the engine's own result files are the evidence of
+#' that. No timestamp, so an unchanged selection rewrites an identical file.
+#'
+#' @param config  Full pipeline config.
+#' @param out_dir Metabolomics output dir; the file goes in
+#'   `<out_dir>/mummichog_pinned/`.
+#' @return The path of the record, for a `format = "file"` target; NULL
+#'   (nothing written) when mummichog is not enabled.
+#' @examples
+#' \dontrun{
+#' write_mummichog_engine_info(config, "out/metabolomics")
+#' }
+write_mummichog_engine_info <- function(config, out_dir) {
+  rec <- mmc_engine_record(config)
+  if (is.null(rec)) return(NULL)
+  dir <- file.path(out_dir, "mummichog_pinned")
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  path <- file.path(dir, .MMC_ENGINE_INFO_FILE)
+  jsonlite::write_json(rec, path, auto_unbox = TRUE, pretty = TRUE,
+                       null = "null")
+  path
 }
 
 # The engine's own result files, per contrast.
