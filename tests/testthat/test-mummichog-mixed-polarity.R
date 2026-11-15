@@ -52,7 +52,8 @@
 
   out <- withr::local_tempdir()
   cfg <- list(modes = list(metabolomics = list(enrichment = list(
-    mummichog = utils::modifyList(list(enabled = TRUE), mummi_cfg)))))
+    mummichog = utils::modifyList(list(enabled = TRUE, engine = "python"),
+                                  mummi_cfg)))))
   mod_mummichog_pinned(pre, de_res, cfg, out_dir = out, python = "python")
   map <- utils::read.delim(file.path(out, "mummichog_pinned", "contrasts.tsv"),
                            colClasses = "character")

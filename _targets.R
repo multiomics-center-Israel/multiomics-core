@@ -150,7 +150,8 @@ list(
     if (!is.null(cfg_raw$modes$metabolomics)) {
       met_chosen <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
       met_mcg    <- isTRUE(cfg_raw$modes$metabolomics$enrichment$mummichog$enabled)
-      met_mcg_engine <- if (met_mcg) mmc_engine(cfg_raw) else "metaboanalyst"
+      # A disabled config runs no engine, so none is resolved or validated.
+      met_mcg_engine <- if (met_mcg) mmc_engine(cfg_raw) else NULL
       # Fingerprint the enrichment reference files now, so that an edited or
       # newly present GMT / mapping file changes the plan and reruns its readers.
       met_refs   <- metab_reference_fingerprints(cfg_raw)
