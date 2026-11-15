@@ -185,7 +185,7 @@ From this change on, `mummichog_pinned/mummichog_engine.json` answers the questi
 }
 ```
 
-`engine` is the engine selected for the run; `engine_source` is `"config"` when the config named it and `"default"` when it did not; `configured_engine` is the config value as written. The file records the selection, not that the stage completed — the engine's own result files show that. It is written by its own target (`metab_mummichog_engine_info`) and only when mummichog is enabled.
+`engine` is the engine selected for the run; `engine_source` is `"config"` when the config named it and `"default"` when it did not; `configured_engine` is the config value as written. The file records the selection, not that the stage completed — the engine's own result files show that. It is written by its own target (`metab_mummichog_engine_info`), only when mummichog is enabled, and before the engine stage runs, so a stage that stops still leaves the current selection on disk.
 
 ## Choosing a metabolic model
 

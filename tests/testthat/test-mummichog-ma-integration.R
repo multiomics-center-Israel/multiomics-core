@@ -260,6 +260,16 @@ test_that("the DAG runs the MA stage by default and the python stage on request"
     expect_identical(
       tl[[which(nm == "metab_mummichog_engine_info")]]$settings$format, "file")
   }
+  # ... and written before the stage: the stage's command depends on it, so a
+  # stage that stops still leaves the current selection on disk, never the
+  # previous run's.
+  for (tl in list(ma, py)) {
+    nm <- vapply(tl, function(t) t$settings$name, character(1))
+    stage <- tl[[which(nm == "metab_mummichog_pinned_files")]]
+    expect_true("metab_mummichog_engine_info" %in% all.vars(stage$command$expr))
+    rec <- tl[[which(nm == "metab_mummichog_engine_info")]]
+    expect_false("metab_mummichog_pinned_files" %in% all.vars(rec$command$expr))
+  }
   off <- pipe_metabolomics("pqn", mummichog_enabled = FALSE)
   expect_false("metab_mummichog_engine_info" %in% names_of(off))
   # _targets.R passes no engine for a disabled config
