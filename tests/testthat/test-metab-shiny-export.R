@@ -217,3 +217,95 @@ test_that("mummichog does not depend on include_legacy", {
         expect_named(p$mummichog, "A_vs_B", info = paste("include_legacy =", legacy))
     }
 })
+
+
+# --- metabolite names -----------------------------------------------------------
+# Name is an annotation: it comes from row_data$Name, joined by feature_id, in
+# every DE table. original_id is the researcher's own id and may be a generic
+# "feature_N"; it must never stand in for the name.
+
+METAB_NAMES <- c(F1 = "alanine", F2 = NA, F3 = "citrate", F4 = "glucose",
+                 F5 = "lactate")
+
+make_metab_name_fixture <- function() {
+    fx <- make_metab_export_fixture()
+    feats <- names(METAB_NAMES)
+    row_data <- data.frame(feature_id  = feats,
+                           original_id = paste0("feature_", seq_along(feats)),
+                           Name        = unname(METAB_NAMES),
+                           row.names   = feats, stringsAsFactors = FALSE)
+    # Annotation rows in a different order from the DE table.
+    fx$pre$row_data <- row_data[c(3, 1, 5, 2, 4), , drop = FALSE]
+    fx
+}
+
+test_that("de_stats and de_sig_stats take Name from row_data by feature_id", {
+    fx <- make_metab_name_fixture()
+    p  <- build_metab_payload(fx)
+
+    for (key in c("de_stats", "de_sig_stats")) {
+        tab <- p[[key]]
+        expect_identical(tab$Name, unname(METAB_NAMES[tab$feature_id]), info = key)
+        expect_identical(tab$original_id,
+                         sub("^F", "feature_", tab$feature_id), info = key)
+    }
+    # The ids themselves are untouched, in the DE table's own order.
+    expect_identical(p$de_stats$feature_id, fx$de_res$summary_df$feature_id)
+})
+
+test_that("de_final_table carries the same names, beside feature_id and original_id", {
+    p  <- build_metab_payload(make_metab_name_fixture())
+    de <- p$de_final_table
+
+    expect_identical(names(de)[1:3], c("feature_id", "original_id", "Name"))
+    expect_identical(de$Name, unname(METAB_NAMES[de$feature_id]))
+    expect_identical(de$original_id, sub("^F", "feature_", de$feature_id))
+})
+
+test_that("Name agrees across de_stats, de_final_table and feature_annot", {
+    p <- build_metab_payload(make_metab_name_fixture())
+
+    from_annot <- function(ids) p$feature_annot[ids, "Name"]
+    expect_identical(p$de_stats$Name, from_annot(p$de_stats$feature_id))
+    expect_identical(p$de_final_table$Name, from_annot(p$de_final_table$feature_id))
+})
+
+test_that("a feature without an annotation row gets NA, not another feature's name", {
+    fx <- make_metab_name_fixture()
+    fx$pre$row_data <- fx$pre$row_data[rownames(fx$pre$row_data) != "F1", , drop = FALSE]
+    p  <- build_metab_payload(fx)
+
+    expected <- unname(METAB_NAMES[p$de_stats$feature_id])
+    expected[p$de_stats$feature_id == "F1"] <- NA
+    expect_identical(p$de_stats$Name, expected)
+    expect_true(is.na(p$de_final_table$Name[p$de_final_table$feature_id == "F1"]))
+    expect_identical(p$de_final_table$Name[p$de_final_table$feature_id == "F5"], "lactate")
+})
+
+test_that("without a Name column in row_data, the DE tables have none", {
+    fx <- make_metab_name_fixture()
+    fx$pre$row_data$Name <- NULL
+    p  <- build_metab_payload(fx)
+
+    expect_false("Name" %in% names(p$de_stats))
+    expect_false("Name" %in% names(p$de_final_table))
+    expect_true("original_id" %in% names(p$de_stats))
+})
+
+test_that("the final-results table written to TSV and Excel names features from row_data", {
+    fx <- make_metab_name_fixture()
+    final <- suppressMessages(suppressWarnings(build_final_results_metabolomics(
+        pre             = fx$pre,
+        summary_df      = fx$de_res$summary_df,
+        contrast_labels = names(fx$de_res$de_tables),
+        row_data        = fx$pre$row_data,
+        feature_id_col  = "feature_id",
+        cv_contrasts_df = fx$inputs$contrasts,
+        config          = fx$config
+    )))
+
+    expect_identical(names(final)[1:3], c("feature_id", "original_id", "Name"))
+    expect_setequal(final$feature_id, fx$de_res$summary_df$feature_id)
+    expect_identical(final$Name, unname(METAB_NAMES[final$feature_id]))
+    expect_false(any(final$Name %in% final$original_id))
+})

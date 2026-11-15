@@ -523,18 +523,10 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut,
                                    use_adjusted_pval = use_adj)
 
-    # Add Name column from row_data$original_id (HMDB → compound name)
-    if (!is.null(pre$row_data) && "original_id" %in% colnames(pre$row_data)) {
-        idx <- match(summary_df$feature_id, rownames(pre$row_data))
-        names_resolved <- pre$row_data$original_id[idx]
-        # Only add if names differ from feature_id (i.e., actually resolved)
-        if (!all(is.na(names_resolved)) && !all(names_resolved == summary_df$feature_id, na.rm = TRUE)) {
-            summary_df$Name <- names_resolved
-            # Move Name to second column
-            cols <- colnames(summary_df)
-            summary_df <- summary_df[, c("feature_id", "Name", setdiff(cols, c("feature_id", "Name")))]
-        }
-    }
+    # summary_df carries feature_id and statistics only. Annotations (Name,
+    # original_id, ...) are joined from pre$row_data by feature_id where a
+    # table is written or exported; a Name column here would shadow the
+    # row_data one in the Shiny payload and the final-results tables.
 
     message("metabolomics DE complete: ", nrow(summary_df), " features, ",
             sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
