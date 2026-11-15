@@ -417,8 +417,15 @@ test_that("the payload builder reaches the block builder, so {targets} tracks it
     expect_true(all(c("preflight_metab_enrichment_payload",
                       "build_metab_enrichment_payload") %in%
                         body_names(metab_shiny_enrichment_keys)))
-    # The option and its reader are gone, from the code and from the template.
-    expect_false(exists("metab_shiny_enrichment_enabled"))
+    # The option and its reader are gone from the source. The files are read,
+    # not the session: an object left in the workspace by an earlier session
+    # says nothing about this branch.
+    r_files <- list.files(file.path(root_dir, "R"), pattern = "\\.[Rr]$",
+                          recursive = TRUE, full.names = TRUE)
+    expect_gt(length(r_files), 0)
+    source_lines <- unlist(lapply(r_files, readLines, warn = FALSE), use.names = FALSE)
+    expect_false(any(grepl("metab_shiny_enrichment_enabled", source_lines, fixed = TRUE)))
+    expect_false(any(grepl("enrichment$shiny_payload", source_lines, fixed = TRUE)))
     skip_if_not_installed("yaml")
     template <- yaml::read_yaml(file.path(root_dir, "config", "templates",
                                           "metabolomics_template.yaml"))
