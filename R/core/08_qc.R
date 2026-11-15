@@ -580,14 +580,20 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
 #' @param cluster_cols,cluster_rows Passed to \code{plot_heatmap_core()}.
 #' @param annot_cols Metadata columns for the sample annotation bars. NULL
 #'   (default) keeps the color column plus the shape column, as before.
+#' @param annot Optional ready-made annotation data.frame (rownames = sample
+#'   IDs), used as is after alignment to the matrix columns; overrides
+#'   \code{annot_cols}. NULL (default) changes nothing.
+#' @param annot_colors Optional pheatmap \code{annotation_colors} list.
 #' @return The pheatmap object.
 wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
                             cluster_cols = TRUE, cluster_rows = TRUE,
-                            annot_cols = NULL) {
+                            annot_cols = NULL, annot = NULL, annot_colors = NULL) {
   # 1. Prepare Data
   d <- prepare_qc_data(expr_mat, meta, cfg)
 
-  if (!is.null(annot_cols)) {
+  if (!is.null(annot)) {
+    annot <- annot[d$sample_ids, , drop = FALSE]
+  } else if (!is.null(annot_cols)) {
     # Same columns as the sibling QC heatmaps, so the clustered and unclustered
     # views carry the same annotation bars.
     # d$meta is already aligned 1:1 with the matrix columns.
@@ -608,7 +614,8 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
     title = paste0("QC: Sample ", stage, " Expression"),
     max_rows = 2000,
     cluster_rows = cluster_rows,
-    cluster_cols = cluster_cols
+    cluster_cols = cluster_cols,
+    annotation_colors = if (is.null(annot_colors)) NA else annot_colors
   )
   
   if (!is.null(out_file)) {
@@ -624,6 +631,9 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
 #' @param show_labels Show sample names on axes (default FALSE to prevent overload)
 #' @param cluster_samples Enable hierarchical clustering (default TRUE)
 #' @param adjust_scale Adjust color scale for tight correlation ranges (default TRUE)
+#' @param annot Optional ready-made annotation data.frame (rownames = sample
+#'   IDs), aligned to the matrix columns; overrides annot_cols. NULL changes nothing.
+#' @param annot_colors Optional pheatmap annotation_colors list.
 # qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
 #                                           annot_cols = NULL,
 #                                           method = "pearson",
@@ -668,11 +678,16 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
                                           fontsize = 10,
                                           show_labels = TRUE,
                                           cluster_samples = TRUE,
-                                          adjust_scale = FALSE) {
+                                          adjust_scale = FALSE,
+                                          annot = NULL,
+                                          annot_colors = NULL) {
   d <- prepare_qc_data(expr_mat, meta, cfg)
   
-  # Build annotations: use multi-column if provided, otherwise default
-  if (!is.null(annot_cols)) {
+  # Build annotations: a ready-made one (aligned here), else multi-column if
+  # provided, otherwise default
+  if (!is.null(annot)) {
+    annot <- annot[d$sample_ids, , drop = FALSE]
+  } else if (!is.null(annot_cols)) {
     annot <- d$meta[d$sample_ids, annot_cols, drop = FALSE]
     rownames(annot) <- d$sample_ids
   } else {
@@ -694,7 +709,7 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
     cluster_rows = cluster_samples,
     cluster_cols = cluster_samples,
     adjust_scale = adjust_scale,
-    
+    annotation_colors = annot_colors
   )
   
   # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability

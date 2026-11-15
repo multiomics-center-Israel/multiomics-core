@@ -105,6 +105,22 @@ mod_proteomics_exports <- function(
         files <- c(files, save_tsv(cd_rows, dirs$datasets, basename(cd_path)))
     }
 
+    # 3d. The DE matrix with the fitted covariates removed. Downstream readers
+    #     (the report, Techniomics' import) can then compare group means with
+    #     the reported log2FC on the scale the model describes; the raw group
+    #     means are a different estimand once a covariate is fitted. Same
+    #     write-or-remove rule as the tables above.
+    cr_path <- file.path(dirs$datasets, "de_matrix_covariates_removed.tsv")
+    if (is.null(cd)) {
+        unlink(cr_path)
+    } else {
+        cr_mat <- resolve_proteomics_display_matrix(pre, de_res, config)$mat
+        cr_df <- cbind(data.frame(rownames(cr_mat), check.names = FALSE),
+                       as.data.frame(cr_mat, check.names = FALSE))
+        names(cr_df)[1] <- prot_cfg$id_columns$protein_id %||% "Protein.Group"
+        files <- c(files, save_tsv(cr_df, dirs$datasets, basename(cr_path)))
+    }
+
     # =========================================================================
     # 4. Build final_results ONCE (the key optimization)
     # =========================================================================
@@ -136,7 +152,10 @@ mod_proteomics_exports <- function(
             row_data = pre$row_data,
             feature_id_col = id_col,
             config = config,
-            expr_model = expr_model
+            expr_model = expr_model,
+            # Mean.adj.<group>: only when the model fitted de$covariates
+            # (de_res$covariate_design is the evidence); NULL otherwise.
+            mean_adj = build_group_mean_adjusted_proteomics(pre, de_res, inputs$contrasts, config)
         )
 
         # Write final_results TSV
@@ -188,7 +207,13 @@ mod_proteomics_exports <- function(
             # NULL unless this run pooled two or more imputed DE fits, which is
             # the only case where the reported fold change is not simply the
             # coefficient of the model the workbook already describes.
-            de_reconciliation = build_de_reconciliation_proteomics(de_res, config)
+            de_reconciliation = build_de_reconciliation_proteomics(de_res, config),
+            de_covariates = if (!is.null(de_res$covariate_design)) {
+                get_proteomics_de_covariates(prot_cfg)
+            },
+            de_design = if (!is.null(de_res$covariate_design)) {
+                describe_proteomics_de_design(prot_cfg, get_proteomics_de_covariates(prot_cfg))
+            }
         )
         files <- c(files, excel_files)
     }

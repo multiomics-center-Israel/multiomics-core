@@ -401,6 +401,19 @@ resolve_de_covariates <- function(meta_aligned, p_cfg) {
     scale(mat, center = TRUE, scale = FALSE)
 }
 
+#' Condition column of the proteomics limma design
+#'
+#' The column whose levels become the `~ 0 + condition` columns of
+#' [build_proteomics_de_design()]: the same fallback chain
+#' [run_limma_proteomics()] resolves inline, so the covariate removal in
+#' [remove_proteomics_de_covariates()] keeps the grouping the model kept.
+#'
+#' @param p_cfg The `modes$proteomics` config branch.
+#' @return A single metadata column name.
+get_proteomics_de_group_col <- function(p_cfg) {
+    p_cfg$de_table$group_col %||% p_cfg$effects$color %||% "Condition"
+}
+
 #' Build the limma design matrix for a proteomics fit
 #'
 #' One column per condition (no intercept), so the contrasts can name condition
@@ -1145,6 +1158,72 @@ get_de_features <- function(de_res, cfg) {
         warning("pass_any_col '", pass_any_col, "' not found. Returning empty feature set.")
         return(character(0))
     }
+}
+
+#' Cut-offs that choose the rows of the proteomics clustering heatmap
+#'
+#' `clustering.de_padj_cutoff` and `clustering.de_log2fc_cutoff` let the
+#' clustering use its own DE rule without moving the DE call itself. When
+#' neither is set the clustering keeps `pass_any_contrast`, the DE step's own
+#' rule. When only one is set, the other comes from the `de` block, resolved as
+#' [summarize_limma_mult_imputation()] resolves it.
+#'
+#' @param p_cfg The `modes$proteomics` config branch.
+#' @return NULL when neither key is set; otherwise a list with numeric
+#'   `padj_cutoff` and `log2fc_cutoff`.
+get_clustering_de_cutoffs <- function(p_cfg) {
+    cl <- p_cfg$clustering %||% list()
+    padj <- cl[["de_padj_cutoff"]]
+    lfc <- cl[["de_log2fc_cutoff"]]
+    if (is.null(padj) && is.null(lfc)) return(NULL)
+    de_cfg <- p_cfg$de %||% list()
+    list(
+        padj_cutoff   = as.numeric(padj %||% de_cfg$p_cutoff %||% 0.05),
+        log2fc_cutoff = as.numeric(lfc %||% log2(as.numeric(de_cfg$linear_fc_cutoff %||% 1.5)))
+    )
+}
+
+#' Re-mark the per-contrast pass columns with the clustering cut-offs
+#'
+#' A protein passes a contrast when `padj.imputs.<contrast>` is below
+#' `padj_cutoff` (strictly) and `abs(log2FC.imputs.<contrast>)` is at least
+#' `log2fc_cutoff`. The rule reads the summarised columns only, so with several
+#' imputation draws it does not repeat the per-draw vote the DE step applies.
+#' `pass.imputs.<contrast>`, `n_pass_contrasts` and `pass_any_contrast` are
+#' rewritten in the returned copy; the DE result itself is not modified.
+#'
+#' @param summary_df DE summary from [summarize_limma_mult_imputation()].
+#' @param cutoffs Output of [get_clustering_de_cutoffs()], or NULL to return
+#'   `summary_df` unchanged.
+#' @return `summary_df`, with the pass columns recomputed when `cutoffs` is set.
+#' @examples
+#' df <- data.frame(FeatureID = c("p1", "p2"), padj.imputs.a = c(0.01, 0.01),
+#'                  log2FC.imputs.a = c(0.59, 0.7), pass.imputs.a = c(1, 1))
+#' apply_clustering_de_cutoffs(df, list(padj_cutoff = 0.05, log2fc_cutoff = 0.6))
+apply_clustering_de_cutoffs <- function(summary_df, cutoffs) {
+    if (is.null(cutoffs)) return(summary_df)
+    padj_cols <- grep("^padj\\.imputs\\.", names(summary_df), value = TRUE)
+    if (length(padj_cols) == 0) {
+        stop("clustering.de_padj_cutoff / de_log2fc_cutoff need padj.imputs.<contrast> ",
+             "columns in the DE summary, and there are none.\n",
+             "  Remove both keys to cluster on the DE step's own pass_any_contrast.",
+             call. = FALSE)
+    }
+    for (pc in padj_cols) {
+        cn <- sub("^padj\\.imputs\\.", "", pc)
+        lfc_col <- paste0("log2FC.imputs.", cn)
+        if (!lfc_col %in% names(summary_df)) {
+            stop("The DE summary has '", pc, "' but no '", lfc_col, "', so the ",
+                 "clustering fold-change cut-off cannot be applied to contrast '", cn, "'.",
+                 call. = FALSE)
+        }
+        padj <- summary_df[[pc]]
+        lfc <- summary_df[[lfc_col]]
+        pass <- !is.na(padj) & !is.na(lfc) &
+            padj < cutoffs$padj_cutoff & abs(lfc) >= cutoffs$log2fc_cutoff
+        summary_df[[paste0("pass.imputs.", cn)]] <- ifelse(pass, 1, NA)
+    }
+    add_pass_any_contrast(summary_df)
 }
 
 

@@ -252,6 +252,11 @@ show_executive_summary <- report_cfg$show_executive_summary %||% TRUE
 show_methods <- report_cfg$show_methods %||% TRUE
 show_session_info <- report_cfg$show_session_info %||% TRUE
 force_pca <- report_cfg$force_pca %||% FALSE
+# Figures written by prot_sample_figures / prot_enrichment_heatmaps; each
+# section below also needs its index file, so a run that did not write them
+# shows nothing.
+show_sample_heatmaps <- report_cfg$show_sample_heatmaps %||% TRUE
+show_enrichment_heatmaps <- report_cfg$show_enrichment_heatmaps %||% TRUE
 
 # Load DE summary data (used in multiple sections). Use the same QC_post /
 # DE_plots fallback resolver as the PNG chunks so older runs (which wrote
@@ -1214,6 +1219,83 @@ figure_legend("Unsupervised hierarchical clustering heatmap based on the top mos
 
 ```{r commentary-expr-heatmap, eval=show_expression_heatmap, results='asis'}
 render_commentary("expr_heatmap")
+```
+
+```{r de-matrix-figures, eval=show_sample_heatmaps, results='asis'}
+# Reads only what mod_proteomics_sample_figures() wrote and its index; the
+# matrix description comes from that index, not from the config.
+.dm_dir <- file.path(diag_dir, "DE_matrix")
+.dm_idx_file <- file.path(.dm_dir, "figures_index.tsv")
+if (file.exists(.dm_idx_file)) {
+    .dm <- read.delim(.dm_idx_file, stringsAsFactors = FALSE)
+    .dm_matrix <- .dm$matrix[1]
+    .dm_ann <- unlist(prot_cfg$effects$heatmap_annotations)
+    .dm_ann_txt <- if (length(.dm_ann) > 0) {
+        sprintf("Samples are annotated by %s (effects.heatmap_annotations).",
+                paste(.dm_ann, collapse = " and "))
+    } else {
+        "Samples are annotated by the condition column."
+    }
+    cat("## Sample structure on the DE matrix {.tabset}\n\n")
+    cat(sprintf(paste0(
+        "These figures use the whole matrix rather than single contrasts. Matrix: %s. ",
+        "The DE matrix is the imputed matrix limma was fitted on (the .norm columns of ",
+        "Datasets/final_results.tsv). Protein sets are drawn only from fully measured proteins, ",
+        "i.e. observed in every sample before imputation, so no imputed value enters a set or its ",
+        "ranking; the top-N sets are the N with the largest variance across samples on this matrix. %s\n\n"),
+        .dm_matrix, .dm_ann_txt))
+
+    .dm_src <- function(png) sprintf("Source: Diagnostic_plots/DE_matrix/%s (PDF alongside).", png)
+    .pca <- .dm[.dm$figure == "pca_before_after", , drop = FALSE]
+    if (nrow(.pca) > 0) {
+        cat("### PCA before and after covariate removal\n\n")
+        cat(sprintf("![PCA before and after covariate removal](%s){width=100%%}\n\n",
+                    file.path(.dm_dir, .pca$png[1])))
+        figure_legend(paste(
+            sprintf(paste0("PCA (centred, not scaled) on the %d fully measured proteins, the same ",
+                           "proteins in every panel. Left: DE matrix before covariate removal. ",
+                           "Middle: %s. Further panels: the left-panel scores coloured by each ",
+                           "covariate value. Axes give the share of variance explained. Point ",
+                           "labels are sample names, set smaller than the other text so they do ",
+                           "not overlap."),
+                    .pca$n_proteins[1], .dm_matrix),
+            .dm_src(.pca$png[1])))
+    }
+
+    .set_label <- function(set, n) {
+        if (identical(set, "fully_measured")) sprintf("All fully measured (%d)", n)
+        else sprintf("Top %s by variance", sub("^top", "", set))
+    }
+    .hm <- .dm[.dm$figure %in% c("correlation", "zscore"), , drop = FALSE]
+    for (.set in unique(.hm$set)) {
+        .r <- .hm[.hm$set == .set, , drop = FALSE]
+        .n <- .r$n_proteins[1]
+        cat(sprintf("\n### %s {.tabset}\n\n", .set_label(.set, .n)))
+        .rc <- .r[.r$figure == "correlation", , drop = FALSE]
+        if (nrow(.rc) > 0) {
+            cat("#### Sample correlation\n\n")
+            cat(sprintf("![Sample correlation](%s){width=90%%}\n\n", file.path(.dm_dir, .rc$png[1])))
+            figure_legend(paste(
+                sprintf(paste0("Pearson correlation between samples over %d proteins, computed after ",
+                               "subtracting each protein's mean across samples. Matrix: %s. Rows and ",
+                               "columns ordered by pheatmap's clustering of the correlation matrix ",
+                               "(Euclidean distance, complete linkage). Colour scale fixed at -1 to 1."),
+                        .n, .dm_matrix),
+                .dm_src(.rc$png[1])))
+        }
+        .rz <- .r[.r$figure == "zscore", , drop = FALSE]
+        if (nrow(.rz) > 0) {
+            cat("#### Protein z-score heatmap\n\n")
+            cat(sprintf("![Protein z-score heatmap](%s){width=90%%}\n\n", file.path(.dm_dir, .rz$png[1])))
+            figure_legend(paste(
+                sprintf(paste0("Row z-scores of %d proteins (rows) across samples (columns). Euclidean ",
+                               "distance and complete linkage on both axes, computed on the z-scores; ",
+                               "colours clipped at -3 and 3. Matrix: %s."),
+                        .n, .dm_matrix),
+                .dm_src(.rz$png[1])))
+        }
+    }
+}
 ```
 
 ---
@@ -3210,7 +3292,24 @@ cat("- **Binary patterns** — assigns each feature to an on/off (1/0) pattern a
 ```{r clustering-hier, eval=clustering_show && has_hier, results='asis'}
 cat("## Hierarchical\n\n")
 cat(sprintf("![Hierarchical clustering heatmap](%s){width=100%%}\n\n", hier_hm))
-figure_legend("Hierarchical clustering heatmap of differentially expressed proteins (rows z-scored). Row dendrogram reflects feature similarity; samples are annotated by experimental group.")
+.hier_info_file <- file.path(hier_dir, "Hierarchical_DE_heatmap_info.tsv")
+if (file.exists(.hier_info_file)) {
+  # Written by mod_proteomics_clustering() with the heatmap, so the caption
+  # states the rule and matrix this run used.
+  .hi <- read.delim(.hier_info_file, stringsAsFactors = FALSE)
+  figure_legend(sprintf(paste0(
+    "Hierarchical clustering heatmap of %d DE proteins, the union over contrasts of %s. ",
+    "Rows z-scored; %s distance and %s linkage on the proteins%s.%s Matrix: %s. ",
+    "Row annotation: the contrasts in which each protein passes that rule, by direction. ",
+    "Source: Clustering/Hierarchical/Hierarchical_DE_heatmap.png; DE columns from the DE summary ",
+    "(Datasets/limma_multimp_summary_*.tsv)."),
+    .hi$n_features[1], .hi$row_rule[1], .hi$distance[1], .hi$linkage[1],
+    if (isTRUE(as.logical(.hi$samples_clustered[1]))) " and on the samples" else "; samples in metadata order",
+    if (!is.na(.hi$zscore_limit[1])) sprintf(" Colours clipped at +/-%s.", .hi$zscore_limit[1]) else "",
+    .hi$matrix[1]))
+} else {
+  figure_legend("Hierarchical clustering heatmap of differentially expressed proteins (rows z-scored). Row dendrogram reflects feature similarity; samples are annotated by experimental group.")
+}
 render_commentary("clustering_hierarchical")
 ```
 
@@ -3514,6 +3613,69 @@ if (length(fgsea_files) > 0) {
         } else {
             cat("No significant pathways with leading edge information.\n\n")
         }
+    }
+}
+```
+
+```{r enrichment-across-contrasts, eval=length(contrast_names) > 5, results='asis', fig.width=10, fig.height=9}
+enr_across <- collect_enrichment_results(enrich_dir)
+if (nrow(enr_across) > 0) {
+    cat("\n## Enrichment Across Contrasts {.tabset}\n\n")
+    cat("Each heatmap has one row per gene set and one column per contrast.",
+        "GSEA cells show NES; ORA cells show -log10(padj). Three selections per",
+        "analysis: gene sets significant in more than half of the contrasts, those",
+        "significant in only one or two, and the top 30 by smallest padj in any",
+        "contrast. Each list is cut to 30 rows, ordered by smallest padj.\n\n")
+    print_enrichment_contrast_heatmaps(enr_across, contrast_names, gsea_cut = 0.05, ora_cut = 0.05)
+}
+```
+
+```{r enrichment-summary-heatmaps, eval=show_enrichment_heatmaps, results='asis'}
+# Reads only what mod_proteomics_enrichment_heatmaps() wrote; nothing here
+# selects terms or recomputes a statistic.
+.eh_dir <- file.path(enrich_dir, "contrast_heatmaps")
+.eh_idx_file <- file.path(.eh_dir, "heatmaps_index.tsv")
+if (file.exists(.eh_idx_file)) {
+    .eh <- read.delim(.eh_idx_file, stringsAsFactors = FALSE, na.strings = "")
+    .eh_cut <- .eh$fdr_cutoff[1]
+    cat("\n## Enrichment summary heatmaps {.tabset}\n\n")
+    cat(sprintf(paste0(
+        "One heatmap per collection and analysis, with every contrast as a column. Rows are the ",
+        "gene sets with FDR < %s in at least one contrast, ordered by their smallest FDR and capped ",
+        "at report.enrichment_heatmap_max_terms; the caption under each figure says how many were ",
+        "left out. GSEA cells show NES. ORA cells show -log10(FDR) of the up-regulated list as ",
+        "positive and of the down-regulated list as negative; where both lists were tested in a ",
+        "contrast, the one with the smaller FDR is shown. cameraPR cells (pooled ranking) are signed ",
+        "the same way by its Direction column. A dot marks FDR < %s. Blank cells were not tested in ",
+        "that contrast (ORA runs only when a direction has at least 5 DE proteins). The tables these ",
+        "are read from are the ones in the sections above; nothing was recomputed.\n\n"),
+        .eh_cut, .eh_cut))
+    if (isTRUE((prot_cfg$ppi %||% list())$enabled)) {
+        cat("STRING functional enrichment is not shown here: it is run once on the DE proteins of all contrasts together, so it has no per-contrast columns.\n\n")
+    }
+    .value_txt <- c(NES = "NES (diverging, centred at 0)",
+                    signed_log10 = "-log10(FDR), positive for the up list or Up direction and negative for the down list or Down direction (diverging, centred at 0)",
+                    log10 = "-log10(FDR) (sequential)")
+    .none <- .eh[is.na(.eh$png), , drop = FALSE]
+    if (nrow(.none) > 0) {
+        cat(sprintf("No gene set reached FDR < %s in any contrast for: %s.\n\n", .eh_cut,
+                    paste(sprintf("%s %s%s", .none$database, .none$analysis,
+                                  ifelse(.none$source == "pooled", " (pooled ranking)", "")),
+                          collapse = "; ")))
+    }
+    .drawn <- .eh[!is.na(.eh$png), , drop = FALSE]
+    for (i in seq_len(nrow(.drawn))) {
+        .r <- .drawn[i, ]
+        .src_txt <- if (.r$source == "pooled") " (pooled ranking)" else ""
+        cat(sprintf("\n### %s, %s%s\n\n", .r$database, .r$analysis, .src_txt))
+        cat(sprintf("![%s %s](%s){width=100%%}\n\n", .r$database, .r$analysis,
+                    file.path(.eh_dir, .r$png)))
+        figure_legend(sprintf(paste0(
+            "%s %s%s across contrasts. Cell value: %s. %d gene sets had FDR < %s in at least one ",
+            "contrast; %d shown, %d left out. Source: %s; figure Enrichment/contrast_heatmaps/%s ",
+            "(PDF alongside)."),
+            .r$database, .r$analysis, .src_txt, .value_txt[[.r$value]], .r$n_significant, .eh_cut,
+            .r$n_shown, .r$n_left_out, .r$source_files, .r$png))
     }
 }
 ```
