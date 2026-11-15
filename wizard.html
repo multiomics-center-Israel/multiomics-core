@@ -794,16 +794,15 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
       <select id="metab_sample_norm" onchange="updateMetabNormCondFields()">
         <option value="pqn">PQN — Probabilistic Quotient Normalization (recommended)</option>
         <option value="median">Median centering</option>
-        <option value="sum">Sum normalization</option>
+        <option value="tss">Sum normalization</option>
         <option value="eigenms">EigenMS (NOREVA)</option>
         <option value="eigenms_forced">EigenMS-forced (fixed % eigentrends)</option>
-        <option value="is">Internal standard (per-sample IS feature)</option>
         <option value="bio_factor">Biological factor (e.g. mg protein)</option>
         <option value="none">None (already normalized)</option>
       </select>
     </div>
     <div class="field">
-      <label>Transformation</label>
+      <label>Transformation <span class="hint" id="metab_transform_hint" style="display:none;">(log2 is the only transformation the pipeline applies with this normalization)</span></label>
       <select id="metab_transform">
         <option value="log2">log2 (recommended)</option>
         <option value="log10">log10</option>
@@ -813,14 +812,12 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     </div>
   </div>
 
-  <!-- Conditional inputs for bio_factor / is normalization -->
+  <!-- Conditional input for bio_factor normalization. Internal-standard
+       normalization is not offered: the metabolomics pipeline has no
+       chosen_norm branch that applies it. -->
   <div class="field conditional" id="metab_bio_factor_field" style="display:none;">
     <label>Biological factor metadata column <span class="hint">(numeric column to divide by, e.g. "mg_protein")</span></label>
     <input type="text" id="metab_bio_factor_col" placeholder="mg_protein">
-  </div>
-  <div class="field conditional" id="metab_is_ref_field" style="display:none;">
-    <label>IS reference column <span class="hint">(row metadata column flagging the IS feature)</span></label>
-    <input type="text" id="metab_is_ref_col" placeholder="is_internal_standard">
   </div>
 
   <div class="field-row">
@@ -2485,24 +2482,8 @@ function generateMetaboYaml() {
   var scaling = v('metab_scaling') || 'none';
   var qcOnly = checked('metab_qc_only');
   var bioFactorCol = v('metab_bio_factor_col');
-  var isRefCol = v('metab_is_ref_col');
 
-  // Preprocessing block — emit only when QC-only is requested so chosen_norm
-  // is null (the metab pipeline switches to QC-comparison mode in that case).
-  if (qcOnly) {
-    yaml += '\n    preprocessing:\n';
-    yaml += '      chosen_norm: null\n';
-  }
-
-  yaml += '\n    normalization:\n';
-  yaml += '      input_already_normalized: ' + (sampleNorm === 'none' ? 'true' : 'false') + '\n';
-  yaml += '      sample_norm: ' + yamlStr(sampleNorm) + '\n';
-  yaml += '      transform: ' + yamlStr(transform) + '\n';
-  yaml += '      scaling: ' + yamlStr(scaling) + '\n';
-  yaml += '      pseudocount: 1\n';
-  yaml += '      na_policy: "keep"\n';
-  yaml += '      is_ref_col: ' + (sampleNorm === 'is' && isRefCol ? yamlStr(isRefCol) : 'null') + '\n';
-  yaml += '      biological_factor_col: ' + (sampleNorm === 'bio_factor' && bioFactorCol ? yamlStr(bioFactorCol) : 'null') + '\n';
+  yaml += metabPreprocessingYaml(sampleNorm, transform, scaling, bioFactorCol, qcOnly);
 
   var metabExcludeBoxes = document.querySelectorAll('.metab_exclude_sample:checked');
   yaml += '\n    sample_filter:\n';
@@ -2579,13 +2560,42 @@ function generateMetaboYaml() {
   return yaml;
 }
 
-// Toggle visibility of conditional metab normalization fields (bio_factor / is)
+// Normalization methods whose pipeline branch always applies log2, whatever
+// preprocessing.transform says (only "none" and "median" honour it).
+var METAB_LOG2_ONLY_NORMS = ['tss', 'pqn', 'eigenms', 'eigenms_forced', 'bio_factor'];
+
+// The metabolomics `preprocessing:` block, as in metabolomics_template.yaml:
+// all normalization settings live here, chosen_norm uses the pipeline's method
+// names, and there is no `normalization:` block (validation rejects one).
+// qcOnly writes chosen_norm: null, which is the pipeline's QC-review mode.
+function metabPreprocessingYaml(sampleNorm, transform, scaling, bioFactorCol, qcOnly) {
+  // The form locks Transformation to log2 for these methods; keep the config
+  // in step with what the form shows even if a stale value is still selected.
+  if (METAB_LOG2_ONLY_NORMS.indexOf(sampleNorm) >= 0) transform = 'log2';
+  var yaml = '\n    preprocessing:\n';
+  yaml += '      chosen_norm: ' + (qcOnly ? 'null' : yamlStr(sampleNorm)) + '\n';
+  yaml += '      biological_factor_col: ' + (sampleNorm === 'bio_factor' && bioFactorCol ? yamlStr(bioFactorCol) : 'null') + '\n';
+  yaml += '      transform: ' + yamlStr(transform) + '\n';
+  yaml += '      scaling: ' + yamlStr(scaling) + '\n';
+  yaml += '      pseudocount: 1\n';
+  return yaml;
+}
+
+// Show the bio_factor column field when needed, and lock Transformation to
+// log2 for the methods the pipeline always log2-transforms.
 function updateMetabNormCondFields() {
   var sn = v('metab_sample_norm');
   var bioField = document.getElementById('metab_bio_factor_field');
-  var isField  = document.getElementById('metab_is_ref_field');
   if (bioField) bioField.style.display = (sn === 'bio_factor') ? '' : 'none';
-  if (isField)  isField.style.display  = (sn === 'is')         ? '' : 'none';
+
+  var log2Only = METAB_LOG2_ONLY_NORMS.indexOf(sn) >= 0;
+  var transformSel = document.getElementById('metab_transform');
+  var transformHint = document.getElementById('metab_transform_hint');
+  if (transformSel) {
+    if (log2Only) transformSel.value = 'log2';
+    transformSel.disabled = log2Only;
+  }
+  if (transformHint) transformHint.style.display = log2Only ? '' : 'none';
 }
 
 // ============================================================
@@ -3140,7 +3150,7 @@ function clearLoadedConfig() {
 }
 
 // Populate dropdown on page load
-document.addEventListener('DOMContentLoaded', function() { refreshExistingConfigs(); });
+document.addEventListener('DOMContentLoaded', function() { refreshExistingConfigs(); updateMetabNormCondFields(); });
 
 // ============================================================
 // Load Example Dataset (bundled synthetic proteomics data)

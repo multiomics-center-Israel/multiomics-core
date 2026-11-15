@@ -1167,6 +1167,47 @@ params:
   config_path
 }
 # --- Metabolomics Wizard ------------------------------------------------------
+
+# Normalization methods whose pipeline branch always applies log2, whatever
+# preprocessing.transform says (only "none" and "median" honour it). The wizard
+# offers no other transformation for these, so the config never records a
+# transformation the run did not apply.
+metab_log2_only_norms <- c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")
+
+#' Build the metabolomics `preprocessing:` YAML block the wizard writes
+#'
+#' Mirrors config/templates/metabolomics_template.yaml: every normalization
+#' setting lives under `preprocessing`, and `chosen_norm` uses the pipeline's
+#' method names. There is no `normalization:` block; validation rejects one.
+#'
+#' @param sample_norm Pipeline method name: one of "none", "tss", "median",
+#'   "pqn", "eigenms", "eigenms_forced", "bio_factor".
+#' @param transform Transformation: "log2", "log10", "glog10" or "none".
+#' @param scaling Feature scaling: "none", "auto", "pareto" or "range".
+#' @param qc_only TRUE writes `chosen_norm: null` (QC-review mode).
+#' @param bio_factor_col Metadata column for "bio_factor", or NULL.
+#' @param is_multi_level TRUE adds the relaxed multi-level missingness thresholds.
+#' @return A single string, indented for `modes.metabolomics`.
+metab_preprocessing_yaml <- function(sample_norm, transform, scaling,
+                                     qc_only = FALSE, bio_factor_col = NULL,
+                                     is_multi_level = FALSE) {
+  lines <- c(
+    "    preprocessing:",
+    sprintf("      chosen_norm: %s", if (qc_only) "null" else sprintf('"%s"', sample_norm)),
+    sprintf("      biological_factor_col: %s",
+            if (is.null(bio_factor_col)) "null" else sprintf('"%s"', bio_factor_col)),
+    sprintf('      transform: "%s"', transform),
+    sprintf('      scaling: "%s"', scaling),
+    "      pseudocount: 1"
+  )
+  if (is_multi_level) {
+    lines <- c(lines,
+               "      feat_missing_threshold: 0.80",
+               "      sample_missing_threshold: 0.99")
+  }
+  paste(lines, collapse = "\n")
+}
+
 wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
   # Data input mode: single table vs multi-level directory
   cat("\n--- [METAB] Input Mode ---\n")
@@ -1297,33 +1338,35 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
       "Sum normalization",
       "EigenMS — SVD-based systematic bias removal (NOREVA)",
       "EigenMS-forced — EigenMS retaining a fixed % of eigentrends",
-      "Internal standard — divide each sample by an IS feature",
       "Biological factor — divide each sample by a metadata covariate (e.g. mg protein)",
       "None (data already normalized)"),
     default = 1)
-  sample_norm <- c("pqn", "median", "sum", "eigenms", "eigenms_forced",
-                   "is", "bio_factor", "none")[norm_idx]
+  # Values are the pipeline's chosen_norm names ("tss" = sum normalization).
+  # Internal-standard normalization is not offered: the metabolomics pipeline
+  # has no chosen_norm branch that applies it.
+  sample_norm <- c("pqn", "median", "tss", "eigenms", "eigenms_forced",
+                   "bio_factor", "none")[norm_idx]
 
   # Method-specific follow-ups
-  is_ref_col <- "null"
-  bio_factor_col <- "null"
-  if (sample_norm == "is") {
-    is_ref_col <- ask("Row metadata column with the IS feature flag (e.g. 'is_internal_standard')",
-                      "is_internal_standard")
-    is_ref_col <- sprintf('"%s"', is_ref_col)
-  } else if (sample_norm == "bio_factor") {
+  bio_factor_col <- NULL
+  if (sample_norm == "bio_factor") {
     bio_factor_col <- ask("Metadata column with per-sample numeric factor to divide by (e.g. 'mg_protein')",
                           "mg_protein")
-    bio_factor_col <- sprintf('"%s"', bio_factor_col)
   }
 
-  transform_idx <- ask_choice("Transformation:",
-                              c("log2 (recommended)",
-                                "log10",
-                                "Generalized log10 (MetaboAnalyst default — handles zeros smoothly)",
-                                "None"),
-                              default = 1)
-  transform <- c("log2", "log10", "glog10", "none")[transform_idx]
+  if (sample_norm %in% metab_log2_only_norms) {
+    transform <- "log2"
+    cat(sprintf("\nTransformation: log2 (the only transformation the pipeline applies with '%s').\n",
+                sample_norm))
+  } else {
+    transform_idx <- ask_choice("Transformation:",
+                                c("log2 (recommended)",
+                                  "log10",
+                                  "Generalized log10 (MetaboAnalyst default — handles zeros smoothly)",
+                                  "None"),
+                                default = 1)
+    transform <- c("log2", "log10", "glog10", "none")[transform_idx]
+  }
   scaling_idx <- ask_choice("Scaling:",
                             c("None (recommended for most workflows)",
                               "Auto-scaling (unit variance)",
@@ -1331,7 +1374,6 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
                               "Range scaling (min-max)"),
                             default = 1)
   scaling <- c("none", "auto", "pareto", "range")[scaling_idx]
-  chosen_norm <- if (qc_only) "null" else sprintf('"%s"', sample_norm)
   # --- Defaults for QC-only (skip downstream questions) ---
   de_method <- "limma"
   p_cutoff <- 0.05
@@ -1575,13 +1617,10 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
         ionization_mode: pos_default'
   }
   # Build preprocessing section (with relaxed thresholds for multi-level)
-  if (is_multi_level) {
-    preproc_yaml <- sprintf(
-      '    preprocessing:\n      chosen_norm: %s\n      feat_missing_threshold: 0.80\n      sample_missing_threshold: 0.99',
-      chosen_norm)
-  } else {
-    preproc_yaml <- sprintf('    preprocessing:\n      chosen_norm: %s', chosen_norm)
-  }
+  preproc_yaml <- metab_preprocessing_yaml(sample_norm, transform, scaling,
+                                           qc_only = qc_only,
+                                           bio_factor_col = bio_factor_col,
+                                           is_multi_level = is_multi_level)
 
 
   # Build report_sections block (only emit non-default toggles to keep YAML clean)
@@ -1641,17 +1680,6 @@ modes:
       rt_col: "%s"
       annotation_cols: null
     organism: "%s"
-    normalization:
-      input_already_normalized: %s
-      sample_norm: "%s"
-      transform: "%s"
-      scaling: "%s"
-      pseudocount: 1
-      na_policy: "keep"
-
-      is_ref_col: %s
-      biological_factor_col: %s
-
     sample_filter:
       enabled: false
       rules:
@@ -1709,9 +1737,6 @@ params:
     files_yaml,
     feature_id_yaml, name_col, mz_col, rt_col,
     selected_organism,
-    tolower(sample_norm == "none"),
-    sample_norm, transform, scaling,
-    is_ref_col, bio_factor_col,
     sample_col, group_col,
     de_method, group_col,
     contrasts_yaml,
