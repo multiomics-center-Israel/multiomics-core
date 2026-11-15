@@ -271,8 +271,8 @@ compute_linear_rsd <- function(mat, stage, pseudocount = 1) {
 #'   unchanged to \code{compute_linear_rsd()} for exact back-transformation.
 #' @param cfg         The QC config section:
 #'   \code{config$modes$metabolomics$qc}.  Controls toggles
-#'   (\code{cfg$plots$*}), thresholds (\code{cfg$thresholds$*}), and
-#'   \code{cfg$qc_flag_column}.
+#'   (\code{cfg$plots$*}), thresholds (\code{cfg$thresholds$*}), and the
+#'   QC sample definition (\code{cfg$qc_flag_column}, \code{cfg$qc_flag_value}).
 #' @param cfg_mode    The metabolomics mode config:
 #'   \code{config$modes$metabolomics}.  Passed to the underlying
 #'   \code{qc_*} functions from \code{R/core/08_qc.R} which require
@@ -289,12 +289,13 @@ compute_linear_rsd <- function(mat, stage, pseudocount = 1) {
 #'
 #' @details
 #' \strong{Subsetting (\code{subset_mode = "no_qc"}):}
-#' Reads the column named \code{cfg$qc_flag_column} (default \code{"is_QC"})
-#' from \code{meta}.  Samples where this column equals \code{TRUE} (logical),
-#' \code{"TRUE"}, \code{"true"}, or \code{"1"} (character) are removed.
-#' If the column is absent, or if no QC samples are found, the function writes
-#' a metrics TSV with the appropriate \code{status} field and returns without
-#' generating any plots.
+#' Removes the samples named by \code{cfg$qc_flag_column} /
+#' \code{cfg$qc_flag_value}, as resolved by \code{metab_is_qc_sample()} -- the
+#' same samples DE, QEA and clustering exclude.  When the config declares no QC
+#' samples (both keys \code{null}), or no sample carries the value, the
+#' function writes a metrics TSV with \code{status = "skipped_no_qc_samples"}
+#' and returns without generating any plots.  A configured column that is
+#' absent from \code{meta} is an error.
 #'
 #' \strong{Graceful skip semantics:}
 #' Each plot call is individually wrapped in \code{tryCatch()}.  A failure in
@@ -306,13 +307,12 @@ compute_linear_rsd <- function(mat, stage, pseudocount = 1) {
 #' \describe{
 #'   \item{\code{"ok"}}{All requested plots were generated.}
 #'   \item{\code{"partial"}}{Some plots were skipped (threshold or toggle).}
-#'   \item{\code{"skipped_no_flag_column"}}{no_qc requested but flag absent.}
-#'   \item{\code{"skipped_no_qc_samples"}}{no_qc requested, flag present, no QC samples found.}
+#'   \item{\code{"skipped_no_qc_samples"}}{no_qc requested, but the config
+#'     declares no QC samples or none matched.}
 #' }
 qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
                                        cfg, cfg_mode, out_dir, subset_mode) {
   # ---- Read toggles and thresholds (with defaults) ---------------------------
-  qc_flag_col  <- cfg$qc_flag_column %||% "is_QC"
   max_heatmap  <- cfg$thresholds$max_samples_for_heatmaps %||% 120L
   min_pca      <- cfg$thresholds$min_samples_for_pca      %||% 3L
   top_features <- cfg$thresholds$top_variable_features    %||% 100L
@@ -341,43 +341,13 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
   # ---- Subsetting ------------------------------------------------------------
   if (subset_mode == "no_qc") {
 
-    if (!qc_flag_col %in% colnames(meta_sub)) {
-      message(sprintf(
-        "[QC][%s][no_qc] Flag column '%s' absent from metadata; skipping plots.",
-        stage, qc_flag_col
-      ))
-      tsv <- .qc_write_metrics(out_dir, stage, subset_mode, mat_sub, meta_sub,
-                                cfg_mode, pseudocount, skipped,
-                                status = "skipped_no_flag_column", pca_var = NULL)
-      return(c(files, tsv))
-    }
-
-    flag_vals     <- meta_sub[[qc_flag_col]]
-    qc_flag_value <- cfg$qc_flag_value %||% "qc"
-
-    if (is.logical(flag_vals)) {
-      # Boolean column (e.g. is_QC = TRUE / FALSE).
-      qc_mask <- !is.na(flag_vals) & flag_vals
-    } else {
-      char_vals <- tolower(trimws(as.character(flag_vals)))
-      char_vals[is.na(flag_vals)] <- NA_character_
-
-      # Two acceptance criteria, OR-combined:
-      #   1. Backward-compat boolean-string columns: "TRUE" / "1"
-      #      (e.g. a metadata column exported as character from Excel)
-      #   2. Value-match: case-insensitive compare to qc_flag_value
-      #      (e.g. treatment == "qc", treatment == "QC", treatment == "Qc")
-      bool_match  <- char_vals %in% c("true", "1")
-      value_match <- !is.na(char_vals) &
-                     char_vals == tolower(trimws(qc_flag_value))
-      qc_mask <- bool_match | value_match
-    }
-    qc_mask[is.na(qc_mask)] <- FALSE
+    # The same explicit mask DE, QEA and clustering use, taken from this
+    # stage's own metadata. A flag column missing from it stops the run there.
+    qc_mask <- metab_is_qc_sample(cfg, meta_sub)
 
     if (!any(qc_mask)) {
       message(sprintf(
-        "[QC][%s][no_qc] No QC samples found in '%s'; skipping plots.",
-        stage, qc_flag_col
+        "[QC][%s][no_qc] No QC samples to remove; skipping plots.", stage
       ))
       tsv <- .qc_write_metrics(out_dir, stage, subset_mode, mat_sub, meta_sub,
                                 cfg_mode, pseudocount, skipped,

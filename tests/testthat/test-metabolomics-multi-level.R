@@ -329,7 +329,8 @@ test_that("validate accepts a correct multi_level config", {
 
         input = list(format = "multi_level", level_format = "cd_raw"),
         files = list(data_dir = "metabolomics/levels/", data = NULL),
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_true(validate_metabolomics_config(cfg))
 })
@@ -338,7 +339,8 @@ test_that("validate rejects multi_level config missing data_dir", {
     cfg <- list(
         input = list(format = "multi_level", level_format = "cd_raw"),
         files = list(data_dir = NULL, data = NULL),
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_error(validate_metabolomics_config(cfg), regexp = "data_dir is required")
 })
@@ -347,7 +349,8 @@ test_that("validate rejects multi_level config missing level_format", {
     cfg <- list(
         input = list(format = "multi_level", level_format = NULL),
         files = list(data_dir = "metabolomics/levels/", data = NULL),
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_error(validate_metabolomics_config(cfg), regexp = "input.level_format")
 })
@@ -356,7 +359,8 @@ test_that("validate rejects level_format value that is not a per-file format", {
     cfg <- list(
         input = list(format = "multi_level", level_format = "long"),
         files = list(data_dir = "metabolomics/levels/", data = NULL),
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_error(validate_metabolomics_config(cfg))
 })
@@ -365,7 +369,8 @@ test_that("validate rejects config with both data and data_dir set (mutual exclu
     cfg <- list(
         input = list(format = "multi_level", level_format = "cd_raw"),
         files = list(data = "file.xlsx", data_dir = "metabolomics/levels/"),
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_error(validate_metabolomics_config(cfg), regexp = "mutually exclusive")
 })
@@ -377,7 +382,8 @@ test_that("partial matching cannot cause a false positive: data_dir present, dat
     cfg <- list(
         input = list(format = "multi_level", level_format = "cd_raw"),
         files = list(data_dir = "metabolomics/levels/"),   # data key entirely absent
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_true(validate_metabolomics_config(cfg))
 })
@@ -387,7 +393,8 @@ test_that("partial matching cannot cause a false positive: data present, data_di
     cfg <- list(
         input = list(format = "cd_raw"),
         files = list(data = "metabolomics/export.xlsx"),   # data_dir key entirely absent
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_true(validate_metabolomics_config(cfg))
 })
@@ -396,7 +403,8 @@ test_that("validate still rejects unknown format values", {
     cfg <- list(
         input = list(format = "not_a_real_format"),
         files = list(data = "x.xlsx"),
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_error(validate_metabolomics_config(cfg))
 })
@@ -406,7 +414,8 @@ test_that("validate accepts existing single-file formats unchanged", {
     cfg_cd <- list(
         input = list(format = "cd_raw"),
         files = list(data = "export.xlsx"),
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_true(validate_metabolomics_config(cfg_cd))
 
@@ -414,7 +423,8 @@ test_that("validate accepts existing single-file formats unchanged", {
         input = list(format = "processed_wide"),
 
         files = list(data = "data.csv"),
-        normalization = NULL
+        normalization = NULL,
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )
     expect_true(validate_metabolomics_config(cfg_pw))
 })

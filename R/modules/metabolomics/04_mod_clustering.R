@@ -19,12 +19,13 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
   cfg <- config$modes$metabolomics
   cl  <- cfg$clustering
   
-  # ---- Filter to biological samples only (exclude QC/blanks) ----
+  # ---- Filter to biological samples only (same QC mask as DE) ----
   sample_col    <- cfg$effects$samples %||% "sample_id"
   condition_col <- (cfg$de %||% list())$condition_column %||%
     cfg$effects$color %||% "sample_type"
   bio <- filter_to_biological(pre$expr_work, pre$meta, condition_col,
-                              sample_col, label = "metabolomics clustering")
+                              sample_col, label = "metabolomics clustering",
+                              is_qc = metab_is_qc_sample(cfg[["qc"]], pre$meta))
   pre$expr_work <- bio$mat
   pre$meta      <- bio$meta
   

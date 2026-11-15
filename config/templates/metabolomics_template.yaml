@@ -190,8 +190,21 @@ modes:
     qc:
       enabled: true
 
-      # Used for QC-specific plots (e.g., drift, QC clustering), (refer to the pooled or qc samples)
+      # Which samples are pooled QC. REQUIRED: both keys must be written, and
+      # a config without them is rejected. These two keys alone decide which
+      # samples are left out of the differential-abundance test, QEA/ssGSEA,
+      # clustering and the "without QC" plots. Nothing is inferred from sample
+      # or group names, so a biological group called "pool_A" is kept.
+      #   qc_flag_column: the metadata column that marks the QC samples.
+      #   qc_flag_value:  the value in that column that means "QC" (exact match,
+      #                   ignoring case and surrounding spaces).
+      # An experiment with no QC samples says so explicitly:
+      #   qc_flag_column: null
+      #   qc_flag_value: null
+      # (Drift correction and the PQN pooled-QC reference use their own column,
+      # preprocessing.drift_correction.qc_flag_col.)
       qc_flag_column: "treatment"
+      qc_flag_value: "QC"
 
       thresholds:
         max_samples_for_heatmaps: 120

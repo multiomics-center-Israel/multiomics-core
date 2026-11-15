@@ -24,11 +24,111 @@ isTRUE_vec <- function(x) {
 }
 
 
-#' Filter a matrix + metadata to biological samples only (exclude QC/blanks)
+#' Identify the pooled-QC samples named by the explicit `qc:` config
 #'
-#' Removes samples whose \code{condition_col} value matches "qc" or "blank"
-#' (case-insensitive), plus any rows flagged by \code{is_QC} or \code{is_blank}
-#' metadata columns.
+#' The single place that decides which metabolomics samples are QC. Both
+#' `qc_flag_column` and `qc_flag_value` must be written in the config: with
+#' values they name the QC samples, and with two explicit `null`s they state
+#' that the experiment has none. A key that is absent is an error, never "no
+#' QC" -- guessing that would let QC samples into the statistical test of a
+#' project whose config predates these keys.
+#'
+#' Matching is exact, case-insensitive and whitespace-trimmed, on the
+#' configured column only. Sample names and group names are never inspected.
+#'
+#' @param qc_cfg The `qc:` block of the metabolomics mode config.
+#' @param meta   Sample metadata (one row per sample), or NULL to validate
+#'   `qc_cfg` alone, before any metadata is loaded.
+#' @param warn_unmatched Warn when no sample carries the configured value.
+#'   Callers that may be handed a subset of the samples (one contrast's two
+#'   groups, from which the QC samples are already gone) turn this off.
+#' @return Logical vector, one element per row of `meta` and in its row order
+#'   (TRUE = pooled QC). Invisible NULL when `meta` is NULL.
+#' @examples
+#' meta <- data.frame(sample_id = c("S1", "S2", "S3"),
+#'                    treatment = c("A", "QC", "pool_A"))
+#' metab_is_qc_sample(list(qc_flag_column = "treatment", qc_flag_value = "QC"),
+#'                    meta)
+#' metab_is_qc_sample(list(qc_flag_column = NULL, qc_flag_value = NULL), meta)
+metab_is_qc_sample <- function(qc_cfg, meta = NULL, warn_unmatched = TRUE) {
+  how_to <- paste0(
+    "Write both keys under modes.metabolomics.qc, in one of two ways.\n",
+    "  With pooled QC samples (the metadata column and the value marking them):\n",
+    "    qc:\n",
+    "      qc_flag_column: \"treatment\"\n",
+    "      qc_flag_value: \"QC\"\n",
+    "  Without QC samples (say so explicitly):\n",
+    "    qc:\n",
+    "      qc_flag_column: null\n",
+    "      qc_flag_value: null"
+  )
+  keys    <- c("qc_flag_column", "qc_flag_value")
+  missing <- setdiff(keys, names(qc_cfg))
+  if (length(missing) > 0L) {
+    stop("metabolomics config: qc.", paste(missing, collapse = " and qc."),
+         " ", if (length(missing) == 1L) "is" else "are", " not set. ",
+         "A missing key is not read as 'no QC samples', because that could ",
+         "put QC samples into the differential-abundance test unnoticed.\n",
+         how_to, call. = FALSE)
+  }
+
+  column <- qc_cfg[["qc_flag_column"]]
+  value  <- qc_cfg[["qc_flag_value"]]
+  if (is.null(column) != is.null(value)) {
+    stop("metabolomics config: qc.qc_flag_column and qc.qc_flag_value must be ",
+         "set together or both be null, but only qc.",
+         if (is.null(column)) "qc_flag_value" else "qc_flag_column",
+         " has a value.\n", how_to, call. = FALSE)
+  }
+
+  if (!is.null(column)) {
+    if (!is.character(column) || length(column) != 1L || is.na(column) ||
+        !nzchar(trimws(column))) {
+      stop("metabolomics config: qc.qc_flag_column must be the name of one ",
+           "metadata column.\n", how_to, call. = FALSE)
+    }
+    if (!is.atomic(value) || length(value) != 1L || is.na(value) ||
+        !nzchar(trimws(as.character(value)))) {
+      stop("metabolomics config: qc.qc_flag_value must be a single value.\n",
+           how_to, call. = FALSE)
+    }
+  }
+
+  if (is.null(meta)) return(invisible(NULL))
+  if (is.null(column)) return(rep(FALSE, nrow(meta)))
+
+  if (!column %in% colnames(meta)) {
+    stop(sprintf(paste0(
+      "metabolomics: qc.qc_flag_column is '%s', but the sample metadata has no ",
+      "such column. Available columns: %s. Point qc_flag_column at the column ",
+      "that marks the pooled QC samples, or set both QC keys to null if this ",
+      "experiment has none."),
+      column, paste(colnames(meta), collapse = ", ")), call. = FALSE)
+  }
+
+  wanted <- tolower(trimws(as.character(value)))
+  found  <- tolower(trimws(as.character(meta[[column]])))
+  is_qc  <- !is.na(found) & found == wanted
+  if (!any(is_qc) && isTRUE(warn_unmatched)) {
+    warning(sprintf(paste0(
+      "metabolomics: no sample has the value '%s' in metadata column '%s' ",
+      "(qc.qc_flag_value / qc.qc_flag_column), so no sample is treated as QC. ",
+      "If this experiment has no QC samples, set both keys to null; otherwise ",
+      "check the value against the column."),
+      as.character(value), column), call. = FALSE)
+  }
+  is_qc
+}
+
+
+#' Filter a matrix + metadata to biological samples only
+#'
+#' Metabolomics passes \code{is_qc}, the explicit mask from
+#' \code{metab_is_qc_sample()}, and exactly those samples are removed.
+#'
+#' Lipidomics does not pass it and keeps the older name-based detection:
+#' samples whose \code{condition_col} value or sample ID looks like
+#' QC/blank/pool, plus rows flagged by \code{is_QC} or \code{is_blank}.
 #'
 #' @param mat           Numeric matrix (features x samples).
 #' @param meta          data.frame with at least \code{sample_col} and
@@ -36,41 +136,49 @@ isTRUE_vec <- function(x) {
 #' @param condition_col Column in meta identifying experimental groups.
 #' @param sample_col    Column in meta identifying sample IDs.
 #' @param label         Character label for log messages.
-#' @param qc_flag_column Optional column in meta whose qc/blank/pool value marks
-#'   technical samples (e.g. `qc.qc_flag_column`). NULL disables this check.
+#' @param is_qc         Logical vector, one element per row of \code{meta} and
+#'   computed from that same \code{meta} (TRUE = remove). NULL, the default,
+#'   selects the name-based detection; a vector that is all FALSE means "no QC
+#'   samples" and removes nothing.
 #' @return list(mat, meta, condition) — filtered matrix, metadata, and factor.
 #' @keywords internal
 filter_to_biological <- function(mat, meta, condition_col, sample_col,
-                                 label = "metabolomics", qc_flag_column = NULL) {
-  condition_vals <- trimws(as.character(meta[[condition_col]]))
-  sample_vals    <- trimws(as.character(meta[[sample_col]]))
+                                 label = "metabolomics", is_qc = NULL) {
+  if (!is.null(is_qc)) {
+    # An explicit mask is the whole answer, even when it is all FALSE: falling
+    # through to the name-based detection would drop a biological group that
+    # happens to be called "pool_A".
+    if (!is.logical(is_qc) || length(is_qc) != nrow(meta) || anyNA(is_qc)) {
+      stop(label, ": is_qc must be a logical vector with one non-missing ",
+           "element per metadata row (", nrow(meta), "), computed from the ",
+           "same metadata that is being filtered.", call. = FALSE)
+    }
+    is_bio   <- !is_qc
+    excluded <- "QC"
+  } else {
+    condition_vals <- trimws(as.character(meta[[condition_col]]))
+    sample_vals    <- trimws(as.character(meta[[sample_col]]))
 
-  # QC/blank/pool tokens. Mirrors .detect_pool_samples(): condition/group values
-  # that contain or start with qc/blank/pool, and sample IDs starting QC/Pool.
-  qc_token_re <- "(^|_)(qc|blank|blanks|pool|pooled)($|_)|^(qc|pool)"
-  is_qc_or_blank_condition <- grepl(qc_token_re, condition_vals, ignore.case = TRUE)
-  is_qc_sample             <- grepl("^(qc|pool)", sample_vals, ignore.case = TRUE)
+    # QC/blank/pool tokens: condition/group values that contain or start with
+    # qc/blank/pool, and sample IDs starting QC/Pool.
+    qc_token_re <- "(^|_)(qc|blank|blanks|pool|pooled)($|_)|^(qc|pool)"
+    is_qc_or_blank_condition <- grepl(qc_token_re, condition_vals, ignore.case = TRUE)
+    is_qc_sample             <- grepl("^(qc|pool)", sample_vals, ignore.case = TRUE)
 
-  is_bio <- !(is_qc_or_blank_condition | is_qc_sample)
+    is_bio <- !(is_qc_or_blank_condition | is_qc_sample)
 
-  if ("is_QC" %in% colnames(meta))
-    is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
-  if ("is_blank" %in% colnames(meta))
-    is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
-
-  # Honor a configured QC-flag column (e.g. qc.qc_flag_column: "treatment"),
-  # where technical samples carry a qc/blank/pool value in a column distinct
-  # from the DE condition column.
-  if (!is.null(qc_flag_column) && qc_flag_column %in% colnames(meta)) {
-    flag_vals <- trimws(as.character(meta[[qc_flag_column]]))
-    is_bio <- is_bio & !grepl(qc_token_re, flag_vals, ignore.case = TRUE)
+    if ("is_QC" %in% colnames(meta))
+      is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
+    if ("is_blank" %in% colnames(meta))
+      is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
+    excluded <- "QC/blank/pool"
   }
 
   n_excluded <- sum(!is_bio)
   if (n_excluded > 0L) {
     message(sprintf(
-      "%s: excluding %d non-biological sample(s) (QC/blank/pool); retaining %d",
-      label, n_excluded, sum(is_bio)
+      "%s: excluding %d non-biological sample(s) (%s); retaining %d",
+      label, n_excluded, excluded, sum(is_bio)
     ))
     # Subset by sample-ID name (character-coerced) so numeric/factor IDs are not
     # interpreted as positional column indices.
@@ -411,12 +519,12 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     # Align metadata to matrix columns
     meta <- meta[match(colnames(mat_for_test), meta[[sample_col]]), , drop = FALSE]
 
-    # Exclude QC/blank samples before DE so the limma fit and its variance
-    # estimate use only biological samples (restores the 2b behavior). No-op
-    # when there are no QC/blank samples.
+    # Exclude the configured QC samples before DE so the limma fit and its
+    # variance estimate use only biological samples. The mask is computed from
+    # the metadata just aligned to the matrix, so it cannot be out of order.
     bio          <- filter_to_biological(mat_for_test, meta, condition_col,
                                          sample_col, label = "metabolomics DE",
-                                         qc_flag_column = cfg$qc$qc_flag_column)
+                                         is_qc = metab_is_qc_sample(cfg[["qc"]], meta))
     mat_for_test <- bio$mat
     meta         <- bio$meta
     condition    <- bio$condition

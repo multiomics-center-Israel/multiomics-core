@@ -1269,6 +1269,22 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     cat("(Used for PCA coloring and DE contrasts)\n")
     group_col <- ask("Group/condition column", meta_cols[min(2, length(meta_cols))])
   }
+  # QC samples. Both keys are written either way: the pipeline rejects a config
+  # that leaves them out, so "no QC" has to be stated rather than implied.
+  cat("\n--- [METAB] QC Samples ---\n")
+  cat("Pooled QC samples are left out of the statistics and of the 'without QC' plots.\n")
+  cat("They are identified only by the metadata column and value given here,\n")
+  cat("never by sample or group names.\n")
+  qc_flag_yaml <- "      qc_flag_column: null\n      qc_flag_value: null"
+  if (ask_yn("Does this experiment include pooled QC samples?", default = FALSE)) {
+    qc_flag_column <- ask("Metadata column that marks the QC samples", group_col)
+    qc_flag_value  <- ask("Value in that column that means QC", "QC")
+    qc_flag_yaml <- sprintf(
+      '      qc_flag_column: "%s"\n      qc_flag_value: "%s"',
+      gsub('"', '\\"', qc_flag_column, fixed = TRUE),
+      gsub('"', '\\"', qc_flag_value, fixed = TRUE)
+    )
+  }
   # Build contrasts
   generated_contrasts <- NULL
   if (!is.null(metadata_path)) {
@@ -1664,6 +1680,7 @@ modes:
       shape: null
       heatmap_annotations: null
     qc:
+%s
       adaptive_plots: true
       thresholds:
         min_samples_for_pca3d: 10
@@ -1713,6 +1730,7 @@ params:
     sample_norm, transform, scaling,
     is_ref_col, bio_factor_col,
     sample_col, group_col,
+    qc_flag_yaml,
     de_method, group_col,
     contrasts_yaml,
     p_cutoff, p_cutoff, fc_cutoff,

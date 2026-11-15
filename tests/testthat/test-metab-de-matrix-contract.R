@@ -82,6 +82,7 @@ QC_INJECTIONS <- c(1, 4, 6, 9, 12, 15, 17, 20)
                          transform = "log2", pseudocount = 1,
                          drift_correction = list(enabled = drift_enabled)),
     effects = list(samples = "sample_id", color = "sample_type"),
+    qc      = list(qc_flag_column = "sample_type", qc_flag_value = "QC"),
     de      = list(method = method, condition_column = "sample_type",
                    p_cutoff = 0.05, linear_fc_cutoff = 1.5)
   )))

@@ -775,6 +775,17 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
       <select id="metab_group_col"><option value="">-- upload file to detect --</option></select>
     </div>
   </div>
+  <div class="field-row">
+    <div class="field">
+      <label>QC column <span class="hint">(metadata column that marks the pooled QC samples)</span></label>
+      <input type="text" id="metab_qc_flag_column" placeholder="treatment">
+    </div>
+    <div class="field">
+      <label>QC value <span class="hint">(value in that column that means QC, e.g. "QC")</span></label>
+      <input type="text" id="metab_qc_flag_value" placeholder="QC">
+    </div>
+  </div>
+  <div class="toggle-row"><input type="checkbox" id="metab_no_qc"><label class="toggle-label" for="metab_no_qc"><strong>No pooled QC samples</strong> <span class="hint">— this experiment has none. QC samples are identified only by the column and value above, never by sample or group names.</span></label></div>
   <div id="metab_contrast_picker" style="margin-top:8px;"></div>
 </div>
 
@@ -2525,6 +2536,14 @@ function generateMetaboYaml() {
 
   yaml += '\n    qc:\n';
   yaml += '      adaptive_plots: true\n';
+  // Both QC keys are always written: the pipeline rejects a config without
+  // them. validateForm() makes sure one of the two states was chosen.
+  if (checked('metab_no_qc')) {
+    yaml += '      qc_flag_column: null\n      qc_flag_value: null\n';
+  } else {
+    yaml += '      qc_flag_column: ' + yamlStr(v('metab_qc_flag_column').trim()) + '\n';
+    yaml += '      qc_flag_value: ' + yamlStr(v('metab_qc_flag_value').trim()) + '\n';
+  }
   yaml += '      thresholds:\n        min_samples_for_pca3d: 10\n        max_samples_for_heatmaps: 120\n';
 
   yaml += '\n    de:\n';
@@ -2904,6 +2923,17 @@ function validateForm() {
     var prefix = currentMode === 'proteomics' ? 'prot' : (currentMode === 'metabolomics' ? 'metab' : (currentMode === 'lipidomics' ? 'lipid' : 'rna'));
     var groupCol = v(prefix + '_group_col');
     if (!groupCol) errors.push('Group column is not selected — upload metadata first');
+  }
+  var metabActive = currentMode === 'metabolomics' ||
+    (currentMode === 'combination' && checked('combo_metab'));
+  if (metabActive) {
+    var qcCol = v('metab_qc_flag_column').trim();
+    var qcVal = v('metab_qc_flag_value').trim();
+    if (checked('metab_no_qc')) {
+      if (qcCol || qcVal) errors.push('Metabolomics QC: either tick "No pooled QC samples" or fill in the QC column and value, not both');
+    } else if (!qcCol || !qcVal) {
+      errors.push('Metabolomics QC: fill in both the QC column and the QC value, or tick "No pooled QC samples"');
+    }
   }
   if (errors.length > 0) {
     alert('Please fix before generating:\n\n- ' + errors.join('\n- '));
@@ -3299,6 +3329,11 @@ function loadExampleMetab() {
       setSel('metab_input_format', 'processed_wide');
       setSel('metab_sample_col',   'sample_id');
       setSel('metab_group_col',    'condition');
+      // The bundled example has no pooled QC samples.
+      setSel('metab_qc_flag_column', '');
+      setSel('metab_qc_flag_value',  '');
+      var noQcBox = document.getElementById('metab_no_qc');
+      if (noQcBox) noQcBox.checked = true;
 
       if (typeof updateContrastBuilder === 'function') updateContrastBuilder('metab');
       if (typeof populateSampleExclusion === 'function') populateSampleExclusion('metab');

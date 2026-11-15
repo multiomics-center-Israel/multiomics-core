@@ -76,7 +76,8 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
   
   # ---- Build sample subsets: "all" and "noQC" ----
   sample_col <- cfg$effects$samples %||% "sample_id"
-  subsets <- build_qc_subsets(expr_qc, pre$expr_filt, pre$meta, sample_col)
+  subsets <- build_qc_subsets(expr_qc, pre$expr_filt, pre$meta, sample_col,
+                              is_qc = metab_is_qc_sample(cfg[["qc"]], pre$meta))
   
   # ---- PCA plots ----
   color_config <- cfg$effects$color
@@ -327,7 +328,9 @@ build_norm_label <- function(norm_applied) {
 
 #' Build sample subsets for QC: all samples and (if QCs exist) without QC
 #'
-#' QC samples are identified by treatment == "QC" (case-insensitive) in metadata.
+#' Metabolomics passes \code{is_qc}, the explicit mask from
+#' \code{metab_is_qc_sample()}. Lipidomics does not, and keeps the older rule:
+#' treatment == "QC" (case-insensitive) in metadata.
 #' Returns a list of subset descriptors, each with: tag, label, expr_work,
 #' expr_filt, expr_log, meta.
 #'
@@ -336,9 +339,14 @@ build_norm_label <- function(norm_applied) {
 #' @param meta       Metadata data.frame.
 #' @param sample_col Column name for sample IDs.
 #' @param expr_log   Transform-only matrix (no scaling), used for DE. NULL if no scaling applied.
+#' @param is_qc      Logical vector, one element per row of \code{meta} and
+#'   computed from that same \code{meta} (TRUE = QC). NULL, the default,
+#'   selects the treatment-column rule; a vector that is all FALSE means "no QC
+#'   samples" and yields the single all-samples subset.
 #' @return list of subset descriptors.
 
-build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col, expr_log = NULL) {
+build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col,
+                             expr_log = NULL, is_qc = NULL) {
   all_subset <- list(
     tag       = "",
     label     = "",
@@ -350,20 +358,28 @@ build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col, expr_log = 
 
   subsets <- list(all_subset)
 
-  # Identify QC samples via the treatment column
-  if ("treatment" %in% colnames(meta)) {
-    is_qc <- tolower(trimws(as.character(meta$treatment))) == "qc"
-    if (any(is_qc) && !all(is_qc)) {
-      keep_ids <- as.character(meta[[sample_col]][!is_qc])
-      subsets[[2]] <- list(
-        tag       = "_noQC",
-        label     = " [excl. QC]",
-        expr_work = expr_work[, keep_ids, drop = FALSE],
-        expr_filt = expr_filt[, keep_ids, drop = FALSE],
-        expr_log  = if (!is.null(expr_log)) expr_log[, keep_ids, drop = FALSE] else NULL,
-        meta      = meta[!is_qc, , drop = FALSE]
-      )
+  if (!is.null(is_qc)) {
+    if (!is.logical(is_qc) || length(is_qc) != nrow(meta) || anyNA(is_qc)) {
+      stop("build_qc_subsets: is_qc must be a logical vector with one ",
+           "non-missing element per metadata row (", nrow(meta), ").",
+           call. = FALSE)
     }
+  } else if ("treatment" %in% colnames(meta)) {
+    is_qc <- tolower(trimws(as.character(meta$treatment))) == "qc"
+  }
+
+  if (!is.null(is_qc) && any(is_qc) && !all(is_qc)) {
+    # Subset by sample ID, not by position: the matrices are not guaranteed to
+    # share the metadata's row order.
+    keep_ids <- as.character(meta[[sample_col]][!is_qc])
+    subsets[[2]] <- list(
+      tag       = "_noQC",
+      label     = " [excl. QC]",
+      expr_work = expr_work[, keep_ids, drop = FALSE],
+      expr_filt = expr_filt[, keep_ids, drop = FALSE],
+      expr_log  = if (!is.null(expr_log)) expr_log[, keep_ids, drop = FALSE] else NULL,
+      meta      = meta[!is_qc, , drop = FALSE]
+    )
   }
 
   subsets

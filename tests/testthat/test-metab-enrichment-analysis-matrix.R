@@ -16,6 +16,8 @@
 # inflates per-feature scale heterogeneity so globaltest's `standardize` bites.
 # `enr_group` groups enrichment by its own column (enrichment.condition_column),
 # and `qc_enr_only` adds a QC sample that only that column identifies.
+# The fixture's config names its QC samples explicitly (qc.qc_flag_column /
+# qc.qc_flag_value), or declares that it has none with two NULLs.
 .make_enrichment_fixture <- function(with_qc = FALSE, standardize = FALSE,
                                      shuffle_meta = FALSE, expr_raw_noise = FALSE,
                                      hetero = FALSE, enr_group = FALSE,
@@ -87,9 +89,12 @@
         paste(c("FLAT2", "Flat pathway 2", kegg_ids[13:18]),   collapse = "\t")
     ), gmt)
 
+    qc_col <- if (qc_enr_only) "enr_group" else if (with_qc) "sample_type"
     config <- list(modes = list(metabolomics = list(
         de      = list(condition_column = "sample_type"),
         effects = list(samples = "sample_id", color = "sample_type"),
+        qc      = list(qc_flag_column = qc_col,
+                       qc_flag_value  = if (!is.null(qc_col)) "QC"),
         enrichment = list(run_enrichment = TRUE, gmt_file = gmt,
                           mapping_file = NULL,
                           condition_column = if (enr_group) "enr_group",
@@ -121,7 +126,8 @@ test_that(".metab_de_matrix_condition uses the unscaled matrix under every scali
     }
     config <- list(modes = list(metabolomics = list(
         de = list(condition_column = "sample_type"),
-        effects = list(samples = "sample_id", color = "sample_type")
+        effects = list(samples = "sample_id", color = "sample_type"),
+        qc = list(qc_flag_column = NULL, qc_flag_value = NULL)
     )))
 
     for (sc in c("none", "center", "auto", "pareto", "range")) {
@@ -141,7 +147,7 @@ test_that(".metab_de_matrix_condition uses the unscaled matrix under every scali
     expect_equal(as.character(out$condition), meta$sample_type)
 })
 
-test_that(".metab_de_matrix_condition drops QC/blanks and matches by sample id", {
+test_that(".metab_de_matrix_condition drops the configured QC samples and matches by sample id", {
     work <- matrix(1:15, nrow = 3,
                    dimnames = list(c("f1","f2","f3"),
                                    c("s1","s2","s3","s4","QC1")))
@@ -153,7 +159,8 @@ test_that(".metab_de_matrix_condition drops QC/blanks and matches by sample id",
                 info = list(normalization = list(scaling = "none")))
     config <- list(modes = list(metabolomics = list(
         de = list(condition_column = "sample_type"),
-        effects = list(samples = "sample_id", color = "sample_type")
+        effects = list(samples = "sample_id", color = "sample_type"),
+        qc = list(qc_flag_column = "sample_type", qc_flag_value = "QC")
     )))
 
     out <- .metab_de_matrix_condition(pre, config)
@@ -166,7 +173,7 @@ test_that(".metab_de_matrix_condition drops QC/blanks and matches by sample id",
 })
 
 
-test_that(".metab_de_matrix_condition drops samples the enrichment grouping marks as QC", {
+test_that(".metab_de_matrix_condition takes QC from the config, not from the grouping column", {
     work <- matrix(1:15, nrow = 3,
                    dimnames = list(c("f1","f2","f3"),
                                    c("s1","s2","s3","s4","s5")))
@@ -177,32 +184,38 @@ test_that(".metab_de_matrix_condition drops samples the enrichment grouping mark
                        stringsAsFactors = FALSE)
     pre <- list(expr_work = work, expr_log = work, meta = meta,
                 info = list(normalization = list(scaling = "none")))
-    config <- list(modes = list(metabolomics = list(
+    mk_config <- function(qc) list(modes = list(metabolomics = list(
         de = list(condition_column = "sample_type"),
-        effects = list(samples = "sample_id", color = "sample_type")
+        effects = list(samples = "sample_id", color = "sample_type"),
+        qc = qc
     )))
+    no_qc   <- mk_config(list(qc_flag_column = NULL, qc_flag_value = NULL))
+    with_qc <- mk_config(list(qc_flag_column = "treatment", qc_flag_value = "QC"))
 
-    # DE's own exclusion keeps s5 (parity with run_metabolomics_de()).
-    expect_true("s5" %in% colnames(.metab_de_matrix_condition(pre, config)$mat))
+    # Declared QC-free: s5 stays, even when the caller groups by the column
+    # whose value reads "QC". Group values are never inspected.
+    expect_true("s5" %in% colnames(.metab_de_matrix_condition(pre, no_qc)$mat))
+    expect_true("s5" %in% colnames(
+        .metab_de_matrix_condition(pre, no_qc, group_col = "treatment")$mat))
 
-    out <- .metab_de_matrix_condition(pre, config, group_col = "treatment")
+    # Configured: s5 goes, whatever column the caller groups by.
+    out <- .metab_de_matrix_condition(pre, with_qc)
     expect_setequal(colnames(out$mat), c("s1","s2","s3","s4"))
     expect_false("QC" %in% out$meta$treatment)
     # The returned condition is still DE's, aligned to the retained columns.
     expect_equal(as.character(out$condition),
                  out$meta$sample_type[match(colnames(out$mat), out$meta$sample_id)])
-
-    # Same column as DE, or a column the metadata lacks: DE's exclusion only.
-    expect_equal(.metab_de_matrix_condition(pre, config, group_col = "sample_type"),
-                 .metab_de_matrix_condition(pre, config))
-    expect_equal(.metab_de_matrix_condition(pre, config, group_col = "missing"),
-                 .metab_de_matrix_condition(pre, config))
+    for (col in c("treatment", "sample_type", "missing")) {
+        expect_equal(.metab_de_matrix_condition(pre, with_qc, group_col = col),
+                     out, info = col)
+    }
 })
 
-test_that(".metab_de_matrix_condition filters on the enrichment grouping when DE's column is absent", {
+test_that(".metab_de_matrix_condition removes configured QC when DE's column is absent", {
     # Pre-computed DE runs need no DE grouping, so the metadata may carry only
-    # the enrichment column: QC must still go, by that column, by id, and by
-    # qc.qc_flag_column.
+    # the enrichment column. The configured QC sample must still go, and
+    # nothing else: not a sample whose id starts with QC, nor one whose other
+    # column reads "pool".
     work <- matrix(1:18, nrow = 3,
                    dimnames = list(c("f1","f2","f3"),
                                    c("s1","s2","s3","s4","s5","QC_2")))
@@ -215,11 +228,11 @@ test_that(".metab_de_matrix_condition filters on the enrichment grouping when DE
     config <- list(modes = list(metabolomics = list(
         de = list(condition_column = "sample_type"),
         effects = list(samples = "sample_id", color = "sample_type"),
-        qc = list(qc_flag_column = "batch")
+        qc = list(qc_flag_column = "enr_group", qc_flag_value = "QC")
     )))
 
     out <- .metab_de_matrix_condition(pre, config, group_col = "enr_group")
-    expect_setequal(colnames(out$mat), c("s1","s2","s3"))
+    expect_setequal(colnames(out$mat), c("s1","s2","s3","s4","QC_2"))
     expect_equal(out$meta$sample_id, colnames(out$mat))
 })
 
@@ -259,7 +272,7 @@ test_that("run_metabolomics_qea does not read pre$expr_raw anymore", {
                  m(run_metabolomics_qea(fx_clean$pre, fx_clean$config)))
 })
 
-test_that("run_metabolomics_qea excludes QC/blank samples", {
+test_that("run_metabolomics_qea excludes the configured QC samples", {
     skip_if_not_installed("globaltest")
     skip_if_not_installed("withr")
 
@@ -625,9 +638,7 @@ test_that("ssGSEA groups by the contrast's own Factor column when given one", {
     on.exit(unlink(fx$gmt), add = TRUE)
 
     # A second grouping variable whose labels do NOT appear in the configured
-    # condition column — the shape of a contrast that carries its own Factor.
-    # Labels chosen to look nothing like QC/blank so the biological filter
-    # cannot drop them.
+    # condition column: the shape of a contrast that carries its own Factor.
     fx$pre$meta$run_batch <- rep(c("RUN1", "RUN2"),
                                  length.out = nrow(fx$pre$meta))
 

@@ -171,6 +171,10 @@ validate_metabolomics_config <- function(cfg) {
          "Leaving it in place would silently fall back to defaults and change your results.")
   }
 
+  # Which samples are QC must be stated, not inferred: fail here, before any
+  # computation, when the two QC keys are absent or only half set.
+  metab_is_qc_sample(cfg[["qc"]])
+
   norm <- cfg$preprocessing
   if (!is.null(norm)) {
     assert_one_of(norm$sample_norm, "preprocessing$sample_norm",

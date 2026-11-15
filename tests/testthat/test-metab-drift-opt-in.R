@@ -131,6 +131,7 @@ metab_cfg_with_drift <- function(dc) {
   cfg <- list(
     input = list(format = "processed_wide"),
     files = list(data = "data.csv"),
+    qc = list(qc_flag_column = NULL, qc_flag_value = NULL),
     preprocessing = list(chosen_norm = "pqn")
   )
   cfg$preprocessing["drift_correction"] <- list(dc)

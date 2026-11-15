@@ -81,6 +81,40 @@ There is no separate `normalization:` block.
     with `scaling` other than `"none"` the run stops, because the correction is
     not valid on centered or scaled features (see #362).
 
+## QC samples: `qc.qc_flag_column` and `qc.qc_flag_value`
+
+Which samples are pooled QC is stated in the config and nowhere else. Both keys
+are required; `validate_metabolomics_config()` rejects a config that lacks
+either one, or sets only one of them.
+
+```yaml
+qc:
+  qc_flag_column: "treatment"   # metadata column that marks the QC samples
+  qc_flag_value: "QC"           # value in that column meaning "QC"
+```
+
+An experiment without QC samples says so explicitly:
+
+```yaml
+qc:
+  qc_flag_column: null
+  qc_flag_value: null
+```
+
+- The match is exact, ignoring case and surrounding spaces, on that column
+  only. Sample names and group names are not inspected, so a biological group
+  called `pool_A` is kept.
+- `metab_is_qc_sample()` (`03_differential.R`) is the one function that reads
+  these keys. The differential-abundance test, QEA/ssGSEA, clustering and the
+  "without QC" plots all take their QC samples from it.
+- A column that is not in the sample metadata stops the run. A value that no
+  sample carries gives a warning and removes nothing.
+- A missing key is not read as "no QC": a config written before these keys
+  were required must be updated before it runs.
+- Blanks are not handled here; they are expected to be removed before the
+  table reaches the pipeline. Drift correction and the PQN `pooled_qc`
+  reference keep their own column, `preprocessing.drift_correction.qc_flag_col`.
+
 ## Main targets after `metab_pre`
 
 | Target | Built by | Domain code |

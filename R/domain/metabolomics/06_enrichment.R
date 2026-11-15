@@ -308,7 +308,7 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #' QEA and ssGSEA use this to start from the matrix, scale and biological-sample
 #' set that \code{run_metabolomics_de()} tests on: the matrix chosen by
 #' \code{resolve_metab_de_matrix()} (normalized, not feature-scaled), with
-#' QC/blank samples removed. It mirrors that function's sample setup
+#' the configured QC samples removed. It mirrors that function's sample setup
 #' (\code{03_differential.R}) without re-running DE; that function remains the
 #' source of truth — if its setup changes, update this to match.
 #'
@@ -318,11 +318,10 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #'
 #' \code{group_col} is the column the caller groups samples by (QEA/ssGSEA pass
 #' their resolved condition column, which honours
-#' \code{enrichment.condition_column}). QC/blank/pool exclusion runs on each of
-#' DE's condition column and \code{group_col} that exists in the metadata, so a
-#' technical sample marked only in the enrichment grouping never becomes a
-#' level of its own, and a pre-computed-DE run whose metadata lacks DE's column
-#' is still filtered. The sample set can then be a subset of DE's.
+#' \code{enrichment.condition_column}). QC exclusion does not depend on it: the
+#' samples removed are exactly those named by \code{qc.qc_flag_column} /
+#' \code{qc.qc_flag_value} (see \code{metab_is_qc_sample()}), the same set
+#' \code{run_metabolomics_de()} removes.
 #'
 #' PARITY CONTRACT: the matrix choice is shared — both this helper and
 #' \code{run_metabolomics_de()} call \code{resolve_metab_de_matrix()}. The
@@ -332,8 +331,9 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #'
 #' @param pre    Preprocessing results (expr_unscaled/expr_work, meta, info).
 #' @param config Full pipeline config.
-#' @param group_col Optional metadata column the caller groups samples by; NULL
-#'   applies DE's sample exclusion only.
+#' @param group_col Metadata column the caller groups samples by. It no longer
+#'   affects which samples are removed (the QC config alone decides that) and
+#'   is kept so that callers pass their grouping in one place.
 #' @return list(mat, condition, meta): the features x biological-samples matrix,
 #'   the DE condition factor (aligned to matrix columns; empty when the metadata
 #'   lacks DE's column), and the aligned metadata.
@@ -347,18 +347,15 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
     mat <- resolve_metab_de_matrix(pre)
 
     meta <- pre$meta[match(colnames(mat), pre$meta[[sample_col]]), , drop = FALSE]
-    # filter_to_biological() silently excludes nothing when its condition column
-    # is absent (zero-length condition values), so filter on each grouping
-    # column that exists, DE's first. With neither present, keep DE's call so
-    # the callers' own column checks report the problem.
-    filter_cols <- intersect(unique(c(condition_col, group_col)), colnames(meta))
-    if (length(filter_cols) == 0L) filter_cols <- condition_col
-    bio <- list(mat = mat, meta = meta)
-    for (col in filter_cols) {
-        bio <- filter_to_biological(bio$mat, bio$meta, col, sample_col,
-                                    label = "metabolomics enrichment",
-                                    qc_flag_column = cfg$qc$qc_flag_column)
-    }
+    # Same explicit QC mask as run_metabolomics_de(), computed from the metadata
+    # just aligned to the matrix. It does not depend on any grouping column, so
+    # one call covers DE's column and the enrichment grouping alike. `pre` can
+    # be one contrast's subset, where finding no QC sample is expected, so the
+    # "value not found" warning is left to the callers that see every sample.
+    bio <- filter_to_biological(mat, meta, condition_col, sample_col,
+                                label = "metabolomics enrichment",
+                                is_qc = metab_is_qc_sample(cfg[["qc"]], meta,
+                                                           warn_unmatched = FALSE))
     list(mat = bio$mat, condition = factor(bio$meta[[condition_col]]),
          meta = bio$meta)
 }

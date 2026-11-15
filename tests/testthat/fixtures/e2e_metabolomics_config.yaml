@@ -54,6 +54,9 @@ modes:
 
     qc:
       enabled: false
+      # The synthetic e2e data has no QC samples; say so explicitly.
+      qc_flag_column: null
+      qc_flag_value: null
 
     de:
       method: "limma"
