@@ -392,28 +392,21 @@ build_shiny_payload_metabolomics <- function(
     )
 
     # ============================================================
-    # ENRICHMENT BLOCK (opt-in)
+    # ENRICHMENT BLOCK
     # ============================================================
-    # Only when modes.metabolomics.enrichment.shiny_payload is TRUE. Without it
-    # this section does nothing and the payload is what it always was.
-    #
-    # When it is on, the ORA and GSEA results are added in the shape the app
-    # reads for RNA-seq (`enrichment`), with `enrichment_provenance` beside it.
-    # No existing key is changed, the legacy enrichment_* tables included. A
-    # result that cannot be encoded correctly stops the payload with the
-    # reason; it is never left out quietly. A run without enrichment results
-    # adds nothing.
-    if (metab_shiny_enrichment_enabled(config)) {
-        enrichment_block <- build_metab_enrichment_payload(
-            enrichment_res,
-            expr_features = rownames(payload$expr_norm),
-            contrasts     = names(de_res$de_tables),
-            config        = config)
-        if (!is.null(enrichment_block$enrichment)) {
-            payload$enrichment            <- enrichment_block$enrichment
-            payload$enrichment_provenance <- enrichment_block$enrichment_provenance
-        }
-    }
+    # Whenever the run has enrichment results, its ORA and GSEA results are
+    # added in the shape the app reads for RNA-seq (`enrichment`), with
+    # `enrichment_provenance` beside it. There is no option to set. No existing
+    # key is changed, the legacy enrichment_* tables and `mummichog` included.
+    # A run without enrichment adds nothing. Results that cannot be encoded
+    # correctly are not added either: the payload is still written, with a
+    # warning and the reasons on record (see metab_shiny_enrichment_keys()).
+    enrichment_keys <- metab_shiny_enrichment_keys(
+        enrichment_res,
+        expr_features = rownames(payload$expr_norm),
+        contrasts     = names(de_res$de_tables),
+        config        = config)
+    for (key in names(enrichment_keys)) payload[key] <- list(enrichment_keys[[key]])
 
     # ============================================================
     # VALIDATION
