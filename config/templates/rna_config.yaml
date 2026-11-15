@@ -206,6 +206,7 @@ modes:
       steps:
         hierarchical:
           enabled: true
+          show_in_report: false     # true = show the heatmap in the HTML report (display only)
           distance: "euclidean"
           linkage: "complete"
           k: null
