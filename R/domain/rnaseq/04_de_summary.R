@@ -8,9 +8,13 @@
 #' @param meta Data frame with sample metadata
 #' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator
 #' @param de_cfg List with DE configuration (p_cutoff, linear_fc_cutoff, sample_col, sample_alignment, etc.)
-#' @return List with 'dds' (DESeqDataSet) and 'tables' (list of DE result data frames)
+#' @param batch_cfg Output of [get_rna_batch_model_config()], or `NULL`. When
+#'   enabled, the batch column(s) enter the design before the group
+#'   (`~ Batch + Group`); the contrasts are unchanged.
+#' @return List with 'dds' (DESeqDataSet), 'tables' (list of DE result data
+#'   frames) and 'design' (the fitted design, [rna_de_design_record()])
 #' @export
-run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
+run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg, batch_cfg = NULL) {
     # Validate contrasts
     if (nrow(contrasts_df) == 0) {
         stop("contrasts_df is empty")
@@ -49,8 +53,29 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
     # Determine alignment mode from config (strict by default)
     lenient_alignment <- identical(de_cfg$sample_alignment, "lenient")
 
+    # Batch is checked on the samples that enter DE before the dataset is
+    # built: DESeqDataSetFromMatrix() itself rejects a rank-deficient design,
+    # with a message that does not say which batch holds which group.
+    batch_cols <- if (isTRUE(batch_cfg$enabled)) batch_cfg$batch_cols else character(0)
+    if (length(batch_cols) > 0) {
+        expr_samples <- if (identical(detect_source_type(counts), "tximport")) {
+            colnames(counts$counts)
+        } else {
+            colnames(counts)
+        }
+        meta <- prepare_rna_batch_design(meta, expr_samples, sample_col, factor_col, batch_cols)
+    }
+
     # Create DESeqDataSet using factory (handles both matrix and tximport)
-    design_formula <- stats::as.formula(paste0("~ ", factor_col))
+    design_formula <- if (length(batch_cols) > 0) {
+        rna_batch_design_formula(factor_col, batch_cols)
+    } else {
+        stats::as.formula(paste0("~ ", factor_col))
+    }
+    if (length(batch_cols) > 0) {
+        message(sprintf("[run_deseq2_de] Batch in the DE model: design %s",
+                        paste(deparse(design_formula), collapse = " ")))
+    }
     dds0 <- create_deseq_dataset(
         expr = counts,
         meta = meta,
@@ -124,10 +149,20 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
         tables[[cn]] <- tab
     }
 
+    design_record <- rna_de_design_record(
+        engine        = "DESeq2",
+        mode          = deseq_mode,
+        formula       = paste(deparse(DESeq2::design(dds)), collapse = " "),
+        batch_cols    = batch_cols,
+        design_matrix = stats::model.matrix(
+            DESeq2::design(dds), data = as.data.frame(SummarizedExperiment::colData(dds)))
+    )
+
     # Return both dds and tables for Shiny export
     return(list(
         dds = dds,
-        tables = tables
+        tables = tables,
+        design = design_record
     ))
 }
 
@@ -308,8 +343,12 @@ build_de_summary_counts <- function(summary_df, contrasts_df) {
 #' @param meta Data frame with sample metadata.
 #' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator.
 #' @param de_cfg DE configuration list.
-#' @return List with 'dds' (NULL) and 'tables' (named list of DE result data frames).
-run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg) {
+#' @param batch_cfg Output of [get_rna_batch_model_config()], or `NULL`. When
+#'   enabled, treatment-coded batch columns are added after the group columns
+#'   ([build_rna_limma_design()]); the contrasts are unchanged.
+#' @return List with 'dds' (NULL), 'tables' (named list of DE result data
+#'   frames) and 'design' (the fitted design, [rna_de_design_record()]).
+run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg, batch_cfg = NULL) {
     if (!requireNamespace("limma", quietly = TRUE)) {
         stop("Package 'limma' is required for DE on preprocessed data.", call. = FALSE)
     }
@@ -348,8 +387,17 @@ run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg) {
 
     message("[run_limma_rna_de] Using limma for preprocessed data")
 
-    design <- stats::model.matrix(stats::as.formula(paste0("~ 0 + ", factor_col)), data = meta)
-    colnames(design) <- safe_levels
+    batch_cols <- if (isTRUE(batch_cfg$enabled)) batch_cfg$batch_cols else character(0)
+    if (length(batch_cols) > 0) {
+        meta <- prepare_rna_batch_design(meta, colnames(expr), sample_col, factor_col, batch_cols)
+        design <- build_rna_limma_design(meta[[factor_col]], meta, batch_cols)
+        design_formula <- paste("~ 0 +", factor_col, "+", paste(batch_cols, collapse = " + "))
+        message(sprintf("[run_limma_rna_de] Batch in the DE model: design %s", design_formula))
+    } else {
+        design <- stats::model.matrix(stats::as.formula(paste0("~ 0 + ", factor_col)), data = meta)
+        colnames(design) <- safe_levels
+        design_formula <- paste("~ 0 +", factor_col)
+    }
 
     # Build contrast formulas
     safe_num <- make.names(contrasts_df$Numerator)
@@ -388,7 +436,9 @@ run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg) {
 
     list(
         dds    = NULL,
-        tables = tables
+        tables = tables,
+        design = rna_de_design_record("limma", NA_character_, design_formula,
+                                      batch_cols, design)
     )
 }
 

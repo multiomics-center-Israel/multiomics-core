@@ -347,12 +347,20 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     # ================================================================
     # SLIDE: Enrichment (only if results exist)
     # ================================================================
-    enrich_dir <- file.path(out_dir, "Enrichment")
-    if (dir.exists(enrich_dir)) {
-        enrich_pngs <- list.files(enrich_dir, pattern = "\\.png$",
-                                   full.names = TRUE, recursive = TRUE)
-        for (ep in enrich_pngs) {
-            ep_label <- gsub("_", " ", tools::file_path_sans_ext(basename(ep)))
+    # The plots are the ones THIS run's enrichment stage reports having written,
+    # not whatever is in Enrichment/: a results folder that is run again can
+    # still hold an earlier run's plots. Each slide keeps the title and position
+    # it had when the plots were flat files named enrichment_<method>_<plot>
+    # [_<contrast>].png, so the deck reads the same on a clean run.
+    enrich_dir  <- file.path(out_dir, "Enrichment")
+    enrich_pngs <- as.character(enrichment_res$files %||% character(0))
+    enrich_pngs <- enrich_pngs[grepl("\\.png$", enrich_pngs) & file.exists(enrich_pngs)]
+    if (length(enrich_pngs) > 0) {
+        enrich_names <- metab_enrichment_legacy_plot_name(enrich_pngs, enrich_dir)
+        enrich_order <- order(enrich_names)
+        for (i in enrich_order) {
+            ep <- enrich_pngs[i]
+            ep_label <- gsub("_", " ", tools::file_path_sans_ext(enrich_names[i]))
             ep_label <- tools::toTitleCase(ep_label)
             ep_context <- sprintf("Pathway enrichment: %s.", ep_label)
             ep_bl <- generate_slide_bottom_line(ep_context, image_path = ep, config = config)

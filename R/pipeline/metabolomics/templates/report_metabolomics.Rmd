@@ -2882,22 +2882,22 @@ if (!is.null(enrichment_res)) {
   )
   if (!is.null(enrichment_res$qea))
     enrich_rows <- rbind(enrich_rows, data.frame(
-      File = "enrichment_qea_results.csv",
+      File = "Enrichment/QEA/combined/all_samples/results.tsv",
       Description = "QEA pathway enrichment results table",
       stringsAsFactors = FALSE))
   if (!is.null(enrichment_res$ssgsea))
     enrich_rows <- rbind(enrich_rows, data.frame(
-      File = "enrichment_ssgsea_results.csv",
+      File = "Enrichment/ssGSEA/combined/all_samples/results.tsv",
       Description = "ssGSEA pathway enrichment results and scores",
       stringsAsFactors = FALSE))
   if (!is.null(enrichment_res$ora))
     enrich_rows <- rbind(enrich_rows, data.frame(
-      File = "enrichment_ora_results.csv",
+      File = "Enrichment/ORA/combined/contrasts/*/de/results.tsv",
       Description = "ORA pathway enrichment results (Fisher's exact test)",
       stringsAsFactors = FALSE))
   if (!is.null(enrichment_res$gsea))
     enrich_rows <- rbind(enrich_rows, data.frame(
-      File = "enrichment_gsea_results.csv",
+      File = "Enrichment/GSEA/combined/ranking_by_fc/*/results.tsv",
       Description = "GSEA pathway enrichment results (fgsea)",
       stringsAsFactors = FALSE))
   if (nrow(enrich_rows) > 0) files_tbl <- rbind(files_tbl, enrich_rows)
