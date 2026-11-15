@@ -179,7 +179,7 @@ modes:
       drift_correction:
         enabled: false
         injection_order_col: "injection_order"   # <-- YOUR DATA (only if enabled)
-        qc_flag_col: "is_QC"                     # <-- YOUR DATA (only if enabled): TRUE/FALSE column. Not the same key as qc.qc_flag_column
+        qc_flag_col: "is_QC"                     # <-- YOUR DATA (only if enabled): TRUE/FALSE column. A separate key from qc.qc_flag_column
         loess_span: 0.75
         epsilon: 1.0e-8
 
@@ -237,26 +237,39 @@ modes:
     qc:
       enabled: true
 
-      # Metadata column that marks QC / pooled / blank samples.
-      # THIS SETTING AFFECTS WHICH SAMPLES ARE ANALYSED, not only plots, and
-      # its two readers do not read it the same way:
+      # Metadata column that flags QC (pooled) samples.
+      # THIS SETTING AFFECTS WHICH SAMPLES ARE ANALYSED, not only plots.
+      #
+      # Recommended, and what this template uses: a metadata column named
+      # is_QC, holding TRUE for QC samples and FALSE for biological samples.
+      # That one column is read the same way by the QC plots, by differential
+      # abundance and QEA (QC samples are excluded from the test), by
+      # sample_filter.exclude_qc and by drift correction's default.
+      #   * If the metadata has no is_QC column, or it flags no sample, the QC
+      #     plots "without QC samples" are skipped; the others are still made.
+      #   * Blanks are separate: flag them in their own TRUE/FALSE metadata
+      #     column named is_blank. is_QC does not cover them.
+      #
+      # Any other column can be named here, but its two readers then differ:
       #   * QC plots "without QC samples": a sample is dropped when the value
       #     is TRUE (or "TRUE"/"1"), or equals qc_flag_value below ("qc",
       #     ignoring case). "blank" or "pooled_QC" is NOT dropped here.
       #   * Differential abundance and QEA: a sample is EXCLUDED FROM THE TEST
       #     when the value starts with qc or pool, or has qc, blank, blanks,
       #     pool or pooled as a whole or underscore-separated part (ignoring
-      #     case): "QC", "Blank", "pooled_QC", "pool_1". A TRUE/FALSE value is
-      #     not read here.
-      # A value of exactly "QC" is read the same way by both. Independently of
-      # this key, differential abundance and QEA always exclude samples whose
-      # de.condition_column value matches the same rule, whose sample id
-      # starts with qc or pool, or that are TRUE in a metadata column named
-      # is_QC or is_blank. So never give a biological group a name that
-      # matches (e.g. "pool_A"): it would be dropped from the test.
-      # The run prints how many samples it excluded; check that number.
-      qc_flag_column: "treatment"   # <-- YOUR DATA
-      # qc_flag_value: "qc"         # QC plots only: the value that marks a QC sample
+      #     case): "QC", "Blank", "pooled_QC", "pool_1". A TRUE/FALSE value in
+      #     a column not named is_QC or is_blank is not read here.
+      # EXISTING PROJECTS that name a text column here (e.g. "treatment"): do
+      # not switch to is_QC without checking which samples are excluded
+      # before and after. The run prints how many it excluded from the test.
+      #
+      # Whatever this key says, differential abundance and QEA also exclude
+      # samples whose de.condition_column value matches the rule above, or
+      # whose sample id starts with qc or pool. So never give a biological
+      # group a name that matches (e.g. "pool_A"): it would be dropped from
+      # the test. Using is_QC does not change that.
+      qc_flag_column: "is_QC"       # <-- YOUR DATA: needs an is_QC column (TRUE/FALSE) in the metadata
+      # qc_flag_value: "qc"         # QC plots only, for a text column: the value that marks a QC sample
 
       thresholds:
         max_samples_for_heatmaps: 120
