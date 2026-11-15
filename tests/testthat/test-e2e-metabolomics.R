@@ -12,8 +12,9 @@ test_that("metabolomics runs end-to-end and recovers the injected DE signal", {
   if (!e2e_should_run()) skip("Set RUN_E2E_OMICS=1 to run the heavy end-to-end omic tests.")
   skip_if_not_installed("limma")
 
-  res <- run_omic_e2e(METAB_CONFIG, METAB_STAGE, "metab_de_res")
+  res <- run_omic_e2e(METAB_CONFIG, METAB_STAGE, c("metab_de_res", "metab_pre"))
   de  <- res$values[["metab_de_res"]]
+  pre <- res$values[["metab_pre"]]
 
   # --- structure: the DE contract holds ---
   expect_true(is.list(de))
@@ -31,13 +32,15 @@ test_that("metabolomics runs end-to-end and recovers the injected DE signal", {
   expect_lte(length(sig), 90L)
 
   # summary_df$feature_id is the RT/m/z id build_feature_ids() constructs, so
-  # the generator's METAB_### ids survive as row_data$original_id, which
-  # run_metabolomics_de() carries into summary_df$Name. Compare truth there.
+  # the generator's METAB_### ids survive only as row_data$original_id. Map
+  # the tested features back to them by feature_id and compare truth there.
   # The generator never makes a DE feature missing, so every truth id must be
   # in the tested universe.
   truth <- sprintf("METAB_%03d", 1:25)
-  expect_true("Name" %in% names(de$summary_df))
-  source_ids <- as.character(de$summary_df$Name)
+  # summary_df holds ids and statistics; annotations stay in row_data.
+  expect_false("Name" %in% names(de$summary_df))
+  source_ids <- as.character(pre$row_data$original_id[
+    match(de$summary_df$feature_id, pre$row_data$feature_id)])
   expect_true(all(truth %in% source_ids))
   sig_source <- source_ids[e2e_pass_flag(de$summary_df)]
   recall <- mean(truth %in% sig_source)

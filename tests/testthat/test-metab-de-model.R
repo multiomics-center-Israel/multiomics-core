@@ -294,3 +294,20 @@ test_that("the payload's de_model answers topTable() for every payload contrast"
     expect_setequal(rownames(tt), payload$de_stats$feature_id)
   }
 })
+
+
+# --- annotations stay out of the statistics table ---------------------------------
+
+test_that("summary_df carries no Name column, whatever row_data holds", {
+  pre <- .model_fixture()
+  ids <- rownames(pre$expr_unscaled)
+  pre$row_data <- data.frame(feature_id  = ids,
+                             original_id = paste0("feature_", seq_along(ids)),
+                             Name        = paste0("metabolite ", seq_along(ids)),
+                             row.names   = ids, stringsAsFactors = FALSE)
+  res <- .model_de(pre)
+
+  expect_false("Name" %in% colnames(res$summary_df))
+  expect_identical(colnames(res$summary_df)[1], "feature_id")
+  expect_identical(res$summary_df$feature_id, ids)
+})
