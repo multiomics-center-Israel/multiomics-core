@@ -141,12 +141,21 @@ test_that("the joint fit reproduces fitting each contrast on its own", {
   formulas  <- paste(.model_contrasts$Numerator, .model_contrasts$Denominator,
                      sep = " - ")
 
-  joint <- fit_metab_limma_contrasts(mat, condition, formulas,
-                                     .model_contrasts$Contrast_name)
+  # lmFit() reports the one feature whose group-A coefficient cannot be
+  # estimated. That warning is the fixture working as intended, so it is
+  # asserted, once per fit; any other warning still surfaces.
+  na_coef_warning <- "Partial NA coefficients for 1 probe"
+
+  expect_warning(
+    joint <- fit_metab_limma_contrasts(mat, condition, formulas,
+                                       .model_contrasts$Contrast_name),
+    na_coef_warning, fixed = TRUE
+  )
 
   for (i in seq_along(formulas)) {
     ctr <- .model_contrasts$Contrast_name[i]
-    alone <- de_limma(mat, condition, formulas[i])
+    expect_warning(alone <- de_limma(mat, condition, formulas[i]),
+                   na_coef_warning, fixed = TRUE)
     tab   <- joint$de_tables[[ctr]]
 
     expect_setequal(tab$feature_id, alone$feature_id)
