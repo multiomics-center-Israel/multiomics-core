@@ -33,7 +33,7 @@ modes:
     # ---- Input files ----
     input:
       # "processed_wide" (one table: feature columns + one column per sample),
-      # "cd_raw" (Compound Discoverer export), "long", or
+      # "cd_raw" (Compound Discoverer export), or
       # "multi_level" (a folder of tables; set files.data_dir instead of files.data).
       format: "processed_wide"
 
@@ -50,16 +50,21 @@ modes:
       # data_dir: "metabolomics/dir_name"
 
       # One row per sample. It must have the column named in effects.samples,
-      # and every sample id listed there must be a column of the data table;
-      # the run stops otherwise.
+      # and every sample id listed there should be a column of the data table.
+      # For processed_wide input the run stops if one is not. For cd_raw input
+      # it only WARNS and continues with the samples found in both, so a
+      # misspelled id silently drops that sample: read the warnings.
       metadata: "metabolomics/metadata.txt"      # <-- YOUR DATA
 
       # Optional: a table that renames sample ids (see id_columns.map_from / map_to).
       # sample_map: "metabolomics/sample_map.txt"
 
-      # One row per comparison. Columns "Numerator" and "Denominator" are
-      # required and hold group labels exactly as written in the
-      # de.condition_column column; "Contrast_name" is an optional label.
+      # One row per comparison, with four required columns (the run stops if
+      # one is missing):
+      #   Contrast_name            a label for the comparison
+      #   Factor                   the metadata column that holds the groups
+      #   Numerator, Denominator   the two group labels, exactly as written in
+      #                            the de.condition_column column
       contrasts: "metabolomics/contrasts.txt"    # <-- YOUR DATA
 
       # Optional: a differential-abundance table computed elsewhere, used
@@ -199,8 +204,8 @@ modes:
     # Experimental design: metadata columns
     # ==============================================================================
     # Four settings name metadata columns, and they are separate on purpose:
-    #   effects.samples       the sample id column. Its values must be the
-    #                         sample column headers of the data table.
+    #   effects.samples       the sample id column. Its values must match the
+    #                         sample ids of the data table (see files.metadata).
     #   effects.color/shape   how samples are drawn in the QC plots.
     #   de.condition_column   the groups that are compared (further down). If
     #                         it is left out, effects.color is used instead.
