@@ -84,9 +84,12 @@ mmc_engine_record <- function(config) {
 #' Writes `mummichog_pinned/mummichog_engine.json`. The config snapshot in
 #' `execution_info/` holds the config as written, so an engine that was
 #' defaulted is not in it; this file names the engine either way and says
-#' whether the config chose it. It records the selection for the run, not that
-#' the stage completed — the engine's own result files are the evidence of
-#' that. No timestamp, so an unchanged selection rewrites an identical file.
+#' whether the config chose it. It records the selection for the last run in
+#' which mummichog was enabled, not that the stage completed — the engine's
+#' own result files are the evidence of that — and not whether mummichog is
+#' enabled now: a later disabled run writes nothing and removes nothing, so
+#' the record stays beside the earlier results it describes. No timestamp, so
+#' an unchanged selection rewrites an identical file.
 #'
 #' @param config  Full pipeline config.
 #' @param out_dir Metabolomics output dir; the file goes in

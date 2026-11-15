@@ -347,10 +347,69 @@ test_that("pipe_metabolomics adds the pinned mummichog targets only when enabled
   expect_equal(length(mo_on) - length(mo_off), 3L)
 })
 
+test_that("mod_mummichog_pinned runs only for a config that selects python", {
+  # A direct call must agree with the resolver the DAG, the engine record and
+  # the report use: no engine means metaboanalyst, so the python stage stops
+  # rather than produce python results under a config read as metaboanalyst.
+  pre <- list(row_data = data.frame(check.names = FALSE, feature_id = "F1",
+                                    "m/z" = 100.1, RT = 1.0))
+  de <- list(de_tables = list(A_vs_B = data.frame(
+    feature_id = "F1", P.Value = 0.01, logFC = 1.2)))
+  cfg_for <- function(mm) list(
+    params = list(seed = 1.5),   # would stop next, if the engine gate let it by
+    modes  = list(metabolomics = list(organism = "Mus musculus",
+                                      enrichment = list(mummichog = mm))))
+
+  for (mm in list(list(enabled = TRUE),
+                  list(enabled = TRUE, engine = "metaboanalyst"),
+                  list(enabled = TRUE, ionization_mode = "pos_default"))) {
+    out_dir <- withr::local_tempdir()
+    err <- tryCatch(
+      mod_mummichog_pinned(pre = pre, de_res = de, config = cfg_for(mm),
+                           out_dir = out_dir, python = "/nonexistent/bin/python"),
+      error = function(e) conditionMessage(e))
+    lab <- paste(names(mm), collapse = "+")
+    expect_match(err, "selects mummichog.engine 'metaboanalyst'", fixed = TRUE,
+                 label = lab)
+    expect_match(err, "engine: python", fixed = TRUE, label = lab)
+    # first check after the enable gate: no later check spoke, nothing ran,
+    # nothing was written
+    expect_false(grepl("params.seed|non-human|Python executable", err), label = lab)
+    expect_false(dir.exists(file.path(out_dir, "mummichog_pinned")), label = lab)
+  }
+  # only a defaulted engine is described as the default
+  expect_match(tryCatch(mod_mummichog_pinned(NULL, NULL, cfg_for(list(enabled = TRUE)),
+                                             withr::local_tempdir()),
+                        error = function(e) conditionMessage(e)),
+               "names no engine")
+  expect_false(grepl("names no engine", tryCatch(
+    mod_mummichog_pinned(NULL, NULL,
+                         cfg_for(list(enabled = TRUE, engine = "metaboanalyst")),
+                         withr::local_tempdir()),
+    error = function(e) conditionMessage(e))))
+
+  # an unknown engine is the resolver's error, not a run
+  expect_error(mod_mummichog_pinned(NULL, NULL,
+                                    cfg_for(list(enabled = TRUE, engine = "mummichog3")),
+                                    withr::local_tempdir()), "must be")
+
+  # engine: python passes the gate and reaches the next check
+  expect_error(mod_mummichog_pinned(NULL, NULL,
+                                    cfg_for(list(enabled = TRUE, engine = "python")),
+                                    withr::local_tempdir()), "params.seed|non-human")
+
+  # a disabled config returns before the engine is resolved or validated
+  for (mm in list(list(enabled = FALSE), list(enabled = FALSE, engine = "metaboanalyst"),
+                  list(enabled = FALSE, engine = "mummichog3"), list())) {
+    expect_null(suppressMessages(mod_mummichog_pinned(
+      NULL, NULL, cfg_for(mm), withr::local_tempdir())))
+  }
+})
+
 test_that("mod_mummichog_pinned refuses a non-human organism without a model", {
   cfg <- list(modes = list(metabolomics = list(
     organism   = "Mus musculus",
-    enrichment = list(mummichog = list(enabled = TRUE)))))
+    enrichment = list(mummichog = list(enabled = TRUE, engine = "python")))))
   expect_error(
     mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
                          out_dir = withr::local_tempdir()),
@@ -364,7 +423,8 @@ test_that("a configured model bypasses the organism guard (human-only) check", {
   # organism error.
   cfg <- list(modes = list(metabolomics = list(
     organism   = "Mus musculus",
-    enrichment = list(mummichog = list(enabled = TRUE, model_json = "/tmp/model.json")))))
+    enrichment = list(mummichog = list(enabled = TRUE, engine = "python",
+                                       model_json = "/tmp/model.json")))))
   err <- tryCatch(
     mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
                          out_dir = withr::local_tempdir()),
@@ -377,7 +437,7 @@ test_that("a configured model bypasses the organism guard (human-only) check", {
 test_that("a human organism passes the guard (fails later, not on organism)", {
   cfg <- list(modes = list(metabolomics = list(
     organism   = "Homo sapiens",
-    enrichment = list(mummichog = list(enabled = TRUE)))))
+    enrichment = list(mummichog = list(enabled = TRUE, engine = "python")))))
   err <- tryCatch(
     mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
                          out_dir = withr::local_tempdir()),
@@ -409,7 +469,7 @@ test_that("mod_mummichog_pinned fails loud on a broken venv, not per-contrast qu
   ))
   cfg <- list(modes = list(metabolomics = list(
     organism   = "Homo sapiens",
-    enrichment = list(mummichog = list(enabled = TRUE)))))
+    enrichment = list(mummichog = list(enabled = TRUE, engine = "python")))))
 
   expect_error(
     mod_mummichog_pinned(pre = pre, de_res = de, config = cfg,
