@@ -14,6 +14,67 @@
 # app's contract is unaffected by what the report gains.
 .METAB_SHINY_MUMMICHOG_KEYS <- c("title", "subtitle", "plot", "table", "slug")
 
+# The explicitly named fields added beside them, in payload order. Each is one
+# object of the report section under a name that says what it is; see
+# metab_shiny_mummichog_entry().
+.METAB_SHINY_MUMMICHOG_ADDED_KEYS <- c("summary_table", "ora_plot", "ora_table",
+                                       "gsea_plot", "gsea_table")
+
+
+#' Make a table safe to write as CSV or Excel
+#'
+#' A list column cannot be written to a flat file, so each one is collapsed to
+#' one string per row. Every other column, and a table with no list column, is
+#' returned exactly as given: numeric statistics stay numeric.
+#'
+#' @param tbl A data.frame, or NULL.
+#' @param sep Separator between the elements of one list cell.
+#' @return \code{tbl} with its list columns as character vectors; NULL when
+#'   \code{tbl} is NULL.
+#' @examples
+#' tbl <- data.frame(Pathway = c("a", "b"), P.Value = c(0.01, 0.2))
+#' tbl$members <- list(c("x", "y"), character(0))
+#' flatten_list_columns(tbl)$members   # "x; y" ""
+flatten_list_columns <- function(tbl, sep = "; ") {
+    if (!is.data.frame(tbl)) return(tbl)
+    is_list <- vapply(tbl, is.list, logical(1))
+    for (col in names(tbl)[is_list]) {
+        tbl[[col]] <- vapply(tbl[[col]], function(cell) {
+            paste(as.character(unlist(cell)), collapse = sep)
+        }, character(1), USE.NAMES = FALSE)
+    }
+    tbl
+}
+
+
+#' One contrast's mummichog entry for the Shiny payload
+#'
+#' Selects from a report section the objects the app reads. Nothing is computed:
+#' each field is an object the section already holds, so the app shows what the
+#' HTML report shows. The five original fields are passed through unchanged;
+#' \code{ora_plot} and \code{ora_table} are the same objects as \code{plot} and
+#' \code{table} under names that say which analysis they belong to.
+#'
+#' @param section One element of \code{build_mummichog_report_sections()}.
+#' @return A list with the fields of \code{.METAB_SHINY_MUMMICHOG_KEYS} the
+#'   section has, followed by every field of
+#'   \code{.METAB_SHINY_MUMMICHOG_ADDED_KEYS}: \code{summary_table} (the
+#'   report's Summary, all its columns), \code{ora_plot}, \code{ora_table} (every
+#'   ORA row), \code{gsea_plot} and \code{gsea_table} (every GSEA row). The added
+#'   fields are always present; \code{gsea_plot} and \code{gsea_table} are NULL
+#'   when GSEA did not run for the contrast.
+metab_shiny_mummichog_entry <- function(section) {
+    entry <- section[intersect(.METAB_SHINY_MUMMICHOG_KEYS, names(section))]
+    # List-style assignment: `entry$gsea_plot <- NULL` would drop the key, and
+    # the app tells "no GSEA" from a NULL value, not from a missing name.
+    entry["summary_table"] <- list(flatten_list_columns(section$summary))
+    entry["ora_plot"]      <- list(section$plot)
+    entry["ora_table"]     <- list(flatten_list_columns(section$table))
+    entry["gsea_plot"]     <- list(section$gsea_plot)
+    entry["gsea_table"]    <- list(flatten_list_columns(section$gsea$table))
+    entry
+}
+
 
 # ============================================================
 # CANONICAL BUILDER (v2.0)
@@ -34,10 +95,14 @@
 #' @param plsda_res Optional: PLS-DA results (from feature_sel_res$plsda)
 #' @param enrichment_res Optional: enrichment results (from mod_metabolomics_enrichment)
 #' @param annot Optional: external annotation data.frame
-#' @param mummichog_pathways Optional: per-contrast mummichog pathway tables, as
-#'   passed to the HTML report (`metab_mummichog_report_pathways`). Becomes
-#'   `payload$mummichog`, one section per contrast built by
-#'   `build_mummichog_report_sections()`; NULL when not supplied or empty.
+#' @param mummichog_pathways Optional: per-contrast mummichog pathway tables
+#'   (`metab_mummichog_report_pathways`). Used only when `mummichog_sections`
+#'   is NULL: the sections are then built here from the pathway tables alone,
+#'   which gives the ORA plot and table but no GSEA.
+#' @param mummichog_sections Optional: the per-contrast report sections
+#'   (`metab_mummichog_sections`), the objects the HTML report renders. Becomes
+#'   `payload$mummichog`, one entry per contrast shaped by
+#'   `metab_shiny_mummichog_entry()`; NULL when mummichog did not run.
 #'
 #' @return A named list containing every canonical key (NULL where not applicable),
 #'   plus omics-specific extension keys (and legacy keys when
@@ -58,7 +123,8 @@ build_shiny_payload_metabolomics <- function(
     include_legacy = TRUE,
     xlsx_files = NULL,
     out_dir = NULL,
-    mummichog_pathways = NULL
+    mummichog_pathways = NULL,
+    mummichog_sections = NULL
 ) {
     # ============================================================
     # Initialize canonical payload structure
@@ -376,19 +442,20 @@ build_shiny_payload_metabolomics <- function(
     # ============================================================
     # MUMMICHOG (metabolomics extension: per-contrast plot + table)
     # ============================================================
-    # Built by the same function the HTML report uses, so the app receives the
-    # report's own ggplot and table (plus title, subtitle and slug) for each
-    # contrast instead of rebuilding them. NULL when mummichog did not run or no
-    # contrast has a result; list-style assignment keeps the key present then.
-    # This call supplies no mummichog output files, so `evidence` is NULL here
-    # anyway; the narrowing is belt-and-braces, and it is what keeps the app's
-    # contract fixed if a future caller does supply them.
-    mummichog_sections <- lapply(
-        build_mummichog_report_sections(mummichog_pathways, config),
-        function(sec) sec[intersect(.METAB_SHINY_MUMMICHOG_KEYS, names(sec))]
-    )
+    # The pipeline hands over the sections the HTML report renders, so the app
+    # receives the report's own objects, GSEA included, and nothing is computed
+    # again here. A caller with only the pathway tables still gets the ORA plot
+    # and table: the sections are then built from those alone. Either way the
+    # entry is narrowed to the fields the app's contract names. NULL when
+    # mummichog did not run or no contrast has a result; list-style assignment
+    # keeps the key present then.
+    if (is.null(mummichog_sections)) {
+        mummichog_sections <- build_mummichog_report_sections(mummichog_pathways,
+                                                              config)
+    }
+    mummichog_entries <- lapply(mummichog_sections, metab_shiny_mummichog_entry)
     payload["mummichog"] <- list(
-        if (length(mummichog_sections) > 0) mummichog_sections else NULL
+        if (length(mummichog_entries) > 0) mummichog_entries else NULL
     )
 
     # ============================================================

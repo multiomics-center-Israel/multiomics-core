@@ -594,7 +594,9 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         enrichment_res = metab_enrichment_res,
         include_legacy = TRUE,
         xlsx_files     = metab_final_results,
-        mummichog_pathways = metab_mummichog_report_pathways,
+        # The sections the HTML report renders, so the app gets the same
+        # ORA and GSEA objects without anything being computed again.
+        mummichog_sections = metab_mummichog_sections,
         out_file       = file.path(metab_out_dir,
                                    sprintf("shiny_payload_metabolomics_%s.rds",
                                            get_run_name(config)))

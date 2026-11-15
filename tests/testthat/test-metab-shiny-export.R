@@ -185,8 +185,9 @@ test_that("mummichog sections match build_mummichog_report_sections() output", {
     sec <- p$mummichog[["A_vs_B"]]
     dir <- direct[["A_vs_B"]]
 
-    expect_named(sec, c("title", "subtitle", "plot", "table", "slug"),
-                 ignore.order = TRUE)
+    expect_named(sec, c("title", "subtitle", "plot", "table", "slug",
+                        "summary_table", "ora_plot", "ora_table",
+                        "gsea_plot", "gsea_table"))
     expect_identical(sec$title, dir$title)
     expect_identical(sec$subtitle, dir$subtitle)
     expect_identical(sec$slug, dir$slug)
@@ -308,4 +309,262 @@ test_that("the final-results table written to TSV and Excel names features from 
     expect_setequal(final$feature_id, fx$de_res$summary_df$feature_id)
     expect_identical(final$Name, unname(METAB_NAMES[final$feature_id]))
     expect_false(any(final$Name %in% final$original_id))
+})
+
+
+# --- mummichog: explicitly named fields from the report sections --------------
+# The pipeline hands the payload builder the sections the HTML report renders
+# (metab_mummichog_sections). Each payload entry keeps the five original fields
+# and adds summary_table, ora_plot, ora_table, gsea_plot and gsea_table, which
+# are objects of the section, not recomputed.
+
+MUMMICHOG_LEGACY_KEYS <- c("title", "subtitle", "plot", "table", "slug")
+MUMMICHOG_ADDED_KEYS  <- c("summary_table", "ora_plot", "ora_table",
+                           "gsea_plot", "gsea_table")
+
+# More pathways than the Summary keeps, so a truncated table would show.
+make_many_mummichog_pathways <- function(n = 30) {
+    data.frame(
+        check.names      = FALSE,
+        stringsAsFactors = FALSE,
+        pathway      = sprintf("Pathway %02d", seq_len(n)),
+        overlap_size = rep(c(5, 3, 8), length.out = n),
+        pathway_size = rep(c(10, 6, 12), length.out = n),
+        "p-value"    = seq(0.001, 0.9, length.out = n)
+    )
+}
+
+# Shaped like run_mummichog_gsea()$table: one row per tested pathway.
+make_mummichog_gsea_table <- function(n = 30) {
+    data.frame(
+        check.names      = FALSE,
+        stringsAsFactors = FALSE,
+        "Pathway"      = sprintf("Pathway %02d", seq_len(n)),
+        "Tested size"  = rep(c(4L, 7L, 9L), length.out = n),
+        "ES"           = seq(-0.8, 0.8, length.out = n),
+        "NES"          = seq(-2, 2, length.out = n),
+        "P.Value"      = seq(0.002, 0.95, length.out = n),
+        "padj"         = seq(0.02, 0.99, length.out = n),
+        "Leading-edge EmpiricalCompounds" = rep(c("E1; E2", "E3", ""), length.out = n)
+    )
+}
+
+# Two contrasts as the sections target holds them: the first with GSEA, the
+# second without (GSEA switched off or unavailable for it).
+make_mummichog_sections <- function(fx) {
+    sections <- suppressMessages(build_mummichog_report_sections(
+        list(A_vs_B = make_many_mummichog_pathways(),
+             C_vs_B = make_mummichog_pathways()),
+        fx$config))
+    gsea_tbl <- make_mummichog_gsea_table()
+    sections$A_vs_B$gsea <- list(table = gsea_tbl, metric_label = "t-statistic")
+    # A stand-in for the scatter: the payload passes the section's plot object
+    # through, whatever it is.
+    sections$A_vs_B$gsea_plot <- ggplot2::ggplot(
+        gsea_tbl, ggplot2::aes(x = NES, y = -log10(P.Value))) + ggplot2::geom_point()
+    # What a real section also carries, and the payload must leave behind.
+    sections$A_vs_B$evidence <- list(pathway_summary = data.frame(Pathway = "Pathway 01"))
+    sections
+}
+
+test_that("every mummichog entry has the five original fields, then the five named ones", {
+    fx <- make_metab_export_fixture()
+    p  <- build_metab_payload(fx, mummichog_sections = make_mummichog_sections(fx))
+
+    expect_named(p$mummichog, c("A_vs_B", "C_vs_B"))
+    for (contrast in names(p$mummichog)) {
+        expect_named(p$mummichog[[contrast]],
+                     c(MUMMICHOG_LEGACY_KEYS, MUMMICHOG_ADDED_KEYS), info = contrast)
+    }
+    expect_identical(.METAB_SHINY_MUMMICHOG_ADDED_KEYS, MUMMICHOG_ADDED_KEYS)
+})
+
+test_that("the original mummichog fields are the section's own, unchanged", {
+    fx       <- make_metab_export_fixture()
+    sections <- make_mummichog_sections(fx)
+    p        <- build_metab_payload(fx, mummichog_sections = sections)
+
+    for (contrast in names(sections)) {
+        for (key in MUMMICHOG_LEGACY_KEYS) {
+            expect_identical(p$mummichog[[contrast]][[key]], sections[[contrast]][[key]],
+                             info = paste(contrast, key))
+        }
+    }
+})
+
+test_that("ora_plot and ora_table are the section's ORA plot and table", {
+    fx       <- make_metab_export_fixture()
+    sections <- make_mummichog_sections(fx)
+    entry    <- build_metab_payload(fx, mummichog_sections = sections)$mummichog$A_vs_B
+
+    expect_identical(entry$ora_plot, sections$A_vs_B$plot)
+    expect_identical(entry$ora_plot, entry$plot)
+    expect_identical(entry$ora_table, sections$A_vs_B$table)
+    expect_identical(entry$ora_table, entry$table)
+})
+
+test_that("summary_table is the report's summary object, with all its columns", {
+    fx       <- make_metab_export_fixture()
+    sections <- make_mummichog_sections(fx)
+    p        <- build_metab_payload(fx, mummichog_sections = sections)
+
+    for (contrast in names(sections)) {
+        expect_identical(p$mummichog[[contrast]]$summary_table,
+                         sections[[contrast]]$summary, info = contrast)
+    }
+    smry <- p$mummichog$A_vs_B$summary_table
+    # The report shows the display columns; the values behind them follow.
+    expect_identical(names(smry)[seq_along(.MMC_SUMMARY_DISPLAY_COLS)],
+                     .MMC_SUMMARY_DISPLAY_COLS)
+    expect_true(all(c("Pathway ID", "Nominal Mummichog signal", "ORA p.value",
+                      "GSEA P.Value", "GSEA padj", "Supporting ECs",
+                      "Supporting features", "Identified methods tested") %in%
+                      names(smry)))
+    expect_length(names(smry), 15L)
+})
+
+test_that("the ORA and GSEA tables keep every row; only the Summary is a top list", {
+    fx       <- make_metab_export_fixture()
+    sections <- make_mummichog_sections(fx)
+    entry    <- build_metab_payload(fx, mummichog_sections = sections)$mummichog$A_vs_B
+
+    expect_identical(nrow(entry$ora_table), 30L)
+    expect_identical(nrow(entry$gsea_table), 30L)
+    expect_setequal(entry$ora_table$Pathway, make_many_mummichog_pathways()$pathway)
+    expect_identical(entry$gsea_table, sections$A_vs_B$gsea$table)
+    expect_lte(nrow(entry$summary_table), .MMC_SUMMARY_TOP_N)
+    expect_lt(nrow(entry$summary_table), nrow(entry$ora_table))
+})
+
+test_that("gsea_plot is the section's GSEA plot", {
+    fx       <- make_metab_export_fixture()
+    sections <- make_mummichog_sections(fx)
+    entry    <- build_metab_payload(fx, mummichog_sections = sections)$mummichog$A_vs_B
+
+    expect_s3_class(entry$gsea_plot, "ggplot")
+    expect_identical(entry$gsea_plot, sections$A_vs_B$gsea_plot)
+})
+
+test_that("a contrast without GSEA has NULL gsea fields, with the keys present", {
+    fx    <- make_metab_export_fixture()
+    entry <- build_metab_payload(
+        fx, mummichog_sections = make_mummichog_sections(fx))$mummichog$C_vs_B
+
+    expect_true(all(c("gsea_plot", "gsea_table") %in% names(entry)))
+    expect_null(entry$gsea_plot)
+    expect_null(entry$gsea_table)
+    # The ORA side of that contrast is unaffected.
+    expect_s3_class(entry$ora_plot, "ggplot")
+    expect_identical(nrow(entry$ora_table), 3L)
+    expect_s3_class(entry$summary_table, "data.frame")
+})
+
+test_that("p-value and statistic columns keep their numeric types", {
+    fx       <- make_metab_export_fixture()
+    sections <- make_mummichog_sections(fx)
+    entry    <- build_metab_payload(fx, mummichog_sections = sections)$mummichog$A_vs_B
+
+    expect_type(entry$ora_table[["p.value"]], "double")
+    for (col in c("ES", "NES", "P.Value", "padj")) {
+        expect_type(entry$gsea_table[[col]], "double")
+        expect_identical(entry$gsea_table[[col]], sections$A_vs_B$gsea$table[[col]],
+                         info = col)
+    }
+    expect_type(entry$gsea_table[["Tested size"]], "integer")
+    for (col in c("ORA p.value", "GSEA P.Value", "GSEA padj")) {
+        expect_type(entry$summary_table[[col]], "double")
+        expect_identical(entry$summary_table[[col]], sections$A_vs_B$summary[[col]],
+                         info = col)
+    }
+})
+
+test_that("every mummichog table can be written as CSV", {
+    fx <- make_metab_export_fixture()
+    p  <- build_metab_payload(fx, mummichog_sections = make_mummichog_sections(fx))
+
+    for (contrast in names(p$mummichog)) {
+        for (key in c("summary_table", "ora_table", "gsea_table")) {
+            tbl <- p$mummichog[[contrast]][[key]]
+            if (is.null(tbl)) next
+            expect_false(any(vapply(tbl, is.list, logical(1))),
+                         info = paste(contrast, key))
+            out <- withr::local_tempfile(fileext = ".csv")
+            utils::write.csv(tbl, out, row.names = FALSE)
+            expect_identical(nrow(utils::read.csv(out, check.names = FALSE)), nrow(tbl),
+                             info = paste(contrast, key))
+        }
+    }
+})
+
+test_that("a list column is flattened in the payload only, and nothing else changes", {
+    fx       <- make_metab_export_fixture()
+    sections <- make_mummichog_sections(fx)
+    members  <- rep(list(c("E1", "E2"), "E3", character(0)), length.out = 30)
+    sections$A_vs_B$gsea$table[["Leading-edge EmpiricalCompounds"]] <- members
+    before   <- sections$A_vs_B$gsea$table
+
+    gsea <- build_metab_payload(fx, mummichog_sections = sections)$mummichog$A_vs_B$gsea_table
+
+    expect_identical(gsea[["Leading-edge EmpiricalCompounds"]][1:3], c("E1; E2", "E3", ""))
+    expect_type(gsea[["Leading-edge EmpiricalCompounds"]], "character")
+    other <- setdiff(names(before), "Leading-edge EmpiricalCompounds")
+    expect_identical(gsea[other], before[other])
+    expect_identical(names(gsea), names(before))
+    # The report section itself still holds the list column.
+    expect_true(is.list(sections$A_vs_B$gsea$table[["Leading-edge EmpiricalCompounds"]]))
+})
+
+test_that("flatten_list_columns() returns a table without list columns untouched", {
+    tbl <- make_mummichog_gsea_table()
+    expect_identical(flatten_list_columns(tbl), tbl)
+    expect_null(flatten_list_columns(NULL))
+})
+
+test_that("evidence and the GSEA internals stay out of the payload", {
+    fx    <- make_metab_export_fixture()
+    entry <- build_metab_payload(
+        fx, mummichog_sections = make_mummichog_sections(fx))$mummichog$A_vs_B
+
+    expect_false(any(c("evidence", "gsea", "summary", "polarity", "engine") %in%
+                       names(entry)))
+})
+
+test_that("no sections means a NULL mummichog key, still present", {
+    fx <- make_metab_export_fixture()
+    for (sections in list(NULL, list())) {
+        p <- build_metab_payload(fx, mummichog_sections = sections)
+        expect_true("mummichog" %in% names(p))
+        expect_null(p$mummichog)
+    }
+})
+
+test_that("sections take precedence over pathway tables; pathway tables alone still work", {
+    fx       <- make_metab_export_fixture()
+    sections <- make_mummichog_sections(fx)
+
+    both <- build_metab_payload(fx, mummichog_sections = sections,
+                                mummichog_pathways = list(other = make_mummichog_pathways()))
+    expect_named(both$mummichog, names(sections))
+
+    only_pathways <- build_metab_payload(
+        fx, mummichog_pathways = list(A_vs_B = make_mummichog_pathways()))$mummichog$A_vs_B
+    expect_named(only_pathways, c(MUMMICHOG_LEGACY_KEYS, MUMMICHOG_ADDED_KEYS))
+    expect_identical(only_pathways$ora_table, only_pathways$table)
+    expect_null(only_pathways$gsea_plot)
+    expect_null(only_pathways$gsea_table)
+})
+
+test_that("the pipeline hands the payload the report's own mummichog sections", {
+    skip_if_not_installed("targets")
+    # The sections target exists whether or not mummichog is enabled (NULL when
+    # it is not), so the payload target names it in both cases.
+    for (enabled in c(FALSE, TRUE)) {
+        plan <- pipe_metabolomics("pqn", mummichog_enabled = enabled)
+        tgt  <- Filter(function(t) identical(t$settings$name, "metab_shiny_payload"),
+                       plan)[[1]]
+        deps <- unlist(lapply(as.list(tgt$command$expr), all.vars))
+
+        expect_true("metab_mummichog_sections" %in% deps, info = enabled)
+        expect_false("metab_mummichog_report_pathways" %in% deps, info = enabled)
+    }
 })
