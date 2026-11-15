@@ -794,16 +794,15 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
       <select id="metab_sample_norm" onchange="updateMetabNormCondFields()">
         <option value="pqn">PQN — Probabilistic Quotient Normalization (recommended)</option>
         <option value="median">Median centering</option>
-        <option value="sum">Sum normalization</option>
+        <option value="tss">Sum normalization (TSS)</option>
         <option value="eigenms">EigenMS (NOREVA)</option>
         <option value="eigenms_forced">EigenMS-forced (fixed % eigentrends)</option>
-        <option value="is">Internal standard (per-sample IS feature)</option>
         <option value="bio_factor">Biological factor (e.g. mg protein)</option>
         <option value="none">None (already normalized)</option>
       </select>
     </div>
     <div class="field">
-      <label>Transformation</label>
+      <label>Transformation <span class="hint" id="metab_transform_hint"></span></label>
       <select id="metab_transform">
         <option value="log2">log2 (recommended)</option>
         <option value="log10">log10</option>
@@ -813,14 +812,10 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     </div>
   </div>
 
-  <!-- Conditional inputs for bio_factor / is normalization -->
+  <!-- Conditional input for bio_factor normalization -->
   <div class="field conditional" id="metab_bio_factor_field" style="display:none;">
     <label>Biological factor metadata column <span class="hint">(numeric column to divide by, e.g. "mg_protein")</span></label>
     <input type="text" id="metab_bio_factor_col" placeholder="mg_protein">
-  </div>
-  <div class="field conditional" id="metab_is_ref_field" style="display:none;">
-    <label>IS reference column <span class="hint">(row metadata column flagging the IS feature)</span></label>
-    <input type="text" id="metab_is_ref_col" placeholder="is_internal_standard">
   </div>
 
   <div class="field-row">
@@ -2480,29 +2475,12 @@ function generateMetaboYaml() {
   yaml += '      rt_col: "RT [min]"\n';
   yaml += '      annotation_cols: null\n';
 
-  var sampleNorm = v('metab_sample_norm') || 'pqn';
-  var transform = v('metab_transform') || 'log2';
-  var scaling = v('metab_scaling') || 'none';
-  var qcOnly = checked('metab_qc_only');
-  var bioFactorCol = v('metab_bio_factor_col');
-  var isRefCol = v('metab_is_ref_col');
-
-  // Preprocessing block — emit only when QC-only is requested so chosen_norm
-  // is null (the metab pipeline switches to QC-comparison mode in that case).
-  if (qcOnly) {
-    yaml += '\n    preprocessing:\n';
-    yaml += '      chosen_norm: null\n';
-  }
-
-  yaml += '\n    normalization:\n';
-  yaml += '      input_already_normalized: ' + (sampleNorm === 'none' ? 'true' : 'false') + '\n';
-  yaml += '      sample_norm: ' + yamlStr(sampleNorm) + '\n';
-  yaml += '      transform: ' + yamlStr(transform) + '\n';
-  yaml += '      scaling: ' + yamlStr(scaling) + '\n';
-  yaml += '      pseudocount: 1\n';
-  yaml += '      na_policy: "keep"\n';
-  yaml += '      is_ref_col: ' + (sampleNorm === 'is' && isRefCol ? yamlStr(isRefCol) : 'null') + '\n';
-  yaml += '      biological_factor_col: ' + (sampleNorm === 'bio_factor' && bioFactorCol ? yamlStr(bioFactorCol) : 'null') + '\n';
+  yaml += '\n' + buildMetabPreprocessingYaml(
+    v('metab_sample_norm') || 'pqn',
+    v('metab_transform') || 'log2',
+    v('metab_scaling') || 'none',
+    checked('metab_qc_only'),
+    v('metab_bio_factor_col'));
 
   var metabExcludeBoxes = document.querySelectorAll('.metab_exclude_sample:checked');
   yaml += '\n    sample_filter:\n';
@@ -2579,13 +2557,52 @@ function generateMetaboYaml() {
   return yaml;
 }
 
-// Toggle visibility of conditional metab normalization fields (bio_factor / is)
+// Only these normalization methods are built on the configurable transform;
+// every other method always takes log2(x + pseudocount). Mirrors
+// metab_norm_honours_transform() in R/domain/metabolomics/00b_wizard_config.R.
+var METAB_TRANSFORM_CONFIGURABLE_NORMS = ['median', 'none'];
+
+// The metabolomics `preprocessing:` block, holding every normalization setting
+// the pipeline reads (config validation rejects the old separate block). Mirrors
+// build_metab_wizard_preprocessing_yaml() in the same R file.
+function buildMetabPreprocessingYaml(chosenNorm, transform, scaling, qcOnly, bioFactorCol) {
+  // Never describe a transform the chosen method does not apply.
+  if (METAB_TRANSFORM_CONFIGURABLE_NORMS.indexOf(chosenNorm) < 0) transform = 'log2';
+  var yaml = '    preprocessing:\n';
+  if (qcOnly) {
+    yaml += '      # QC-review mode. For the full analysis set chosen_norm: "' + chosenNorm + '" and rerun.\n';
+    yaml += '      chosen_norm: null\n';
+  } else {
+    yaml += '      chosen_norm: "' + chosenNorm + '"\n';
+  }
+  yaml += '      transform: "' + transform + '"\n';
+  yaml += '      scaling: "' + scaling + '"\n';
+  yaml += '      pseudocount: 1\n';
+  if (chosenNorm === 'bio_factor') {
+    // Single-quoted YAML scalar: the only character to escape is the quote.
+    var col = (bioFactorCol || '').trim();
+    yaml += '      biological_factor_col: ' + (col ? "'" + col.replace(/'/g, "''") + "'" : 'null') + '\n';
+  }
+  return yaml;
+}
+
+// Show the bio_factor column field, and limit the transform to log2 for the
+// methods that always use it.
 function updateMetabNormCondFields() {
   var sn = v('metab_sample_norm');
   var bioField = document.getElementById('metab_bio_factor_field');
-  var isField  = document.getElementById('metab_is_ref_field');
   if (bioField) bioField.style.display = (sn === 'bio_factor') ? '' : 'none';
-  if (isField)  isField.style.display  = (sn === 'is')         ? '' : 'none';
+
+  var configurable = METAB_TRANSFORM_CONFIGURABLE_NORMS.indexOf(sn) >= 0;
+  var sel = document.getElementById('metab_transform');
+  if (sel) {
+    if (!configurable) sel.value = 'log2';
+    Array.prototype.forEach.call(sel.options, function(o) {
+      o.disabled = !configurable && o.value !== 'log2';
+    });
+  }
+  var hint = document.getElementById('metab_transform_hint');
+  if (hint) hint.textContent = configurable ? '' : '(log2 is fixed for this normalization)';
 }
 
 // ============================================================
@@ -2905,6 +2922,9 @@ function validateForm() {
     var groupCol = v(prefix + '_group_col');
     if (!groupCol) errors.push('Group column is not selected — upload metadata first');
   }
+  if (currentMode === 'metabolomics' && v('metab_sample_norm') === 'bio_factor' && !v('metab_bio_factor_col').trim()) {
+    errors.push('Biological factor normalization needs the metadata column to divide by');
+  }
   if (errors.length > 0) {
     alert('Please fix before generating:\n\n- ' + errors.join('\n- '));
     return false;
@@ -3140,7 +3160,7 @@ function clearLoadedConfig() {
 }
 
 // Populate dropdown on page load
-document.addEventListener('DOMContentLoaded', function() { refreshExistingConfigs(); });
+document.addEventListener('DOMContentLoaded', function() { refreshExistingConfigs(); updateMetabNormCondFields(); });
 
 // ============================================================
 // Load Example Dataset (bundled synthetic proteomics data)

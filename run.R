@@ -1168,6 +1168,11 @@ params:
 }
 # --- Metabolomics Wizard ------------------------------------------------------
 wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
+  # The preprocessing block is built by the same function the tests check
+  # against config validation; sourced here because the wizard runs before R/
+  # is loaded.
+  source(file.path(project_dir, "R", "domain", "metabolomics", "00b_wizard_config.R"),
+         local = TRUE)
   # Data input mode: single table vs multi-level directory
   cat("\n--- [METAB] Input Mode ---\n")
   cat("Compound Discoverer exports separate tables per identification level.\n")
@@ -1290,40 +1295,41 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     cat("QC mode will compare multiple normalization methods automatically.\n")
     cat("Pick a default normalization (used if you later switch to Full mode).\n\n")
   }
+  # Choices are listed in the order of metab_wizard_norm_methods, whose values
+  # are written to preprocessing.chosen_norm as they are.
   norm_idx <- ask_choice("Sample normalization method:",
-
     c("PQN — Probabilistic Quotient Normalization (recommended)",
       "Median centering",
-      "Sum normalization",
+      "Sum normalization (TSS)",
       "EigenMS — SVD-based systematic bias removal (NOREVA)",
       "EigenMS-forced — EigenMS retaining a fixed % of eigentrends",
-      "Internal standard — divide each sample by an IS feature",
       "Biological factor — divide each sample by a metadata covariate (e.g. mg protein)",
       "None (data already normalized)"),
     default = 1)
-  sample_norm <- c("pqn", "median", "sum", "eigenms", "eigenms_forced",
-                   "is", "bio_factor", "none")[norm_idx]
+  sample_norm <- metab_wizard_norm_methods[norm_idx]
 
   # Method-specific follow-ups
-  is_ref_col <- "null"
-  bio_factor_col <- "null"
-  if (sample_norm == "is") {
-    is_ref_col <- ask("Row metadata column with the IS feature flag (e.g. 'is_internal_standard')",
-                      "is_internal_standard")
-    is_ref_col <- sprintf('"%s"', is_ref_col)
-  } else if (sample_norm == "bio_factor") {
+  bio_factor_col <- NULL
+  if (sample_norm == "bio_factor") {
     bio_factor_col <- ask("Metadata column with per-sample numeric factor to divide by (e.g. 'mg_protein')",
                           "mg_protein")
-    bio_factor_col <- sprintf('"%s"', bio_factor_col)
   }
 
-  transform_idx <- ask_choice("Transformation:",
-                              c("log2 (recommended)",
-                                "log10",
-                                "Generalized log10 (MetaboAnalyst default — handles zeros smoothly)",
-                                "None"),
-                              default = 1)
-  transform <- c("log2", "log10", "glog10", "none")[transform_idx]
+  # Only median and none are built on the configurable transform; the other
+  # methods always take log2, so offering a choice there would write a config
+  # that describes a transform the pipeline does not apply.
+  if (metab_norm_honours_transform(sample_norm)) {
+    transform_idx <- ask_choice("Transformation:",
+                                c("log2 (recommended)",
+                                  "log10",
+                                  "Generalized log10 (MetaboAnalyst default — handles zeros smoothly)",
+                                  "None"),
+                                default = 1)
+    transform <- c("log2", "log10", "glog10", "none")[transform_idx]
+  } else {
+    transform <- "log2"
+    cat(sprintf("\nTransformation: log2 (fixed for '%s' normalization).\n", sample_norm))
+  }
   scaling_idx <- ask_choice("Scaling:",
                             c("None (recommended for most workflows)",
                               "Auto-scaling (unit variance)",
@@ -1331,7 +1337,6 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
                               "Range scaling (min-max)"),
                             default = 1)
   scaling <- c("none", "auto", "pareto", "range")[scaling_idx]
-  chosen_norm <- if (qc_only) "null" else sprintf('"%s"', sample_norm)
   # --- Defaults for QC-only (skip downstream questions) ---
   de_method <- "limma"
   p_cutoff <- 0.05
@@ -1575,14 +1580,13 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
         ionization_mode: pos_default'
   }
   # Build preprocessing section (with relaxed thresholds for multi-level)
-  if (is_multi_level) {
-    preproc_yaml <- sprintf(
-      '    preprocessing:\n      chosen_norm: %s\n      feat_missing_threshold: 0.80\n      sample_missing_threshold: 0.99',
-      chosen_norm)
-  } else {
-    preproc_yaml <- sprintf('    preprocessing:\n      chosen_norm: %s', chosen_norm)
-  }
-
+  preproc_yaml <- build_metab_wizard_preprocessing_yaml(
+    chosen_norm           = sample_norm,
+    transform             = transform,
+    scaling               = scaling,
+    qc_only               = qc_only,
+    biological_factor_col = bio_factor_col,
+    relaxed_missingness   = is_multi_level)
 
   # Build report_sections block (only emit non-default toggles to keep YAML clean)
   rs_lines <- character(0)
@@ -1641,17 +1645,6 @@ modes:
       rt_col: "%s"
       annotation_cols: null
     organism: "%s"
-    normalization:
-      input_already_normalized: %s
-      sample_norm: "%s"
-      transform: "%s"
-      scaling: "%s"
-      pseudocount: 1
-      na_policy: "keep"
-
-      is_ref_col: %s
-      biological_factor_col: %s
-
     sample_filter:
       enabled: false
       rules:
@@ -1709,9 +1702,6 @@ params:
     files_yaml,
     feature_id_yaml, name_col, mz_col, rt_col,
     selected_organism,
-    tolower(sample_norm == "none"),
-    sample_norm, transform, scaling,
-    is_ref_col, bio_factor_col,
     sample_col, group_col,
     de_method, group_col,
     contrasts_yaml,

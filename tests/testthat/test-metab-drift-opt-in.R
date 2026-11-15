@@ -60,10 +60,9 @@ cfg_from_yaml <- function(txt) {
   cfg
 }
 
-# The preprocessing block the run.R wizard writes (wizard_metabolomics() emits
-# only chosen_norm and the missingness thresholds, never drift_correction).
-# The wizard's separate `normalization:` block is left out: validation rejects
-# it (#280), so a config carrying it never reaches drift correction at all.
+# A preprocessing block of the kind the run.R wizard writes: the wizard never
+# emits drift_correction (see test-metab-wizard-preprocessing.R for the block
+# it does write).
 wizard_preprocessing_yaml <- paste(
   "preprocessing:",
   "  chosen_norm: \"pqn\"",
