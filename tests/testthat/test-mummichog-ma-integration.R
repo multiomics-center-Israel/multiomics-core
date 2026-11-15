@@ -184,15 +184,19 @@ test_that("the engine record is written beside the mummichog outputs", {
                    read_rec(ma_cfg(engine = "python"))$text)
 })
 
-test_that("the template selects the MetaboAnalyst-compatible engine explicitly", {
+test_that("the template leaves the engine to the default, which is metaboanalyst", {
   tpl <- file.path(normalizePath(if (dir.exists("R")) "." else "../..", mustWork = FALSE),
                    "config", "templates", "metabolomics_template.yaml")
   skip_if_not(file.exists(tpl), "template not found")
   mm <- yaml::read_yaml(tpl)$modes$metabolomics$enrichment$mummichog
-  expect_identical(mm$engine, "metaboanalyst")
+  # No active engine key: the template shows `engine: python` only as a
+  # commented-out option, so a project copied from it runs the default.
+  expect_null(mm$engine)
+  expect_false(isTRUE(mm$enabled))
   mm$enabled <- TRUE
   cfg <- list(modes = list(metabolomics = list(enrichment = list(mummichog = mm))))
   expect_identical(mmc_engine(cfg), "metaboanalyst")
+  expect_identical(mmc_engine_record(cfg)$engine_source, "default")
 })
 
 test_that("the wizard names the python engine for its built-in human model", {
