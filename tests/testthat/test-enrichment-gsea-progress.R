@@ -155,7 +155,6 @@ test_that("run_gsea_all reports progress, then announces the writing stage", {
 })
 
 test_that("run_gsea_all reports progress through multisession workers", {
-    skip_on_cran()
     skip_if_not_installed("future")
     skip_if_not_installed("future.apply")
     local_stub_gsea_progress_worker()
