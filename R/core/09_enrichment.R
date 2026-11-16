@@ -2754,6 +2754,131 @@ write_ora_unit_tree <- function(ora_result, ora_root, db_name, collection, round
              })
 }
 
+#' Format a duration in seconds for the GSEA progress lines
+#'
+#' @param sec Duration in seconds (NA allowed).
+#' @return Character scalar: "42s", "12m 05s" or "2h 03m"; "NA" when unknown.
+#' @noRd
+.format_gsea_duration <- function(sec) {
+    if (length(sec) != 1 || is.na(sec)) return("NA")
+    sec <- round(sec)
+    if (sec < 100) return(sprintf("%ds", sec))
+    if (sec < 3600) return(sprintf("%dm %02ds", sec %/% 60, sec %% 60))
+    sprintf("%dh %02dm", sec %/% 3600, (sec %% 3600) %/% 60)
+}
+
+#' Time a GSEA worker and announce each finished job to the main process
+#'
+#' Wraps a `function(job)` worker without touching what it computes: the
+#' wrapped worker's result is returned as is, plus `duration_sec` and `status`
+#' ("ok", or "failed" for a caught `gsea_error` / a missing result — the same
+#' two cases run_gsea_all() reports as technical failures).
+#'
+#' After each job it signals a `gsea_job_done` condition. The condition also
+#' has class `immediateCondition`, which `future` relays from a multisession
+#' worker to the main process straight away, while the rest of that worker's
+#' chunk is still running — a worker `message()` would only arrive when the
+#' whole chunk is done. With no handler registered the signal does nothing.
+#' Neither the timing nor the signal draws from the RNG, so the per-job
+#' streams set by `future.seed` are unaffected.
+#'
+#' Built by a factory, like .make_gsea_worker(), so the closure captures only
+#' `worker`.
+#'
+#' @param worker A function(job) -> list(ranking_method, contrast, db_name,
+#'   gsea_result), e.g. the output of .make_gsea_worker().
+#' @return A function(job) returning the worker's list plus `duration_sec`
+#'   and `status`.
+#' @noRd
+.with_gsea_job_timing <- function(worker) {
+    force(worker)
+    function(job) {
+        started <- proc.time()[["elapsed"]]
+        out <- worker(job)
+        out$duration_sec <- proc.time()[["elapsed"]] - started
+        failed <- is.null(out$gsea_result) || inherits(out$gsea_result, "gsea_error")
+        out$status <- if (failed) "failed" else "ok"
+        signalCondition(structure(
+            class = c("gsea_job_done", "immediateCondition", "condition"),
+            list(message        = "GSEA job done",
+                 call           = NULL,
+                 contrast       = out$contrast,
+                 db_name        = out$db_name,
+                 ranking_method = out$ranking_method,
+                 duration_sec   = out$duration_sec,
+                 status         = out$status)
+        ))
+        out
+    }
+}
+
+#' Build the main-process handler that prints GSEA progress
+#'
+#' Returns a handler for the `gsea_job_done` condition signalled by
+#' .with_gsea_job_timing(). It runs in the main R process, so its `message()`
+#' reaches the console directly (RStudio, Rscript and `tar_make()` alike)
+#' instead of waiting for worker output to be collected. It prints one block
+#' every `every` finished jobs and one for the last job, naming the job that
+#' just finished:
+#'
+#' ```
+#' [GSEA] 10/93 (10.8%) | elapsed: 12m 04s
+#'   Completed: TP1_T_vs_C | GO_BP | fc | 42s
+#' ```
+#'
+#' @param total Number of jobs dispatched.
+#' @param every Report every this many finished jobs.
+#' @param clock Function returning the current time in seconds; replaceable
+#'   so tests do not depend on wall-clock time.
+#' @return A function(cond), called for its side effect.
+#' @noRd
+.make_gsea_progress_handler <- function(total, every = 5L,
+                                        clock = function() proc.time()[["elapsed"]]) {
+    force(total); force(every); force(clock)
+    started <- clock()
+    seen <- character(0)
+    function(cond) {
+        # A backend may hand the same condition over again when it collects a
+        # finished future; count each job once.
+        key <- paste(cond$contrast, cond$db_name, cond$ranking_method, sep = "\r")
+        if (key %in% seen) return(invisible(NULL))
+        seen <<- c(seen, key)
+        done <- length(seen)
+        if (done %% every != 0 && done != total) return(invisible(NULL))
+        message(sprintf("\n[GSEA] %d/%d (%.1f%%) | elapsed: %s\n  Completed: %s | %s | %s | %s%s",
+                        done, total, 100 * done / total,
+                        .format_gsea_duration(clock() - started),
+                        cond$contrast, cond$db_name, cond$ranking_method,
+                        .format_gsea_duration(cond$duration_sec),
+                        if (identical(cond$status, "failed")) " | FAILED" else ""))
+        invisible(NULL)
+    }
+}
+
+#' Write the per-job GSEA timing table
+#'
+#' One row per dispatched job, in job order, for spotting unusually slow
+#' jobs. Durations differ from run to run, so this file is a diagnostic and
+#' is not part of any result.
+#'
+#' @param job_results List of results from the timed GSEA worker.
+#' @param path File to write (tab-separated).
+#' @return `path`, invisibly.
+#' @noRd
+.write_gsea_job_timings <- function(job_results, path) {
+    field <- function(name) vapply(job_results, function(jr) as.character(jr[[name]]), character(1))
+    timings <- data.frame(
+        contrast       = field("contrast"),
+        database       = field("db_name"),
+        ranking_method = field("ranking_method"),
+        duration_sec   = round(vapply(job_results, function(jr) jr$duration_sec, numeric(1)), 2),
+        status         = field("status"),
+        stringsAsFactors = FALSE
+    )
+    utils::write.table(timings, path, sep = "\t", quote = FALSE, row.names = FALSE)
+    invisible(path)
+}
+
 #' Run GSEA across all ranking methods, contrasts, and databases
 #'
 #' Orchestrator that runs GSEA for every combination of ranking method x
@@ -2894,7 +3019,27 @@ run_gsea_all <- function(ranked_genes,
     # layer. Assembly + all file I/O happen serially below (deterministic).
     # `seed` (the project's params$seed) fixes the per-job RNG streams so GSEA
     # is reproducible across worker counts and independent rebuilds.
-    job_results <- run_enrichment_jobs(jobs, run_one_gsea_job, workers, seed = seed)
+    # The timing wrapper adds each job's duration and announces it as it
+    # finishes; the handler below prints those announcements from the main
+    # process, so progress shows while the workers are still busy.
+    compute_started <- proc.time()[["elapsed"]]
+    job_results <- withCallingHandlers(
+        run_enrichment_jobs(jobs, .with_gsea_job_timing(run_one_gsea_job),
+                            workers, seed = seed),
+        gsea_job_done = .make_gsea_progress_handler(length(jobs))
+    )
+    n_failed <- sum(vapply(job_results, function(jr) identical(jr$status, "failed"),
+                           logical(1)))
+    message("\n  GSEA computations complete: ", length(jobs), " jobs in ",
+            .format_gsea_duration(proc.time()[["elapsed"]] - compute_started),
+            if (n_failed > 0) paste0(" (", n_failed, " failed)"),
+            ". Now writing results and generating plots...")
+    if (!is.null(output_dir)) {
+        # Written before the serial stage so the timings exist even if
+        # writing or plotting is interrupted.
+        .write_gsea_job_timings(job_results,
+                                file.path(output_dir, "gsea_job_timings.tsv"))
+    }
 
     # ------------------------------------------------------------------
     # 3. Assemble results and write files (serial, deterministic)
