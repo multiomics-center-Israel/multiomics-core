@@ -36,7 +36,9 @@ metab_norm_honours_transform <- function(chosen_norm) {
 #'
 #' @param chosen_norm One of `metab_wizard_norm_methods`.
 #' @param transform `"log2"`, `"log10"`, `"glog10"` or `"none"`; must be
-#'   `"log2"` unless `metab_norm_honours_transform(chosen_norm)`.
+#'   `"log2"` unless `metab_norm_honours_transform(chosen_norm)`, and always
+#'   in QC-review mode, which compares the log-only and median matrices with
+#'   methods that are fixed at log2.
 #' @param scaling `"none"`, `"center"`, `"auto"`, `"pareto"` or `"range"`.
 #' @param qc_only `TRUE` writes `chosen_norm: null` (QC-review mode) and keeps
 #'   the picked method as a comment for the later full run.
@@ -71,6 +73,15 @@ build_metab_wizard_preprocessing_yaml <- function(chosen_norm,
       "combined with chosen_norm \"%s\", which always uses log2. Use ",
       "transform \"log2\", or pick \"median\" or \"none\"."),
       transform, chosen_norm), call. = FALSE)
+  }
+
+  if (transform != "log2" && isTRUE(qc_only)) {
+    stop(sprintf(paste0(
+      "build_metab_wizard_preprocessing_yaml: transform \"%s\" cannot be used ",
+      "in QC-review mode. The review compares normalizations that always use ",
+      "log2, so every matrix must be on that scale. Use transform \"log2\" ",
+      "for the review and set the transform for the full analysis."),
+      transform), call. = FALSE)
   }
 
   lines <- "    preprocessing:"

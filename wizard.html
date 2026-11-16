@@ -879,7 +879,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
 
   <!-- Run QC-only mode -->
   <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
-    <div class="toggle-row"><input type="checkbox" id="metab_qc_only"><label class="toggle-label" for="metab_qc_only"><strong>QC-only run</strong> <span class="hint">— compare normalizations, skip DE/clustering/enrichment</span></label></div>
+    <div class="toggle-row"><input type="checkbox" id="metab_qc_only" onchange="updateMetabNormCondFields()"><label class="toggle-label" for="metab_qc_only"><strong>QC-only run</strong> <span class="hint">— compare normalizations, skip DE/clustering/enrichment</span></label></div>
   </div>
 </div>
 
@@ -2566,8 +2566,9 @@ var METAB_TRANSFORM_CONFIGURABLE_NORMS = ['median', 'none'];
 // the pipeline reads (config validation rejects the old separate block). Mirrors
 // build_metab_wizard_preprocessing_yaml() in the same R file.
 function buildMetabPreprocessingYaml(chosenNorm, transform, scaling, qcOnly, bioFactorCol) {
-  // Never describe a transform the chosen method does not apply.
-  if (METAB_TRANSFORM_CONFIGURABLE_NORMS.indexOf(chosenNorm) < 0) transform = 'log2';
+  // Never describe a transform the chosen method does not apply. QC review
+  // compares every method, most of them fixed at log2, so it stays on log2.
+  if (qcOnly || METAB_TRANSFORM_CONFIGURABLE_NORMS.indexOf(chosenNorm) < 0) transform = 'log2';
   var yaml = '    preprocessing:\n';
   if (qcOnly) {
     yaml += '      # QC-review mode. For the full analysis set chosen_norm: "' + chosenNorm + '"' +
@@ -2597,7 +2598,8 @@ function updateMetabNormCondFields() {
   var bioField = document.getElementById('metab_bio_factor_field');
   if (bioField) bioField.style.display = (sn === 'bio_factor') ? '' : 'none';
 
-  var configurable = METAB_TRANSFORM_CONFIGURABLE_NORMS.indexOf(sn) >= 0;
+  var qcOnly = checked('metab_qc_only');
+  var configurable = !qcOnly && METAB_TRANSFORM_CONFIGURABLE_NORMS.indexOf(sn) >= 0;
   var sel = document.getElementById('metab_transform');
   if (sel) {
     if (!configurable) sel.value = 'log2';
@@ -2606,7 +2608,8 @@ function updateMetabNormCondFields() {
     });
   }
   var hint = document.getElementById('metab_transform_hint');
-  if (hint) hint.textContent = configurable ? '' : '(log2 is fixed for this normalization)';
+  if (hint) hint.textContent = configurable ? '' :
+    (qcOnly ? '(log2 is fixed in a QC-only run)' : '(log2 is fixed for this normalization)');
 }
 
 // ============================================================
@@ -2923,9 +2926,13 @@ function getComboYamls() {
 function metabBioFactorError() {
   var usesMetab = currentMode === 'metabolomics' ||
     (currentMode === 'combination' && checked('combo_metab'));
-  if (usesMetab && v('metab_sample_norm') === 'bio_factor' &&
-      !checked('metab_qc_only') && !v('metab_bio_factor_col').trim()) {
+  if (!usesMetab || v('metab_sample_norm') !== 'bio_factor' || checked('metab_qc_only')) return '';
+  if (!v('metab_bio_factor_col').trim()) {
     return 'Biological factor normalization needs the metadata column to divide by';
+  }
+  // The column lives in the sample metadata, which is otherwise optional.
+  if (!v('metab_metadata_path').trim()) {
+    return 'Biological factor normalization needs a metabolomics metadata file holding that column';
   }
   return '';
 }

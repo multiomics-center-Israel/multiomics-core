@@ -1317,8 +1317,9 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
 
   # Only median and none are built on the configurable transform; the other
   # methods always take log2, so offering a choice there would write a config
-  # that describes a transform the pipeline does not apply.
-  if (metab_norm_honours_transform(sample_norm)) {
+  # that describes a transform the pipeline does not apply. QC review compares
+  # all methods, so it stays on log2 as well.
+  if (!qc_only && metab_norm_honours_transform(sample_norm)) {
     transform_idx <- ask_choice("Transformation:",
                                 c("log2 (recommended)",
                                   "log10",
@@ -1328,7 +1329,8 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     transform <- c("log2", "log10", "glog10", "none")[transform_idx]
   } else {
     transform <- "log2"
-    cat(sprintf("\nTransformation: log2 (fixed for '%s' normalization).\n", sample_norm))
+    cat(sprintf("\nTransformation: log2 (fixed %s).\n",
+                if (qc_only) "in QC review mode" else sprintf("for '%s' normalization", sample_norm)))
   }
   scaling_idx <- ask_choice("Scaling:",
                             c("None (recommended for most workflows)",

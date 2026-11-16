@@ -39,7 +39,8 @@ test_that("only median and none honour the configurable transform", {
 test_that("every supported wizard config passes metabolomics config validation", {
   pairs <- supported_pairs()
   for (i in seq_len(nrow(pairs))) {
-    for (qc_only in c(FALSE, TRUE)) {
+    # QC review is log2 only (see the refusal test below).
+    for (qc_only in if (pairs$transform[i] == "log2") c(FALSE, TRUE) else FALSE) {
       info <- sprintf("%s / %s / qc_only = %s", pairs$method[i], pairs$transform[i], qc_only)
       cfg <- wizard_mode_cfg(pairs$method[i], transform = pairs$transform[i],
                              scaling = "pareto", qc_only = qc_only,
@@ -70,6 +71,18 @@ test_that("a transform the method would not apply is refused, not written", {
         build_metab_wizard_preprocessing_yaml(m, transform = tr,
                                               biological_factor_col = "mg_protein"),
         "always uses log2", info = paste(m, tr))
+    }
+  }
+})
+
+test_that("QC-review mode is log2 only, whichever method is picked for later", {
+  # The review compares the log-only and median matrices with methods that are
+  # fixed at log2, so another transform would put them on different scales.
+  for (m in metab_wizard_norm_methods) {
+    for (tr in setdiff(transforms, "log2")) {
+      expect_error(
+        build_metab_wizard_preprocessing_yaml(m, transform = tr, qc_only = TRUE),
+        "always uses log2|QC-review mode", info = paste(m, tr))
     }
   }
 })
@@ -159,7 +172,7 @@ test_that("the terminal wizard writes the block through the shared builder", {
 
   expect_true(any(grepl("build_metab_wizard_preprocessing_yaml(", body, fixed = TRUE)))
   expect_true(any(grepl("sample_norm <- metab_wizard_norm_methods[norm_idx]", body, fixed = TRUE)))
-  expect_true(any(grepl("if (metab_norm_honours_transform(sample_norm))", body, fixed = TRUE)))
+  expect_true(any(grepl("if (!qc_only && metab_norm_honours_transform(sample_norm))", body, fixed = TRUE)))
   expect_false(any(grepl("^\\s*normalization:", body)))
   expect_false(any(grepl("is_ref_col|Internal standard", body)))
 
