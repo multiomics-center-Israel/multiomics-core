@@ -2740,9 +2740,17 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 
 ```{r clustering-discover-rna, include=FALSE}
 # ---- Discover clustering outputs on disk for RNA-seq ----
-# Hierarchical is intentionally excluded for RNA-seq (per Apr 2026 reviewer
+# Hierarchical is hidden by default for RNA-seq (per Apr 2026 reviewer
 # guidance — too dense to be informative on whole-transcriptome DE lists).
-clustering_root_rna <- file.path(run_dir, "rna", "Clustering")
+# clustering.steps.hierarchical.show_in_report: true opts in; it only shows the
+# heatmap the clustering step already wrote, so the step must be enabled (same
+# default as clustering_run_flags()) and the file must exist.
+# From rna_dir, not run_dir: the report may be rendered from inside rna/, where
+# run_dir is already that directory.
+clustering_root_rna <- file.path(rna_dir, "Clustering")
+hier_cfg_rna <- rna_cfg$clustering$steps$hierarchical
+hier_hm_rna <- file.path(clustering_root_rna, "Hierarchical", "Hierarchical_DE_heatmap.png")
+has_hier_rna <- isTRUE(hier_cfg_rna$show_in_report) && isTRUE(hier_cfg_rna$enabled %||% TRUE) && file.exists(hier_hm_rna)
 part_root_rna  <- file.path(clustering_root_rna, "Partition_clustering")
 binary_dir_rna <- file.path(clustering_root_rna, "Binary_patterns")
 
@@ -2782,15 +2790,22 @@ bc_clust <- rna_batch_clustering_view(bc_clust_record, rna_dir)
 bc_clust_show_rna <- clustering_enabled_rna && isTRUE(bc_clust$show)
 
 clustering_show_rna <- clustering_enabled_rna &&
-  (has_part_rna || has_binary_rna || bc_clust_show_rna)
+  (has_hier_rna || has_part_rna || has_binary_rna || bc_clust_show_rna)
 ```
 
 ```{r clustering-header-rna, eval=clustering_show_rna, results='asis'}
 cat("# Clustering {.tabset}\n\n")
 cat("Clustering was performed on the differentially expressed genes. Each method below answers a different question:\n\n")
+if (has_hier_rna) cat("- **Hierarchical** — bottom-up tree built from gene-by-gene distances; reveals nested groupings.\n")
 cat("- **Partition** — splits genes into clusters with similar expression trajectories across groups.\n")
 cat("- **Binary patterns** — assigns each gene to an on/off (1/0) pattern across groups based on correlation.\n\n")
-cat("*Hierarchical clustering is omitted for RNA-seq — DE gene lists are typically too large for the dendrogram to be readable.*\n\n")
+```
+
+```{r clustering-hier-rna, eval=clustering_show_rna && has_hier_rna, results='asis'}
+cat("## Hierarchical\n\n")
+cat(sprintf("![Hierarchical clustering heatmap](%s){width=100%%}\n\n", hier_hm_rna))
+figure_legend("Hierarchical clustering heatmap of differentially expressed genes (rows z-scored). Row dendrogram reflects gene similarity; samples are annotated by experimental group.")
+render_commentary("clustering_hierarchical")
 ```
 
 ```{r clustering-partition-rna, eval=clustering_show_rna && has_part_rna, results='asis'}
