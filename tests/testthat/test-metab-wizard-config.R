@@ -121,6 +121,13 @@ test_that("run.R wizard keeps scaling, QC-only mode and multi-level thresholds",
   pre <- qc$modes$metabolomics$preprocessing
   expect_error(validate_config(qc), NA)
   expect_null(pre$chosen_norm)
+
+  # A QC review must not carry the biological-factor column: the pipeline would
+  # try that normalization although the review never uses it.
+  qc_bio <- config_with_preprocessing(run_r$metab_preprocessing_yaml(
+    "bio_factor", "log2", "none", qc_only = TRUE, bio_factor_col = "mg_protein"))
+  expect_error(validate_config(qc_bio), NA)
+  expect_null(qc_bio$modes$metabolomics$preprocessing$biological_factor_col)
   expect_identical(pre$feat_missing_threshold, 0.80)
   expect_identical(pre$sample_missing_threshold, 0.99)
 })
@@ -189,4 +196,11 @@ test_that("wizard.html configs validate and select the chosen normalization", {
     }
     expect_selection_applied(cfg, method)
   }
+
+  # QC-only: chosen_norm is null and the biological-factor column is not written.
+  qc <- config_with_preprocessing(ctx$call(
+    "metabPreprocessingYaml", "bio_factor", "log2", "none", "mg_protein", TRUE))
+  expect_error(validate_config(qc), NA)
+  expect_null(qc$modes$metabolomics$preprocessing$chosen_norm)
+  expect_null(qc$modes$metabolomics$preprocessing$biological_factor_col)
 })

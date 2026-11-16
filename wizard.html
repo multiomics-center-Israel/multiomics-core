@@ -2574,7 +2574,11 @@ function metabPreprocessingYaml(sampleNorm, transform, scaling, bioFactorCol, qc
   if (METAB_LOG2_ONLY_NORMS.indexOf(sampleNorm) >= 0) transform = 'log2';
   var yaml = '\n    preprocessing:\n';
   yaml += '      chosen_norm: ' + (qcOnly ? 'null' : yamlStr(sampleNorm)) + '\n';
-  yaml += '      biological_factor_col: ' + (sampleNorm === 'bio_factor' && bioFactorCol ? yamlStr(bioFactorCol) : 'null') + '\n';
+  // Not written for a QC-only run: the pipeline attempts biological-factor
+  // normalization whenever this key is set, even though QC review neither
+  // selects it nor compares it, so a column not yet in the metadata would
+  // stop the review.
+  yaml += '      biological_factor_col: ' + (!qcOnly && sampleNorm === 'bio_factor' && bioFactorCol.trim() ? yamlStr(bioFactorCol.trim()) : 'null') + '\n';
   yaml += '      transform: ' + yamlStr(transform) + '\n';
   yaml += '      scaling: ' + yamlStr(scaling) + '\n';
   yaml += '      pseudocount: 1\n';
@@ -2906,10 +2910,29 @@ function getComboYamls() {
   return { yamls: yamls, label: labels.join(' + ') };
 }
 
+// Biological-factor normalization needs its metadata column: without it the
+// config still validates, but the run stops in mod_met_corrected().
+var METAB_BIO_FACTOR_COL_MISSING = 'Biological factor normalization needs a metadata column — enter the numeric column to divide by (e.g. "mg_protein") under Analysis Methods, or pick another normalization';
+
+function metabBioFactorColMissing() {
+  var metabActive = currentMode === 'metabolomics' ||
+    (currentMode === 'combination' && checked('combo_metab'));
+  return metabActive && !checked('metab_qc_only') &&
+    v('metab_sample_norm') === 'bio_factor' && !v('metab_bio_factor_col').trim();
+}
+
+// For the paths that build YAML from the form without running validateForm().
+function checkMetabBioFactorCol() {
+  if (!metabBioFactorColMissing()) return true;
+  alert(METAB_BIO_FACTOR_COL_MISSING + '.');
+  return false;
+}
+
 function validateForm() {
   var errors = [];
   var name = v('project_name');
   if (!name || !name.trim()) errors.push('Project name is required');
+  if (metabBioFactorColMissing()) errors.push(METAB_BIO_FACTOR_COL_MISSING);
   if (currentMode !== 'multi' && currentMode !== 'combination') {
     var prefix = currentMode === 'proteomics' ? 'prot' : (currentMode === 'metabolomics' ? 'metab' : (currentMode === 'lipidomics' ? 'lipid' : 'rna'));
     var groupCol = v(prefix + '_group_col');
@@ -2947,6 +2970,7 @@ function getConfigFilename() {
 }
 
 function generateAndPreview() {
+  if (!checkMetabBioFactorCol()) return;
   var yaml = getCurrentYaml();
   var preview = document.getElementById('yaml_preview');
   preview.textContent = yaml;
@@ -3041,6 +3065,7 @@ function downloadYAML() {
 // Save Config (via backend)
 // ============================================================
 function saveConfig() {
+  if (!_loadedConfigYaml && !checkMetabBioFactorCol()) return;
   var yaml = _loadedConfigYaml || getCurrentYaml();
   var filename = _loadedConfigFilename || getConfigFilename();
 
@@ -3418,6 +3443,7 @@ var _runState = { offset: 0, startTs: 0, poller: null, elapsedTimer: null,
                   reportPath: null, done: false };
 
 function runPipeline() {
+  if (!_loadedConfigYaml && !checkMetabBioFactorCol()) return;
   if (!confirm('This will save the config and start the pipeline.\nProgress will appear in a window above the form.\n\nContinue?')) return;
 
   var yaml = _loadedConfigYaml || getCurrentYaml();

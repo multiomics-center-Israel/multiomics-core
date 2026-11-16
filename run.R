@@ -1185,7 +1185,10 @@ metab_log2_only_norms <- c("tss", "pqn", "eigenms", "eigenms_forced", "bio_facto
 #' @param transform Transformation: "log2", "log10", "glog10" or "none".
 #' @param scaling Feature scaling: "none", "auto", "pareto" or "range".
 #' @param qc_only TRUE writes `chosen_norm: null` (QC-review mode).
-#' @param bio_factor_col Metadata column for "bio_factor", or NULL.
+#' @param bio_factor_col Metadata column for "bio_factor", or NULL. Not written
+#'   when `qc_only` is TRUE: the pipeline attempts biological-factor
+#'   normalization whenever the key is set, so a column not yet in the metadata
+#'   would stop a QC review that never uses it.
 #' @param is_multi_level TRUE adds the relaxed multi-level missingness thresholds.
 #' @return A single string, indented for `modes.metabolomics`.
 metab_preprocessing_yaml <- function(sample_norm, transform, scaling,
@@ -1195,7 +1198,7 @@ metab_preprocessing_yaml <- function(sample_norm, transform, scaling,
     "    preprocessing:",
     sprintf("      chosen_norm: %s", if (qc_only) "null" else sprintf('"%s"', sample_norm)),
     sprintf("      biological_factor_col: %s",
-            if (is.null(bio_factor_col)) "null" else sprintf('"%s"', bio_factor_col)),
+            if (qc_only || is.null(bio_factor_col)) "null" else sprintf('"%s"', bio_factor_col)),
     sprintf('      transform: "%s"', transform),
     sprintf('      scaling: "%s"', scaling),
     "      pseudocount: 1"
@@ -1348,8 +1351,10 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
                    "bio_factor", "none")[norm_idx]
 
   # Method-specific follow-ups
+  # Not asked in QC-review mode, where the column is not written (see
+  # metab_preprocessing_yaml()).
   bio_factor_col <- NULL
-  if (sample_norm == "bio_factor") {
+  if (sample_norm == "bio_factor" && !qc_only) {
     bio_factor_col <- ask("Metadata column with per-sample numeric factor to divide by (e.g. 'mg_protein')",
                           "mg_protein")
   }
