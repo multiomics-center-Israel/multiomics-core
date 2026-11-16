@@ -194,15 +194,11 @@ validate_proteomics_config <- function(cfg) {
                 "Use de$use_adj_for_pass1 to choose the pass-1 p-value."),
                 other_mode[[1]]), call. = FALSE)
         }
-        unknown <- setdiff(de_keys, PROTEOMICS_DE_KEYS)
-        if (length(unknown) > 0) {
-            stop(sprintf(paste0(
-                "modes$proteomics$de has key(s) the pipeline does not read: %s. ",
-                "They would be ignored, so the run would not be fitted as configured.\n",
-                "  Check the spelling, or remove the key. Known keys: %s."),
-                paste(unknown, collapse = ", "),
-                paste(PROTEOMICS_DE_KEYS, collapse = ", ")), call. = FALSE)
-        }
+        assert_known_keys(cfg$de, PROTEOMICS_DE_KEYS, "modes$proteomics$de",
+                          hint = paste(
+                              "The pipeline does not read such a key, so the run would",
+                              "not be fitted as configured. Check the spelling, or",
+                              "remove the key."))
         has_canon <- "use_adj_for_pass1" %in% de_keys
         has_alias <- "use_fdr_for_pass1" %in% de_keys
         if (has_canon) assert_scalar_bool(cfg$de[["use_adj_for_pass1"]], "de$use_adj_for_pass1")
