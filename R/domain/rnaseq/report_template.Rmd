@@ -1336,6 +1336,26 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
 }
 ```
 
+```{r de-overlap-matrix-heading, eval=length(contrast_names) > 5, results='asis'}
+cat("\n### Shared vs unique\n\n")
+cat("With more than five contrasts, the counts are also shown as a table:",
+    "each off-diagonal cell is the number of genes DE in both contrasts, and",
+    "each diagonal cell the number DE only in that contrast.\n\n")
+```
+
+```{r de-overlap-matrix, eval=length(contrast_names) > 5 && !is.null(de_data), fig.height=max(5, 0.5 * length(contrast_names) + 3), fig.width=10, results='asis'}
+for (dir in list(c("all", "All DE genes", "steelblue"),
+                 c("up", "Up-regulated genes", "#E41A1C"),
+                 c("down", "Down-regulated genes", "#377EB8"))) {
+    print(plot_de_overlap_matrix(
+        collect_de_gene_sets(de_data, contrast_names,
+                             padj_cut = rna_cfg$de$p_cutoff %||% 0.05,
+                             lfc_cut = log2(rna_cfg$de$linear_fc_cutoff %||% 1.5),
+                             direction = dir[1]),
+        title = dir[2], fill_high = dir[3], feature_label = "genes"))
+}
+```
+
 ## Volcano Plots {.tabset}
 
 ```{r volcano-data-prep, include=FALSE}
