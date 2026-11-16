@@ -33,6 +33,8 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # are cleared before any return, not only on the paths that write new ones.
     .clear_cross_lookup_outputs(out_dir)
     .clear_stale_contrast_lookups(out_dir)
+    # And for the pathway coverage table, which the report reads the same way.
+    write_pathway_coverage(NULL, out_dir)
 
     # Check if enrichment is enabled
     if (!isTRUE(config$modes$multiomics$enrichment$run_enrichment)) {
@@ -82,6 +84,31 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     if (!is.null(write_compound_gsea_export(compound_gsea, out_dir))) {
         message("  Compound GSEA: ", nrow(compound_gsea),
                 " scored pathway-contrast rows written")
+    }
+
+    # --- KEGG pathway coverage per layer ---
+    # Why a layer's cell in a KEGG figure is empty: no KEGG members of that
+    # omics type, none or too few measured, or tested without a reported
+    # result. Metabolomics reads the cache compound GSEA reads; the gene layers
+    # read (or once fill) a KEGG gene-pathway cache. Changes no result; written
+    # before the guard below so it is there whenever a layer was covered.
+    pathway_coverage <- tryCatch(
+        pathway_coverage_for_run(
+            de_results, harmonization_res, config,
+            compound_cache_dir = file.path(out_dir, "metabolomics"),
+            gene_cache_dir = file.path(out_dir, "kegg_cache")),
+        error = function(e) {
+            message("  Pathway coverage failed: ", e$message)
+            NULL
+        }
+    )
+    if (!is.null(pathway_coverage)) {
+        cov_org <- resolve_kegg_org_code(config$global$organism)
+        write_pathway_coverage(
+            pathway_coverage, out_dir,
+            extra_keys = .result_pathway_keys(
+                c(per_omics, list(compound_gsea)), cov_org),
+            kegg_org = cov_org)
     }
 
     if (is.null(per_omics) || length(per_omics) == 0) {
@@ -149,7 +176,8 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
             enrichment_results = per_omics,
             config = config,
             out_dir = out_dir,
-            rank_tables = rank_tables
+            rank_tables = rank_tables,
+            pathway_coverage = pathway_coverage
         )
         if (!is.null(cross_omics_enrich)) {
             write_cross_omics_enrichment(cross_omics_enrich, out_dir)
@@ -235,7 +263,8 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
                         enrichment_results = per_omics_contrast,
                         config = config,
                         out_dir = contrast_out,
-                        rank_tables = rank_contrast
+                        rank_tables = rank_contrast,
+                        pathway_coverage = pathway_coverage
                     )
                 }, error = function(e) {
                     message("    Cross-omics enrichment failed for ", cname, ": ", e$message)
@@ -256,6 +285,7 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
         cross_omics = cross_omics_enrich,
         # Its own slot, beside per_omics rather than inside it.
         compound_gsea = compound_gsea,
+        pathway_coverage = pathway_coverage,
         plots = c(per_omics_plots, if (!is.null(cross_omics_enrich)) cross_omics_enrich$plots else list())
     )
 }
