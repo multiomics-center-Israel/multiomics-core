@@ -92,6 +92,20 @@ test_that("bio_factor needs its column, and other methods do not write one", {
   expect_null(cfg$preprocessing$biological_factor_col)
 })
 
+test_that("QC-review mode never writes the bio_factor column", {
+  # The bio_factor target is built on every run and normalizes whenever the key
+  # is set, so writing it would let a missing column stop a review run.
+  cfg <- wizard_mode_cfg("bio_factor", qc_only = TRUE, biological_factor_col = "mg_protein")
+  expect_null(cfg$preprocessing$chosen_norm)
+  expect_null(cfg$preprocessing$biological_factor_col)
+  expect_null(suppressMessages(mod_met_normalize_bio_factor(
+    list(mat = matrix(1, 1, 1), meta = NULL, row_data = NULL),
+    list(modes = list(metabolomics = cfg)))))
+
+  # Nor is the column required there.
+  expect_error(build_metab_wizard_preprocessing_yaml("bio_factor", qc_only = TRUE), NA)
+})
+
 test_that("the looser missingness thresholds are written only on request", {
   pre <- wizard_mode_cfg("pqn", relaxed_missingness = TRUE)$preprocessing
   expect_equal(pre$feat_missing_threshold, 0.80)

@@ -2570,7 +2570,8 @@ function buildMetabPreprocessingYaml(chosenNorm, transform, scaling, qcOnly, bio
   if (METAB_TRANSFORM_CONFIGURABLE_NORMS.indexOf(chosenNorm) < 0) transform = 'log2';
   var yaml = '    preprocessing:\n';
   if (qcOnly) {
-    yaml += '      # QC-review mode. For the full analysis set chosen_norm: "' + chosenNorm + '" and rerun.\n';
+    yaml += '      # QC-review mode. For the full analysis set chosen_norm: "' + chosenNorm + '"' +
+            (chosenNorm === 'bio_factor' ? ' and biological_factor_col' : '') + ' and rerun.\n';
     yaml += '      chosen_norm: null\n';
   } else {
     yaml += '      chosen_norm: "' + chosenNorm + '"\n';
@@ -2578,7 +2579,10 @@ function buildMetabPreprocessingYaml(chosenNorm, transform, scaling, qcOnly, bio
   yaml += '      transform: "' + transform + '"\n';
   yaml += '      scaling: "' + scaling + '"\n';
   yaml += '      pseudocount: 1\n';
-  if (chosenNorm === 'bio_factor') {
+  // Not in QC-review mode: the bio_factor target is built on every run and
+  // normalizes whenever this key is set, so a column missing from the metadata
+  // would stop a review run that does not use it.
+  if (chosenNorm === 'bio_factor' && !qcOnly) {
     // Single-quoted YAML scalar: the only character to escape is the quote.
     var col = (bioFactorCol || '').trim();
     yaml += '      biological_factor_col: ' + (col ? "'" + col.replace(/'/g, "''") + "'" : 'null') + '\n';
@@ -2913,6 +2917,19 @@ function getComboYamls() {
   return { yamls: yamls, label: labels.join(' + ') };
 }
 
+// A full metabolomics analysis on bio_factor cannot run without its column.
+// Checked wherever a config is written (download, save, run), whether
+// metabolomics is the mode or a layer of a combination.
+function metabBioFactorError() {
+  var usesMetab = currentMode === 'metabolomics' ||
+    (currentMode === 'combination' && checked('combo_metab'));
+  if (usesMetab && v('metab_sample_norm') === 'bio_factor' &&
+      !checked('metab_qc_only') && !v('metab_bio_factor_col').trim()) {
+    return 'Biological factor normalization needs the metadata column to divide by';
+  }
+  return '';
+}
+
 function validateForm() {
   var errors = [];
   var name = v('project_name');
@@ -2922,9 +2939,8 @@ function validateForm() {
     var groupCol = v(prefix + '_group_col');
     if (!groupCol) errors.push('Group column is not selected — upload metadata first');
   }
-  if (currentMode === 'metabolomics' && v('metab_sample_norm') === 'bio_factor' && !v('metab_bio_factor_col').trim()) {
-    errors.push('Biological factor normalization needs the metadata column to divide by');
-  }
+  var bioFactorError = metabBioFactorError();
+  if (bioFactorError) errors.push(bioFactorError);
   if (errors.length > 0) {
     alert('Please fix before generating:\n\n- ' + errors.join('\n- '));
     return false;
@@ -3051,6 +3067,7 @@ function downloadYAML() {
 // Save Config (via backend)
 // ============================================================
 function saveConfig() {
+  if (!_loadedConfigYaml && metabBioFactorError()) { alert(metabBioFactorError()); return; }
   var yaml = _loadedConfigYaml || getCurrentYaml();
   var filename = _loadedConfigFilename || getConfigFilename();
 
@@ -3428,6 +3445,7 @@ var _runState = { offset: 0, startTs: 0, poller: null, elapsedTimer: null,
                   reportPath: null, done: false };
 
 function runPipeline() {
+  if (!_loadedConfigYaml && metabBioFactorError()) { alert(metabBioFactorError()); return; }
   if (!confirm('This will save the config and start the pipeline.\nProgress will appear in a window above the form.\n\nContinue?')) return;
 
   var yaml = _loadedConfigYaml || getCurrentYaml();

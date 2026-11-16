@@ -41,7 +41,10 @@ metab_norm_honours_transform <- function(chosen_norm) {
 #' @param qc_only `TRUE` writes `chosen_norm: null` (QC-review mode) and keeps
 #'   the picked method as a comment for the later full run.
 #' @param biological_factor_col Metadata column for `bio_factor`; required for
-#'   that method, ignored otherwise.
+#'   that method in a full analysis, ignored otherwise. Never written in
+#'   QC-review mode: the bio_factor target is built on every run and
+#'   normalizes whenever the key is set, so a column that is not in the
+#'   metadata yet would stop a review run that does not use it.
 #' @param relaxed_missingness `TRUE` adds the looser missingness thresholds
 #'   the wizard uses for multi-level input.
 #' @return Character scalar: the block, indented for `modes: metabolomics:`,
@@ -73,8 +76,9 @@ build_metab_wizard_preprocessing_yaml <- function(chosen_norm,
   lines <- "    preprocessing:"
   if (isTRUE(qc_only)) {
     lines <- c(lines,
-      sprintf("      # QC-review mode. For the full analysis set chosen_norm: \"%s\" and rerun.",
-              chosen_norm),
+      sprintf("      # QC-review mode. For the full analysis set chosen_norm: \"%s\"%s and rerun.",
+              chosen_norm,
+              if (chosen_norm == "bio_factor") " and biological_factor_col" else ""),
       "      chosen_norm: null")
   } else {
     lines <- c(lines, sprintf("      chosen_norm: \"%s\"", chosen_norm))
@@ -84,7 +88,7 @@ build_metab_wizard_preprocessing_yaml <- function(chosen_norm,
     sprintf("      scaling: \"%s\"", scaling),
     "      pseudocount: 1")
 
-  if (chosen_norm == "bio_factor") {
+  if (chosen_norm == "bio_factor" && !isTRUE(qc_only)) {
     col <- biological_factor_col
     if (!is.character(col) || length(col) != 1L || is.na(col) || !nzchar(trimws(col))) {
       stop("build_metab_wizard_preprocessing_yaml: chosen_norm \"bio_factor\" needs ",
