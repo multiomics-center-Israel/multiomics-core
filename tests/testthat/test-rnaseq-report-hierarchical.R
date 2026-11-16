@@ -52,6 +52,10 @@ test_that("the RNA report wires the hierarchical tab to that gate and drops the 
     expect_true(any(grepl("(has_hier_rna || has_part_rna || has_binary_rna || bc_clust_show_rna)",
                           src, fixed = TRUE)))
     expect_length(grep("Hierarchical clustering is omitted", src, fixed = TRUE), 0L)
+    # The clustering root follows rna_dir, so a report rendered from inside
+    # rna/ does not look under rna/rna/Clustering.
+    expect_true(any(grepl('clustering_root_rna <- file.path(rna_dir, "Clustering")', src,
+                          fixed = TRUE)))
 })
 
 test_that("the RNA config template ships show_in_report: false", {

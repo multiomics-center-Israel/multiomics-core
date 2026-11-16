@@ -2745,7 +2745,9 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 # clustering.steps.hierarchical.show_in_report: true opts in; it only shows the
 # heatmap the clustering step already wrote, so the step must be enabled (same
 # default as clustering_run_flags()) and the file must exist.
-clustering_root_rna <- file.path(run_dir, "rna", "Clustering")
+# From rna_dir, not run_dir: the report may be rendered from inside rna/, where
+# run_dir is already that directory.
+clustering_root_rna <- file.path(rna_dir, "Clustering")
 hier_cfg_rna <- rna_cfg$clustering$steps$hierarchical
 hier_hm_rna <- file.path(clustering_root_rna, "Hierarchical", "Hierarchical_DE_heatmap.png")
 has_hier_rna <- isTRUE(hier_cfg_rna$show_in_report) && isTRUE(hier_cfg_rna$enabled %||% TRUE) && file.exists(hier_hm_rna)
