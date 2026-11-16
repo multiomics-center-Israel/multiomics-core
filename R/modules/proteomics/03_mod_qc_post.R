@@ -35,6 +35,10 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
   tables <- get_de_tables_qc_post(de_res, cfg, de_source = de_source)
   
   
+  # One scale for every contrast's volcano, per p-value type
+  volcano_lims <- lapply(c(padj = "padj", pval = "pval"),
+                         function(pt) volcano_axis_limits(tables, pt))
+
   # per-contrast plots
   for (cn in names(tables)) {
     de_tbl <- tables[[cn]]
@@ -48,7 +52,9 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
                        cfg = cfg,
                        title = paste0("Volcano: ", cn, " (", de_source,
                                       ", ", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
-                       pvalue_type = ptype
+                       pvalue_type = ptype,
+                       xlim = volcano_lims[[ptype]]$x,
+                       ylim = volcano_lims[[ptype]]$y
           ),
           error = function(e) {
             # padj must always work; only the raw-pval variant may be skipped
