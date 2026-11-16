@@ -164,6 +164,7 @@ modes:
         # harmonization: false           # "Data Harmonization" section, heading included
         # sample_concordance: false      # "Sample Concordance Across Omics" section
         # mechanistic: false             # "Mechanistic & Causal Inference" section
+        # multigsea_pairwise: true       # pairwise layer-vs-layer MultiGSEA scatter figures (off unless true)
 
     # --- Feature selection for integration ---
     feature_selection:
