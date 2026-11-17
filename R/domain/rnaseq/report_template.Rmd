@@ -3001,17 +3001,18 @@ if (has_enrichment && offline_ran) {
     has_gsea_view <- nrow(gsea_units) > 0
 }
 if (has_gsea_view) {
-    # Compact leading edge: the first 15 genes the GSEA reported (as symbols
-    # where annotated) and how many more there are. The complete lists stay in
-    # each analysis's results.csv.
+    # Leading edge, compact: how many genes the GSEA reported, and the first 15
+    # of them (as symbols where annotated) for the table to show on request.
+    # The complete lists stay in each analysis's results.csv.
     anno_le <- NULL
     anno_file_le <- file.path(enrich_dir, "gene_annotation.csv")
     if (file.exists(anno_file_le)) {
         anno_le <- read.csv(anno_file_le, stringsAsFactors = FALSE)
     }
-    gsea_le <- vapply(strsplit(offline_gsea$leading_edge, ",", fixed = TRUE),
+    gsea_le_genes <- lapply(strsplit(offline_gsea$leading_edge, ",", fixed = TRUE),
+                            function(g) g[!is.na(g) & nzchar(g)])
+    gsea_le <- vapply(gsea_le_genes,
         function(g) {
-            g <- g[!is.na(g) & nzchar(g)]
             if (!is.null(anno_le)) {
                 sym <- anno_le$symbol[match(g, anno_le$gene_id)]
                 g[!is.na(sym)] <- sym[!is.na(sym)]
@@ -3028,7 +3029,8 @@ if (has_gsea_view) {
         ID = offline_gsea$ID, NES = offline_gsea$NES,
         Direction = offline_gsea$Direction, pval = offline_gsea$pval,
         padj = offline_gsea$padj, Size = offline_gsea$size,
-        `Leading edge` = gsea_le, check.names = FALSE, stringsAsFactors = FALSE)
+        `LE genes` = lengths(gsea_le_genes), `Leading edge` = gsea_le,
+        check.names = FALSE, stringsAsFactors = FALSE)
 
     # One bar plot per analysis, embedded as an image for the selectors to swap.
     for (u in seq_len(nrow(gsea_units))) {
@@ -3049,8 +3051,15 @@ if (has_gsea_view) {
             # A plot that cannot be drawn leaves the analysis in the table.
             unit$img <- tryCatch({
                 png_file <- tempfile(fileext = ".png")
-                ggplot2::ggsave(png_file, plot_gsea_enrichment_bar(bar_df, max_terms = n_bar),
-                                width = 11, height = .enrich_bar_height_in(n_bar), dpi = 110)
+                # Room for the labels at the bar ends, which the panel otherwise
+                # clips: the legend goes below, giving the panel its width, and
+                # the NES axis is extended past the longest bars. Layout only;
+                # the builder and what it draws are unchanged.
+                bar_plot <- plot_gsea_enrichment_bar(bar_df, max_terms = n_bar) +
+                    ggplot2::expand_limits(x = range(bar_df$NES) * 1.5) +
+                    ggplot2::theme(legend.position = "bottom")
+                ggplot2::ggsave(png_file, bar_plot, width = 11,
+                                height = .enrich_bar_height_in(n_bar) + 0.6, dpi = 110)
                 uri <- knitr::image_uri(png_file)
                 unlink(png_file)
                 uri
@@ -3077,7 +3086,8 @@ cat("GSEA was run with several gene rankings. They are alternative analyses of "
     "database and a ranking: the plot and the table below both show that one ",
     "analysis. The plot shows up to ", ENRICH_BAR_TOP_N, " of its significant ",
     "pathways, those with the smallest adjusted p-values; the table lists every ",
-    "pathway with adjusted p-value ≤ ", format(gsea_cut), ". The table each ",
+    "pathway with adjusted p-value ≤ ", format(gsea_cut), ". `LE genes` is the ",
+    "number of leading-edge genes; `show` lists the first 15. The table each ",
     "analysis exported, with its complete leading-edge gene lists, is ",
     "`Enrichment/GSEA/<database>/ranking_by_<ranking>/<contrast>/results.csv`. ",
     "Direction is not given for the unsigned ranking (`pval_wo_direction`), whose ",
@@ -3128,7 +3138,7 @@ figure_legend(paste0(
 ```{r gsea-view-table, eval=has_gsea_view, echo=FALSE}
 gsea_dt <- make_dt(gsea_tbl, caption = "GSEA significant pathways")
 # Local to this table (make_dt() is shared): the id the selectors address, a
-# rows-per-page menu, smallest adjusted p first, set size as a whole number,
+# rows-per-page menu, smallest adjusted p first, counts as whole numbers,
 # and exports that carry the stored numbers rather than the rounded display.
 gsea_dt$elementId <- "gsea_view_table"
 gsea_dt$x$options$dom <- "Blfrtip"
@@ -3137,7 +3147,21 @@ gsea_dt$x$options$order <- list(list(which(names(gsea_tbl) == "padj") - 1L, "asc
 for (b in seq_along(gsea_dt$x$options$buttons)) {
     gsea_dt$x$options$buttons[[b]]$exportOptions <- list(orthogonal = "export")
 }
-gsea_dt <- DT::formatRound(gsea_dt, "Size", digits = 0)
+gsea_dt <- DT::formatRound(gsea_dt, c("Size", "LE genes"), digits = 0)
+# The gene list stays closed until asked for, so it adds no height to a row.
+# Only the display changes: search and exports still see the list. The width is
+# fixed so that opening a list changes the row's height and no column's width,
+# which would leave the header out of line with the body.
+gsea_dt$x$options$columnDefs <- c(
+    list(list(
+        targets = which(names(gsea_tbl) == "Leading edge") - 1L,
+        orderable = FALSE,
+        render = DT::JS(
+            "function(data, type) {",
+            "  return type === 'display' && data ?",
+            "    '<details style=\"width: 200px;\"><summary>show</summary>' + data + '</details>' : data;",
+            "}"))),
+    gsea_dt$x$options$columnDefs)
 gsea_dt
 ```
 

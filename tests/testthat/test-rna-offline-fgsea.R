@@ -949,6 +949,7 @@ test_that("the GSEA view lists every significant pathway per ranking, and keeps 
     expect_true(is.na(t01$Direction[t01$Ranking == "pval_wo_direction"]))
     expect_identical(t01$Direction[t01$Ranking == "fc"], "Up-regulated")
     expect_identical(t01$`Leading edge`[1], "g1, g2, g3")
+    expect_identical(t01$`LE genes`[1], 3L)
 
     # Every evaluated unit can be selected; a failed one is not offered.
     view <- env$gsea_view
@@ -995,6 +996,7 @@ test_that("the GSEA view shortens long leading edges and says how many genes are
     eval(parse(text = report_chunk("gsea-view-data")), envir = env)
     expect_identical(env$gsea_tbl$`Leading edge`,
                      paste0("SYM1, ", paste(genes[2:15], collapse = ", "), " (+3 more)"))
+    expect_identical(env$gsea_tbl$`LE genes`, 18L)             # the whole leading edge, counted
     expect_identical(env$gsea_tbl$Size, 40L)
 })
 
@@ -1028,6 +1030,11 @@ test_that("the GSEA table keeps make_dt's formatting and adds its own options lo
     expect_equal(dt$x$data[[which(names(env$gsea_tbl) == "padj")]], 1e-30)
     render <- vapply(opt$columnDefs, function(def) as.character(def$render %||% ""), character(1))
     expect_true(any(grepl("formatSignif", render, fixed = TRUE)))
+    # The leading-edge list is closed by default, for display only.
+    le_def <- opt$columnDefs[[which(grepl("<details", render, fixed = TRUE))]]
+    expect_identical(names(env$gsea_tbl)[le_def$targets + 1L], "Leading edge")
+    expect_match(as.character(le_def$render), "type === 'display'", fixed = TRUE)
+    expect_identical(dt$x$data[[le_def$targets + 1L]], "g1, g2, g3")
 })
 
 test_that("the report filters GSEA tables at a non-default cutoff, inclusive", {
