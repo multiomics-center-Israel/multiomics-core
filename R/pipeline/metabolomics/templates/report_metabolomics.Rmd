@@ -415,6 +415,15 @@ if (!is.null(pre$meta) && cond_col %in% colnames(pre$meta)) {
   n_groups <- length(unique(pre$meta[[cond_col]]))
 }
 
+# The transform actually applied. info$normalization$transform records the
+# configured one, which the linear-scale normalizers ignore (they always log2),
+# so every label in this report that names the scale reads this instead.
+# NA when the run recorded no known normalization: the scale is then unknown.
+transform_applied <- if (is.null(pre$info$normalization)) NA_character_ else
+  resolve_metab_transform(pre$info$normalization$sample_norm,
+                          pre$info$normalization$transform)
+has_transform <- !is.na(transform_applied) && transform_applied != "none"
+
 # Normalization summary
 norm_method <- "N/A"
 if (!is.null(pre$info$normalization)) {
@@ -422,8 +431,8 @@ if (!is.null(pre$info$normalization)) {
   parts <- character(0)
   if (!is.null(ni$sample_norm) && tolower(ni$sample_norm) != "none")
     parts <- c(parts, toupper(ni$sample_norm))
-  if (!is.null(ni$transform) && tolower(ni$transform) != "none")
-    parts <- c(parts, ni$transform)
+  if (has_transform)
+    parts <- c(parts, transform_applied)
   if (!is.null(ni$scaling) && tolower(ni$scaling) != "none")
     parts <- c(parts, ni$scaling)
   if (length(parts) > 0) norm_method <- paste(parts, collapse = " + ")
@@ -570,7 +579,7 @@ cat("</div>\n")
          ran   = {
              .ni <- pre$info$normalization
              .norm_ran <- tolower(.ni$method %||% metab_cfg$preprocessing$chosen_norm %||% "none") != "none"
-             .tf_ran   <- !is.null(.ni$transform) && tolower(.ni$transform) != "none"
+             .tf_ran   <- has_transform
              .sc_ran   <- !is.null(.ni$scaling)   && tolower(.ni$scaling)   != "none"
              .norm_ran || .tf_ran || .sc_ran
          }),
@@ -859,7 +868,7 @@ if (!is.null(qc_res$plots)) {
     if (has_scaling_dens) {
       figure_legend(sprintf(
         "Per-sample density after full normalization (%s + %s). %s scaling standardizes each metabolite independently (mean=0, SD=1), so divergent per-sample curves reflect biological differences between groups. This matrix is used for PCA, heatmaps, and multivariate analyses (RF, PLS-DA).",
-        ni_dens$transform %||% "", ni_dens$scaling %||% "",
+        if (has_transform) transform_applied else "no transform", ni_dens$scaling %||% "",
         tools::toTitleCase(ni_dens$scaling %||% "")
       ))
     } else {
@@ -896,7 +905,7 @@ if (!is.null(qc_res$plots)) {
     if (has_scaling_box) {
       figure_legend(sprintf(
         "Per-sample boxplots after full normalization (%s + %s). %s scaling standardizes each metabolite independently (mean=0, SD=1), so shifted medians between groups reflect biological differences. This matrix is used for PCA, heatmaps, and multivariate analyses (RF, PLS-DA).",
-        ni_box$transform %||% "", ni_box$scaling %||% "",
+        if (has_transform) transform_applied else "no transform", ni_box$scaling %||% "",
         tools::toTitleCase(ni_box$scaling %||% "")
       ))
     } else {
@@ -1030,7 +1039,7 @@ norm_y_label_report <- "Normalized intensity"
 ni_r <- pre$info$normalization
 if (!is.null(ni_r)) {
   np <- character(0)
-  if (!is.null(ni_r$transform) && tolower(ni_r$transform) != "none") np <- c(np, ni_r$transform)
+  if (has_transform) np <- c(np, transform_applied)
   if (!is.null(ni_r$sample_norm) && tolower(ni_r$sample_norm) != "none") np <- c(np, toupper(ni_r$sample_norm))
   if (!is.null(ni_r$scaling) && tolower(ni_r$scaling) != "none") np <- c(np, ni_r$scaling)
   if (length(np) > 0) norm_y_label_report <- paste0("Normalized intensity (", paste(np, collapse = " + "), ")")
@@ -1494,20 +1503,12 @@ if (!is.null(de_contrasts)) {
       "after the preprocessing configured for this run"
     } else {
       .sn <- tolower(ni_r$sample_norm %||% "none")
-      # info$normalization$transform records the configured transform, but
-      # these normalizers always log2-transform whatever it says; only median
-      # and none honour it. Same list as always_log2_norms in
-      # build_group_cv_metabolomics() -- keep the two in step.
-      .tf <- if (.sn %in% c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")) {
-        "log2"
-      } else {
-        tolower(ni_r$transform %||% "log2")
-      }
       paste0(
         if (.sn != "none") paste0("normalized (", toupper(.sn), ")")
         else "no sample normalization applied by this pipeline",
         ", ",
-        if (.tf != "none") paste0("transformed (", .tf, ")")
+        if (is.na(transform_applied)) "transform not recorded"
+        else if (has_transform) paste0("transformed (", transform_applied, ")")
         else "no transform applied by this pipeline",
         # drift_applied stays TRUE when individual features were skipped.
         if (isTRUE(ni_r$drift_applied)) ", drift correction applied where it could be fitted" else ""

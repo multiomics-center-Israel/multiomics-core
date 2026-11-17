@@ -72,7 +72,17 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
   }
   
   # ---- Build normalization label for titles ----
-  norm_label <- build_norm_label(pre$info$normalization)
+  # The recorded transform is the configured one, which the linear-scale
+  # normalizers ignore; title the plots with the transform actually applied.
+  # build_norm_label() is shared with lipidomics, so the fix stays here.
+  norm_applied <- pre$info$normalization
+  if (!is.null(norm_applied)) {
+    tf_applied <- resolve_metab_transform(norm_applied$sample_norm,
+                                          norm_applied$transform)
+    # NULL drops the element: an unknown scale is left out of the title.
+    norm_applied$transform <- if (is.na(tf_applied)) NULL else tf_applied
+  }
+  norm_label <- build_norm_label(norm_applied)
   
   # ---- Build sample subsets: "all" and "noQC" ----
   sample_col <- cfg$effects$samples %||% "sample_id"

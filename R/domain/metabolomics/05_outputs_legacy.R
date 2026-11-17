@@ -102,21 +102,14 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
     pseudocount   <- norm_cfg$pseudocount %||% 1
 
     if (identical(scaling, "none")) {
-        # The 2^x inverse is only valid on a genuinely log2 workspace. These
-        # normalization methods hardcode log2(x + pseudocount) regardless of
-        # config, so they are always invertible.
-        # MAINTAINER NOTE: any NEW normalization method that always log2-
-        # transforms MUST be added to this whitelist; otherwise CV will safely
-        # (but silently) skip for it via the guard below.
-        always_log2_norms <- c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")
+        # The 2^x inverse is only valid on a genuinely log2 workspace. The
+        # resolver knows which normalizers always log2 and which honour the
+        # configured transform; an unknown chosen_norm resolves to NA, which is
+        # not provably log2 -> skip rather than guess.
         chosen_norm <- tolower(cfg_mode$preprocessing$chosen_norm %||% "")
         transform   <- tolower(norm_cfg$transform %||% "log2")
-        # The median and none paths honor the configurable transform, so they are
-        # only log2 when transform == "log2" (none = transform-only matrix, no
-        # sample normalization). Everything outside the whitelist (incl. unknown
-        # chosen_norm) is not provably log2 -> skip rather than guess.
-        provably_log2 <- chosen_norm %in% always_log2_norms ||
-            (chosen_norm %in% c("median", "none") && identical(transform, "log2"))
+        provably_log2 <- identical(
+            resolve_metab_transform(chosen_norm, norm_cfg$transform), "log2")
         if (!isTRUE(provably_log2)) {
             warning(sprintf(
                 "metabolomics group CV: chosen_norm='%s' with transform='%s' is not a provably-log2 workspace; skipping CV (a 2^x back-transform would produce wrong values on a non-log2 matrix).",

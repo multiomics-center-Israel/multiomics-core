@@ -448,6 +448,46 @@ transform_metab <- function(mat, method = "none", pseudocount = 1) {
 }
 
 
+#' Resolve the transform a metabolomics normalization actually applied
+#'
+#' \code{preprocessing.transform} reaches only the matrices built on
+#' \code{met_log}: \code{median} (a log-scale shift) and \code{none}. The
+#' linear-scale normalizers (\code{tss}, \code{pqn}, \code{eigenms},
+#' \code{eigenms_forced}, \code{bio_factor}) always finish with
+#' \code{log2(x + pseudocount)}, whatever the setting says, yet
+#' \code{info$normalization$transform} records the configured value. Every
+#' label, and every back-transform, that names the scale of the working matrix
+#' should therefore ask here rather than read that field or the config.
+#'
+#' @param chosen_norm The selected normalization: \code{preprocessing.chosen_norm},
+#'   or \code{sample_norm} as \code{mod_met_corrected()} records it in
+#'   \code{info$normalization}. Case-insensitive.
+#' @param transform The configured \code{preprocessing.transform}. NULL means
+#'   \code{"log2"}, the default \code{mod_met_log()} applies.
+#' @return One lower-case string, \code{"log2"}, \code{"log10"},
+#'   \code{"glog10"} or \code{"none"}; \code{NA_character_} when
+#'   \code{chosen_norm} is missing or not a method this pipeline knows, because
+#'   the scale is then not known either.
+#' @examples
+#' resolve_metab_transform("pqn", "glog10")    # "log2": PQN ignores the setting
+#' resolve_metab_transform("median", "log10")  # "log10"
+#' resolve_metab_transform("none", NULL)       # "log2", mod_met_log()'s default
+resolve_metab_transform <- function(chosen_norm, transform = NULL) {
+    norm <- if (length(chosen_norm) == 1L && !is.na(chosen_norm)) {
+        tolower(as.character(chosen_norm))
+    } else {
+        NA_character_
+    }
+    if (norm %in% c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")) {
+        return("log2")
+    }
+    if (norm %in% c("median", "none")) {
+        return(tolower(transform %||% "log2"))
+    }
+    NA_character_
+}
+
+
 # ==== 3. SCALING ==============================================================
 
 #' Apply feature scaling (row-wise)
