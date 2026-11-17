@@ -241,8 +241,15 @@ test_that("a vsn run adds a note under the cutoffs and leaves the cutoff cells a
 
     vsn <- cutoffs_of(vsn = TRUE)
     expect_false(is.na(cell_xml(vsn$sheet, "B8")))
-    expect_true(grepl("normalized with vsn", read_part(vsn$dir, "xl", "sharedStrings.xml"),
-                      fixed = TRUE))
+    strings <- read_part(vsn$dir, "xl", "sharedStrings.xml")
+    expect_true(grepl("normalized with vsn", strings, fixed = TRUE))
+    # It is the workbook's formula that uses the displayed value; the note must
+    # not read as a statement about how the pipeline made its call.
+    expect_true(grepl("manual_cutoffs formulas compare the cutoff above", strings, fixed = TRUE))
+
+    # The scale of imported fold changes is not known here: no note.
+    imported <- cutoffs_of(vsn = TRUE, precomputed_de = TRUE)
+    expect_true(is.na(cell_xml(imported$sheet, "B8")))
     # Same cutoff cells, still numbers, in both workbooks.
     for (ref in c("C4", "C6")) {
         expect_identical(cell_xml(vsn$sheet, ref), cell_xml(plain$sheet, ref), info = ref)

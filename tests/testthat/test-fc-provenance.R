@@ -1049,10 +1049,33 @@ test_that("P6 a vsn run gets one note on the scale, first, and nothing else chan
         expect_identical(with_vsn$glossary, plain$glossary, info = label)
         expect_identical(with_vsn$notes[-1], plain$notes, info = label)
         expect_match(with_vsn$notes[1], "generalized-log2", fixed = TRUE, info = label)
-        expect_match(with_vsn$notes[1], "fold-change cutoff was applied to these values",
+        expect_match(with_vsn$notes[1], "cutoff is applied to fold changes on this scale",
                      fixed = TRUE, info = label)
         expect_match(with_vsn$notes[1], "CV.<group> columns are not written",
                      fixed = TRUE, info = label)
+
+        # The pipeline's call and the workbook's formula are two comparisons.
+        # Under multi-imputation only the formula uses the value in the row.
+        pooled <- grepl("was not decided on the pooled linearFC.imputs shown here",
+                        with_vsn$notes[1], fixed = TRUE)
+        expect_identical(pooled, mi, info = label)
+        expect_match(with_vsn$notes[1], "manual_cutoffs formulas", fixed = TRUE, info = label)
+
+        # Imported statistics were computed upstream, on a scale this pipeline
+        # does not know. The note must say that: neither that they are on the
+        # vsn scale, nor that they are not.
+        imported <- build_provenance_notes("proteomics", multi_imputation = mi, vsn = TRUE,
+                                           precomputed_de = TRUE)
+        expect_identical(imported$notes[-1], plain$notes, info = label)
+        expect_match(imported$notes[1],
+                     "Their scale was decided upstream and is not known to this pipeline",
+                     fixed = TRUE, info = label)
+        expect_false(grepl("not on the vsn scale", imported$notes[1], fixed = TRUE),
+                     info = label)
+        expect_false(grepl("Every log2FC column", imported$notes[1], fixed = TRUE), info = label)
+        # Without vsn the flag changes nothing.
+        expect_identical(build_provenance_notes("proteomics", multi_imputation = mi,
+                                                precomputed_de = TRUE), plain, info = label)
     }
 
     # The flag describes a proteomics setting; another mode's sheet ignores it.

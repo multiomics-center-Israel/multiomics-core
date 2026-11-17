@@ -76,7 +76,11 @@ test_that("under vsn the text says which scale the fold changes and the cut-off 
     # them for ratios of intensities.
     txt <- blocks_for(normalization = list(method = "vsn"))$data_processing
     expect_match(txt, "differences of generalized-log2 values", fixed = TRUE)
-    expect_match(txt, "fold-change cut-off was applied to them as reported", fixed = TRUE)
+    # Which scale, not which value: under multi-imputation the cut-off is
+    # applied within each run, so the text must not say it was applied to the
+    # pooled fold change that is reported.
+    expect_match(txt, "cut-off was applied to fold changes on this scale", fixed = TRUE)
+    expect_false(grepl("as reported", txt, fixed = TRUE))
     expect_match(txt, "not directly comparable", fixed = TRUE)
     expect_match(txt, "coefficients of variation are not reported", fixed = TRUE)
 
