@@ -70,6 +70,30 @@ test_that("no-normalization is stated explicitly, not omitted", {
     expect_false(grepl("No between-sample normalization", txt3, fixed = TRUE))
 })
 
+test_that("under vsn the text says which scale the fold changes and the cut-off are on", {
+    # The cut-off sentences further down speak of fold changes without saying
+    # what they are. In a vsn run that has to be said here, or the reader takes
+    # them for ratios of intensities.
+    txt <- blocks_for(normalization = list(method = "vsn"))$data_processing
+    expect_match(txt, "differences of generalized-log2 values", fixed = TRUE)
+    expect_match(txt, "fold-change cut-off was applied to them as reported", fixed = TRUE)
+    expect_match(txt, "not directly comparable", fixed = TRUE)
+    expect_match(txt, "coefficients of variation are not reported", fixed = TRUE)
+
+    # Precomputed DE: the statistics were imported, so nothing was tested on
+    # this matrix and the text must not say it was.
+    pre <- blocks_for(normalization = list(method = "vsn"),
+                      de_method = "precomputed")$data_processing
+    expect_match(pre, "variance-stabilizing normalization (vsn)", fixed = TRUE)
+    expect_false(grepl("was tested on that scale", pre, fixed = TRUE))
+
+    # The other methods say none of this.
+    for (m in c("none", "median")) {
+        other <- blocks_for(normalization = list(method = m))$data_processing
+        expect_false(grepl("generalized-log2", other, fixed = TRUE), info = m)
+    }
+})
+
 test_that("contaminant removal is claimed only when the flag is on", {
     # filter_contaminants() honours remove_contaminants and skips the step when
     # it is FALSE, so an unconditional sentence would describe work not done.

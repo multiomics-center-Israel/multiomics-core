@@ -164,13 +164,50 @@ get_sample_filter_rules <- function(config, mode) {
 #' @param expr_mat numeric matrix (proteins x samples) of log2 intensities,
 #'   NA for missing values.
 #' @return Matrix of the same dimensions and dimnames on the glog2 scale; cells
-#'   that were NA stay NA.
+#'   that were NA stay NA. Stops, quoting vsn's own message, when vsn cannot
+#'   fit the matrix.
 normalize_proteomics_vsn <- function(expr_mat) {
   # The loader has already taken log2, but vsn models raw intensities and does
   # its own transform, so it is fed the linear scale. justvsn() ignores NAs in
   # the fit and returns them as NA, so missing values need no special handling.
   # With the default subsample = 0 the fit draws no random numbers, so no seed.
-  out <- vsn::justvsn(2^expr_mat, verbose = FALSE)
+  out <- tryCatch(
+    vsn::justvsn(2^expr_mat, verbose = FALSE),
+    error = function(e) {
+      # vsn's message is kept verbatim and comes first: it names the actual
+      # cause. A matrix too small for vsn is the failure a small panel will
+      # hit, so the sizes are shown, but they are context, not a diagnosis.
+      stop(sprintf(paste0(
+        "vsn normalization failed.\n",
+        "  vsn reported: %s\n",
+        "  The matrix given to vsn had %d proteins x %d samples (in the pipeline, ",
+        "the matrix left after filtering). ",
+        "vsn fits one calibration across all of them, so it needs at least two ",
+        "samples and refuses matrices with too few proteins; if the message above ",
+        "is about something else, that is the cause to follow.\n",
+        "  To run without vsn, set modes$proteomics$normalization$method to ",
+        "\"median\" or \"none\"."),
+        conditionMessage(e), nrow(expr_mat), ncol(expr_mat)), call. = FALSE)
+    }
+  )
   dimnames(out) <- dimnames(expr_mat)
   out
+}
+
+#' Whether this proteomics run is normalized with vsn
+#'
+#' Reads the setting the way \code{preprocess_proteomics()} dispatches on it
+#' (same key, same default, exact match). That function either applies vsn for
+#' this value or stops, so for a run that produced results TRUE means the
+#' matrix is on vsn's generalized-log2 scale. The export and the Methods text
+#' ask here rather than each reading the key.
+#'
+#' @param config Full pipeline config.
+#' @return TRUE when \code{modes$proteomics$normalization$method} is "vsn".
+#' @examples
+#' proteomics_uses_vsn(list(modes = list(proteomics = list(
+#'     normalization = list(method = "vsn")))))   # TRUE
+#' proteomics_uses_vsn(list())                     # FALSE: the default is "none"
+proteomics_uses_vsn <- function(config) {
+  identical(config$modes$proteomics$normalization$method %||% "none", "vsn")
 }

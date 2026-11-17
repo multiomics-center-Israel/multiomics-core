@@ -85,3 +85,39 @@ test_that("preprocess_proteomics dispatches normalization$method = 'vsn'", {
     expect_error(preprocess_proteomics(inputs = list(), config = cfg_for("quantile")),
                  "Supported: 'none', 'median', 'vsn'", fixed = TRUE)
 })
+
+test_that("normalize_proteomics_vsn returns what vsn::justvsn() gives for the linear matrix", {
+    # The one thing the wrapper decides is what vsn is fed: the loader's values
+    # are log2, vsn models intensities. Passing the log2 matrix through, or
+    # un-logging it differently, changes every number while keeping the shape,
+    # so the comparison is with vsn itself, not with the wrapper.
+    skip_if_not_installed("vsn")
+    expr <- vsn_expr()
+    reference <- vsn::justvsn(2^expr, verbose = FALSE)
+    dimnames(reference) <- dimnames(expr)
+
+    expect_equal(normalize_proteomics_vsn(expr), reference)
+})
+
+test_that("a matrix vsn refuses stops with vsn's message and the way out", {
+    # vsn stops on a matrix with too few rows, in its own wording. The
+    # wrapper has to keep that message, say what the matrix was, and name the
+    # setting that avoids vsn -- without claiming size is always the cause.
+    skip_if_not_installed("vsn")
+    small <- vsn_expr(n_prot = 10, n_samp = 4)
+    vsn_msg <- tryCatch({
+        vsn::justvsn(2^small, verbose = FALSE)
+        NULL
+    }, error = function(e) conditionMessage(e))
+    # If this fails, vsn accepted the matrix and the fixture needs a smaller one.
+    expect_false(is.null(vsn_msg))
+
+    err <- tryCatch({
+        normalize_proteomics_vsn(small)
+        NULL
+    }, error = function(e) conditionMessage(e))
+    expect_false(is.null(err))
+    expect_true(grepl(vsn_msg, err, fixed = TRUE))
+    expect_match(err, "10 proteins x 4 samples", fixed = TRUE)
+    expect_match(err, "\"median\" or \"none\"", fixed = TRUE)
+})

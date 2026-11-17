@@ -10,6 +10,7 @@
 #   C3 the FDR cutoff cell is populated and NUMERIC for mode "rna"
 #   C4 the manual_cutoffs formulas reference FDR_CO (not PVAL_CO) for "rna"
 #   C5 the pruning is inert: a workbook holding a real image keeps its drawing
+#   C6 a vsn proteomics run adds a note under the cutoffs; the cells are unchanged
 #
 # All fixtures are synthetic (g1/g2/g3, S1..S4) — no project data.
 
@@ -210,6 +211,43 @@ test_that("a raw-p mode still gates on PVAL_CO", {
     expect_false(grepl("FDR_CO", results, fixed = TRUE))
     expect_false(grepl('t="s"', cell_xml(sheet_xml_path(dir, "Cutoffs"), "C4"), fixed = TRUE))
     expect_equal(dangling_rel_targets(dir), character(0))
+})
+
+# ---- C6 --------------------------------------------------------------------
+
+test_that("a vsn run adds a note under the cutoffs and leaves the cutoff cells alone", {
+    # The sheet labels the cutoff "linear Fold Change (linearFC)". In a vsn run
+    # that column is 2 raised to a generalized-log2 difference, so the sheet
+    # says so -- below the three cells, which are named regions the
+    # manual_cutoffs formulas compare against and must stay numeric in place.
+    skip_if_not_installed("openxlsx")
+    cfg <- list(modes = list(proteomics = list(de = list(
+        p_cutoff = 0.05, linear_fc_cutoff = 1.5, use_adj_for_pass1 = FALSE
+    ))))
+    res <- synthetic_rna_results()
+    names(res) <- sub("^(log2FC|linearFC|pvalue|padj|upDown)\\.", "\\1.imputs.", names(res))
+    cutoffs_of <- function(...) {
+        out_dir <- tempfile("xlsx_prot_"); dir.create(out_dir)
+        f <- write_final_results_excels_legacy_generic(
+            final_results = res, config = cfg, out_dir = out_dir, mode = "proteomics",
+            id_col = "Gene", expr_for_de = NULL, with_cutoffs = TRUE, ...
+        )[[1]]
+        dir <- unpack_xlsx(f)
+        list(dir = dir, sheet = sheet_xml_path(dir, "Cutoffs"))
+    }
+
+    plain <- cutoffs_of()
+    expect_true(is.na(cell_xml(plain$sheet, "B8")))
+
+    vsn <- cutoffs_of(vsn = TRUE)
+    expect_false(is.na(cell_xml(vsn$sheet, "B8")))
+    expect_true(grepl("normalized with vsn", read_part(vsn$dir, "xl", "sharedStrings.xml"),
+                      fixed = TRUE))
+    # Same cutoff cells, still numbers, in both workbooks.
+    for (ref in c("C4", "C6")) {
+        expect_identical(cell_xml(vsn$sheet, ref), cell_xml(plain$sheet, ref), info = ref)
+        expect_false(grepl('t="s"', cell_xml(vsn$sheet, ref), fixed = TRUE), info = ref)
+    }
 })
 
 # ---- C5 --------------------------------------------------------------------

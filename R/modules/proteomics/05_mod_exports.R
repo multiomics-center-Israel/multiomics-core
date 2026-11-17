@@ -173,7 +173,10 @@ mod_proteomics_exports <- function(
             # NULL unless this run pooled two or more imputed DE fits, which is
             # the only case where the reported fold change is not simply the
             # coefficient of the model the workbook already describes.
-            de_reconciliation = build_de_reconciliation_proteomics(de_res, config)
+            de_reconciliation = build_de_reconciliation_proteomics(de_res, config),
+            # The workbook's notes on scale are written by the shared export
+            # layer, which does not read proteomics settings; it is told here.
+            vsn = proteomics_uses_vsn(config)
         )
         files <- c(files, excel_files)
     }

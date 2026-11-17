@@ -1033,6 +1033,32 @@ test_that("P6 provenance notes cover every column family the mode emits", {
     expect_s3_class(build_provenance_notes("something_else")$glossary, "data.frame")
 })
 
+test_that("P6 a vsn run gets one note on the scale, first, and nothing else changes", {
+    # The glossary calls the values log2 intensities and the fold changes log2;
+    # in a vsn run they are generalized-log2. One paragraph says so, ahead of
+    # the numbered steps that use those words. Everything else on the sheet has
+    # to stay exactly as it is for the other normalization methods.
+    for (mi in c(TRUE, FALSE)) {
+        plain <- build_provenance_notes("proteomics", multi_imputation = mi)
+        label <- paste("multi_imputation =", mi)
+
+        expect_identical(build_provenance_notes("proteomics", multi_imputation = mi,
+                                                vsn = FALSE), plain, info = label)
+
+        with_vsn <- build_provenance_notes("proteomics", multi_imputation = mi, vsn = TRUE)
+        expect_identical(with_vsn$glossary, plain$glossary, info = label)
+        expect_identical(with_vsn$notes[-1], plain$notes, info = label)
+        expect_match(with_vsn$notes[1], "generalized-log2", fixed = TRUE, info = label)
+        expect_match(with_vsn$notes[1], "fold-change cutoff was applied to these values",
+                     fixed = TRUE, info = label)
+        expect_match(with_vsn$notes[1], "CV.<group> columns are not written",
+                     fixed = TRUE, info = label)
+    }
+
+    # The flag describes a proteomics setting; another mode's sheet ignores it.
+    expect_identical(build_provenance_notes("rna", vsn = TRUE), build_provenance_notes("rna"))
+})
+
 test_that("P6 the proteomics glossary separates measured from model-input values", {
     mean_of <- function(notes, col) notes$glossary$Meaning[notes$glossary$Column == col]
 
