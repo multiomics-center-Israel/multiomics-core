@@ -1468,17 +1468,81 @@ if (!is.null(de_contrasts)) {
     cat(knitr::knit_print(top_dt))
     cat("\n\n")
 
-    # Full table with normalized intensities
+    # Full table with the expression values behind the statistics
     cat("### Full Results + Expression\n\n")
-    cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>",
-        "Full DE results merged with normalized expression values. ",
-        "Use the search box to find specific metabolites and the buttons to export.</em></p>\n")
 
     full_tbl <- ctr_tbl[order(ctr_tbl$P.Value), ,drop=FALSE]
     full_display <- full_tbl[, c("feature_id", "Name", "logFC", "AveExpr", "P.Value", "adj.P.Val", "Direction")]
 
-    # Merge transformed expression (glog10, before scaling) for meaningful values
-    de_tbl_expr <- pre$expr_log %||% pre$expr_work
+    # The expression columns are the DE input, resolved by the helper QEA/ssGSEA
+    # already use: the unscaled matrix, biological samples only. expr_log would
+    # show values without sample normalization, plus QC/blank/pool columns that
+    # DE never saw, next to statistics computed from something else.
+    de_tbl_expr <- tryCatch(
+      .metab_de_matrix_condition(pre, cfg)$mat,
+      error = function(e) {
+        message("DE results table: expression columns omitted (",
+                conditionMessage(e), ")")
+        NULL
+      }
+    )
+
+    # Describe what this pipeline did to the values, which is all it knows.
+    # chosen_norm = "none" is the path for tables normalized upstream, so it
+    # means no normalization was added here, not that the data are unnormalized.
+    .de_expr_steps <- if (is.null(ni_r)) {
+      "after the preprocessing configured for this run"
+    } else {
+      .sn <- tolower(ni_r$sample_norm %||% "none")
+      # info$normalization$transform records the configured transform, but
+      # these normalizers always log2-transform whatever it says; only median
+      # and none honour it. Same list as always_log2_norms in
+      # build_group_cv_metabolomics() -- keep the two in step.
+      .tf <- if (.sn %in% c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")) {
+        "log2"
+      } else {
+        tolower(ni_r$transform %||% "log2")
+      }
+      paste0(
+        if (.sn != "none") paste0("normalized (", toupper(.sn), ")")
+        else "no sample normalization applied by this pipeline",
+        ", ",
+        if (.tf != "none") paste0("transformed (", .tf, ")")
+        else "no transform applied by this pipeline",
+        # drift_applied stays TRUE when individual features were skipped.
+        if (isTRUE(ni_r$drift_applied)) ", drift correction applied where it could be fitted" else ""
+      )
+    }
+    .de_expr_desc <- paste0(.de_expr_steps, ", not feature-scaled, biological ",
+                            "samples only (QC, blank and pooled samples excluded)")
+    # Pre-computed DE tables were not computed here, so this matrix is not
+    # known to be the one behind them.
+    .de_precomputed <- identical(tolower(de_method), "precomputed")
+    # Only limma reads every column off this matrix. The t-test and Wilcoxon
+    # methods test it, but take logFC and AveExpr from group means of the
+    # filtered pre-normalization intensities when run_metabolomics_de() has them.
+    .de_all_from_matrix <- identical(tolower(de_method), "limma")
+    cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>",
+        if (is.null(de_tbl_expr)) {
+          "Full DE results. Expression values are not shown for this run. "
+        } else if (.de_precomputed) {
+          paste0("Full DE results with this pipeline's expression values: ",
+                 .de_expr_desc, ". The DE statistics were loaded from ",
+                 "pre-computed tables and were not calculated from these values. ")
+        } else if (.de_all_from_matrix) {
+          paste0("Full DE results with the expression values the statistics ",
+                 "were calculated from: ", .de_expr_desc, ". ")
+        } else {
+          paste0("Full DE results with the expression values the test statistic ",
+                 "and p-values were calculated from: ", .de_expr_desc, ". ",
+                 "For this method (", de_method, "), logFC and AveExpr are ",
+                 "calculated separately, from group means of the filtered ",
+                 "input intensities (before this pipeline's normalization and ",
+                 "transform) when those are available, and from these values ",
+                 "otherwise. ")
+        },
+        "Use the search box to find specific metabolites and the buttons to export.</em></p>\n")
+
     if (!is.null(de_tbl_expr)) {
       expr_df2 <- as.data.frame(de_tbl_expr, check.names = FALSE)
       expr_df2$feature_id <- rownames(de_tbl_expr)
@@ -1488,7 +1552,12 @@ if (!is.null(de_contrasts)) {
 
     full_dt <- DT::datatable(
       full_display,
-      caption = paste0("DE Results + Normalized Expression: ", ctr),
+      caption = paste0(
+        if (is.null(de_tbl_expr)) "DE Results: "
+        else if (.de_precomputed) "DE Results + Expression (unscaled, biological samples): "
+        else if (.de_all_from_matrix) "DE Results + Expression (DE input matrix, unscaled, biological samples): "
+        else "DE Results + Expression (DE test input matrix, unscaled, biological samples): ",
+        ctr),
       extensions = "Buttons",
       options = list(
         scrollX = TRUE, pageLength = 10, dom = "Bfrtip",
