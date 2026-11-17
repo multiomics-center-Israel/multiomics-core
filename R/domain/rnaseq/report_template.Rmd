@@ -2921,20 +2921,12 @@ n_failed_units <- sum(!evaluated)
 n_sig_units <- if (offline_ran && "n_significant" %in% names(enr_manifest)) {
     sum(enr_manifest$n_significant[evaluated] > 0, na.rm = TRUE)
 } else NA_integer_
-gsea_plot_dir <- file.path(enrich_dir, "GSEA")
-offline_dotplots <- if (dir.exists(gsea_plot_dir)) {
-    list.files(gsea_plot_dir, pattern = "^dotplot\\.png$",
-               full.names = TRUE, recursive = TRUE)
-} else character(0)
-# Keep only unit dotplots (<db>/ranking_by_<ranking>/<contrast>/dotplot.png),
-# so a stray file neither opens an empty section nor hides the legacy plots.
-offline_dotplots <- offline_dotplots[grepl(
-    "^[^/]+/ranking_by_[^/]+/[^/]+/dotplot\\.png$",
-    substring(offline_dotplots, nchar(gsea_plot_dir) + 2L))]
+# The online path's dotplots. An offline run draws its plots in the GSEA view
+# below, so a plots/ folder left by an earlier online run is not shown for it.
 legacy_dotplots <- if (dir.exists(enrich_plot_dir)) {
     list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
 } else character(0)
-has_pathway_plots <- length(offline_dotplots) + length(legacy_dotplots) > 0
+has_pathway_plots <- !offline_ran && length(legacy_dotplots) > 0
 # The cutoffs enrichment ran with: a GSEA set is significant at padj <= gsea_cut;
 # offline ORA was run with ora_cut as clusterProfiler's pvalueCutoff.
 enr_settings <- resolve_rna_gsea_settings(cfg)
@@ -2987,30 +2979,202 @@ if (file.exists(anno_file)) {
 
 **Key metrics:**
 
-- **NES (Normalized Enrichment Score)**: The primary statistic from fGSEA. Positive NES indicates the pathway is enriched in **up-regulated** genes; negative NES indicates enrichment in **down-regulated** genes. The magnitude reflects the degree of enrichment.
+- **NES (Normalized Enrichment Score)**: The primary statistic from fGSEA. Under a signed ranking, positive NES indicates the pathway is enriched in **up-regulated** genes; negative NES indicates enrichment in **down-regulated** genes. The magnitude reflects the degree of enrichment. Under the unsigned ranking (`pval_wo_direction`, offline workflow only) the sign of NES does not indicate up- or down-regulation.
 - **padj**: Benjamini-Hochberg adjusted p-value (FDR). Pathways with padj ≤ `r gsea_cut` are considered significant.
 - **size**: Number of genes in the pathway that were present in the dataset.
 
-## fGSEA Results {.tabset}
-
-```{r fgsea-tables-prep, eval=has_enrichment, include=FALSE}
-# Offline: the significant rows of every ranking's results.csv, one row per
-# pathway and ranking, and the evaluated (contrast, database) units from the
-# manifest, so a unit with nothing significant is still shown. Online: the
-# flat pathway_<contrast>_<db>_fgsea.csv files.
-offline_gsea <- NULL
-offline_units <- NULL
-if (offline_ran) {
+```{r gsea-view-data, include=FALSE}
+# Offline GSEA view: one plot and one table, both following three selectors.
+# The table holds the significant rows of every ranking's results.csv, one row
+# per pathway and ranking; nothing is combined across rankings, contrasts or
+# databases. The selectable analyses come from the manifest, so one that was
+# evaluated with nothing significant can still be chosen.
+has_gsea_view <- FALSE
+gsea_view <- list()
+if (has_enrichment && offline_ran) {
     offline_gsea <- read_offline_gsea_tables(file.path(enrich_dir, "GSEA"), gsea_cut)
     gsea_ran <- enr_manifest[enr_manifest$analysis == "GSEA" & evaluated, , drop = FALSE]
-    offline_units <- unique(data.frame(contrast = as.character(gsea_ran$item),
-                                       database = as.character(gsea_ran$database),
-                                       stringsAsFactors = FALSE))
-    offline_units <- offline_units[order(offline_units$contrast, offline_units$database), ,
-                                   drop = FALSE]
+    gsea_units <- unique(data.frame(contrast = as.character(gsea_ran$item),
+                                    database = as.character(gsea_ran$database),
+                                    ranking  = as.character(gsea_ran$group),
+                                    stringsAsFactors = FALSE))
+    has_gsea_view <- nrow(gsea_units) > 0
 }
-fgsea_files <- if (offline_ran) character(0) else
-    list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+if (has_gsea_view) {
+    # Compact leading edge: the first 15 genes the GSEA reported (as symbols
+    # where annotated) and how many more there are. The complete lists stay in
+    # each analysis's results.csv.
+    anno_le <- NULL
+    anno_file_le <- file.path(enrich_dir, "gene_annotation.csv")
+    if (file.exists(anno_file_le)) {
+        anno_le <- read.csv(anno_file_le, stringsAsFactors = FALSE)
+    }
+    gsea_le <- vapply(strsplit(offline_gsea$leading_edge, ",", fixed = TRUE),
+        function(g) {
+            g <- g[!is.na(g) & nzchar(g)]
+            if (!is.null(anno_le)) {
+                sym <- anno_le$symbol[match(g, anno_le$gene_id)]
+                g[!is.na(sym)] <- sym[!is.na(sym)]
+            }
+            more <- length(g) - 15L
+            paste0(paste(head(g, 15), collapse = ", "),
+                   if (more > 0) sprintf(" (+%d more)", more) else "")
+        }, character(1))
+    # Contrast, Database and Ranking come first: the selectors filter on them,
+    # and they keep an exported table self-describing.
+    gsea_tbl <- data.frame(
+        Contrast = offline_gsea$contrast, Database = offline_gsea$database,
+        Ranking = offline_gsea$ranking_method, Pathway = offline_gsea$Pathway,
+        ID = offline_gsea$ID, NES = offline_gsea$NES,
+        Direction = offline_gsea$Direction, pval = offline_gsea$pval,
+        padj = offline_gsea$padj, Size = offline_gsea$size,
+        `Leading edge` = gsea_le, check.names = FALSE, stringsAsFactors = FALSE)
+
+    # One bar plot per analysis, embedded as an image for the selectors to swap.
+    for (u in seq_len(nrow(gsea_units))) {
+        cn <- gsea_units$contrast[u]; db <- gsea_units$database[u]; rk <- gsea_units$ranking[u]
+        rows <- offline_gsea[offline_gsea$contrast == cn & offline_gsea$database == db &
+                             offline_gsea$ranking_method == rk, , drop = FALSE]
+        unit <- list(n = nrow(rows))
+        if (nrow(rows) > 0) {
+            # plot_gsea_enrichment_bar() reads the column names of a unit's
+            # results.csv, which the reader renamed. Same selection and size as
+            # the exported enrichment_bar_top20.pdf.
+            bar_df <- data.frame(
+                Description = rows$Pathway, NES = rows$NES, padj = rows$padj,
+                setSize = rows$size,
+                core_enrichment = gsub(",", "/", rows$leading_edge, fixed = TRUE),
+                stringsAsFactors = FALSE)
+            n_bar <- min(ENRICH_BAR_TOP_N, nrow(bar_df))
+            # A plot that cannot be drawn leaves the analysis in the table.
+            unit$img <- tryCatch({
+                png_file <- tempfile(fileext = ".png")
+                ggplot2::ggsave(png_file, plot_gsea_enrichment_bar(bar_df, max_terms = n_bar),
+                                width = 11, height = .enrich_bar_height_in(n_bar), dpi = 110)
+                uri <- knitr::image_uri(png_file)
+                unlink(png_file)
+                uri
+            }, error = function(e) NULL)
+        }
+        if (is.null(gsea_view[[cn]])) gsea_view[[cn]] <- list()
+        if (is.null(gsea_view[[cn]][[db]])) gsea_view[[cn]][[db]] <- list()
+        gsea_view[[cn]][[db]][[rk]] <- unit
+    }
+}
+```
+
+```{r gsea-view-none, eval=has_enrichment && offline_ran && !has_gsea_view, results='asis', echo=FALSE}
+cat("\n## GSEA\n\n")
+cat("No GSEA unit was evaluated in this run. Every evaluated unit is listed in ",
+    "`Enrichment/enrichment_manifest.csv`.\n", sep = "")
+```
+
+```{r gsea-view-controls, eval=has_gsea_view, results='asis', echo=FALSE}
+cat("\n## GSEA\n\n")
+cat("GSEA was run with several gene rankings. They are alternative analyses of ",
+    "the same differential-expression results, not independent evidence, and none ",
+    "is primary; p-values are not combined across rankings. Choose a contrast, a ",
+    "database and a ranking: the plot and the table below both show that one ",
+    "analysis. The plot shows up to ", ENRICH_BAR_TOP_N, " of its significant ",
+    "pathways, those with the smallest adjusted p-values; the table lists every ",
+    "pathway with adjusted p-value ≤ ", format(gsea_cut), ". The table each ",
+    "analysis exported, with its complete leading-edge gene lists, is ",
+    "`Enrichment/GSEA/<database>/ranking_by_<ranking>/<contrast>/results.csv`. ",
+    "Direction is not given for the unsigned ranking (`pval_wo_direction`), whose ",
+    "NES sign does not mean up or down.\n\n", sep = "")
+if ("any_contrast" %in% gsea_units$contrast) {
+    cat("`any_contrast` ranks genes by their minimum p-value across all contrasts ",
+        "(unsigned).\n\n", sep = "")
+}
+
+# Rankings in the order of their labels; none is primary.
+gsea_rankings <- c(intersect(names(.RNA_GSEA_RANKING_LABELS), gsea_units$ranking),
+                   setdiff(gsea_units$ranking, names(.RNA_GSEA_RANKING_LABELS)))
+gsea_selectors <- list(
+    list(id = "gsea_view_contrast", label = "Contrast",
+         values = unique(gsea_units$contrast), text = unique(gsea_units$contrast)),
+    list(id = "gsea_view_database", label = "Database",
+         values = unique(gsea_units$database), text = unique(gsea_units$database)),
+    list(id = "gsea_view_ranking", label = "Ranking", values = gsea_rankings,
+         text = ifelse(gsea_rankings %in% names(.RNA_GSEA_RANKING_LABELS),
+                       paste0(gsea_rankings, " (", .RNA_GSEA_RANKING_LABELS[gsea_rankings], ")"),
+                       gsea_rankings)))
+cat('<div style="margin-bottom: 16px;">\n')
+for (s in gsea_selectors) {
+    cat(sprintf('<label for="%s"><strong>%s:</strong></label>\n', s$id, s$label))
+    cat(sprintf('<select id="%s" onchange="updateGseaView()" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px; margin-right: 18px;">\n', s$id))
+    cat(sprintf('<option value="%s">%s</option>\n',
+                htmltools::htmlEscape(s$values, attribute = TRUE),
+                htmltools::htmlEscape(s$text)), sep = "")
+    cat('</select>\n')
+}
+cat('</div>\n\n')
+
+# The first choice of each selector is shown until the reader changes one.
+gsea_first <- gsea_view[[gsea_selectors[[1]]$values[1]]][[gsea_selectors[[2]]$values[1]]][[gsea_selectors[[3]]$values[1]]]
+cat('<div style="text-align: center;">\n')
+cat('<img id="gsea_view_image" ',
+    if (is.null(gsea_first$img)) 'style="display: none; ' else paste0('src="', gsea_first$img, '" style="'),
+    'width: 100%; max-width: 1000px; height: auto;" alt="GSEA enrichment bar plot" />\n', sep = "")
+cat('<p id="gsea_view_message" style="font-style: italic;"></p>\n')
+cat('</div>\n\n')
+figure_legend(paste0(
+    "NES of up to ", ENRICH_BAR_TOP_N, " significant pathways of the selected analysis, ",
+    "those with the smallest adjusted p-values, ordered by NES. Fill: −log10 adjusted ",
+    "p-value. Bar labels: gene-set size and number of leading-edge genes (LE). Under the ",
+    "unsigned ranking the sign of NES does not indicate up- or down-regulation."))
+```
+
+```{r gsea-view-table, eval=has_gsea_view, echo=FALSE}
+gsea_dt <- make_dt(gsea_tbl, caption = "GSEA significant pathways")
+# Local to this table (make_dt() is shared): the id the selectors address, a
+# rows-per-page menu, smallest adjusted p first, set size as a whole number,
+# and exports that carry the stored numbers rather than the rounded display.
+gsea_dt$elementId <- "gsea_view_table"
+gsea_dt$x$options$dom <- "Blfrtip"
+gsea_dt$x$options$lengthMenu <- c(15, 25, 50, 100)
+gsea_dt$x$options$order <- list(list(which(names(gsea_tbl) == "padj") - 1L, "asc"))
+for (b in seq_along(gsea_dt$x$options$buttons)) {
+    gsea_dt$x$options$buttons[[b]]$exportOptions <- list(orthogonal = "export")
+}
+gsea_dt <- DT::formatRound(gsea_dt, "Size", digits = 0)
+gsea_dt
+```
+
+<script>
+// GSEA view: the three selectors choose one analysis. Its plot is swapped in,
+// as the PCA selector does, and the table is narrowed to its rows.
+var gseaViewUnits = `r if (has_gsea_view) jsonlite::toJSON(gsea_view, auto_unbox = TRUE) else "{}"`;
+
+function updateGseaView() {
+    var picked = ["gsea_view_contrast", "gsea_view_database", "gsea_view_ranking"].map(
+        function (id) { return document.getElementById(id).value; });
+    var unit = ((gseaViewUnits[picked[0]] || {})[picked[1]] || {})[picked[2]];
+    var img = document.getElementById("gsea_view_image");
+    if (unit && unit.img) img.src = unit.img;
+    img.style.display = unit && unit.img ? "" : "none";
+    document.getElementById("gsea_view_message").textContent =
+        !unit ? "No result for this combination: it was not run, or it failed (see Enrichment/enrichment_manifest.csv)."
+        : unit.n === 0 ? "No significant pathways (adjusted p-value ≤ `r format(gsea_cut)`) for this selection."
+        : unit.img ? "" : "The plot could not be drawn; the table below lists the pathways.";
+    // Exact match on the first three columns: Contrast, Database, Ranking.
+    var table = $("#gsea_view_table").data("datatable");
+    if (!table) return;
+    picked.forEach(function (value, column) {
+        table.column(column).search(
+            "^" + $.fn.dataTable.util.escapeRegex(value) + "$", true, false, false);
+    });
+    table.draw();
+}
+
+$(window).on("load", function () {
+    if (document.getElementById("gsea_view_contrast")) updateGseaView();
+});
+</script>
+
+```{r fgsea-tables-prep, eval=has_enrichment && !offline_ran, include=FALSE}
+# Online: the flat pathway_<contrast>_<db>_fgsea.csv files.
+fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
 fgsea_tables <- list()
 if (length(fgsea_files) > 0) {
     for (i in seq_along(fgsea_files)) {
@@ -3036,39 +3200,9 @@ if (length(fgsea_files) > 0) {
 }
 ```
 
-```{r fgsea-tables, eval=has_enrichment, results='asis'}
-if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
-    cat("GSEA was run with several gene rankings. They are alternative analyses of ",
-        "the same differential-expression results, not independent evidence, and none ",
-        "is primary. Each row below is one pathway in one ranking: a pathway significant ",
-        "under several rankings appears once per ranking, and p-values are not combined ",
-        "across rankings. Only pathways with adjusted p-value ≤ ", format(gsea_cut),
-        " are shown; every tested pathway is in ",
-        "`Enrichment/GSEA/<database>/ranking_by_<ranking>/<contrast>/results.csv`. ",
-        "Direction is not given for the unsigned ranking, whose NES sign does not mean ",
-        "up or down.\n\n", sep = "")
-    for (u in seq_len(nrow(offline_units))) {
-        cn <- offline_units$contrast[u]; db <- offline_units$database[u]
-        cat(sprintf("\n### %s — %s\n\n", cn, db))
-        if (identical(cn, "any_contrast")) {
-            cat("Genes ranked by their minimum p-value across all contrasts (unsigned).\n\n")
-        }
-        rows <- offline_gsea[offline_gsea$contrast == cn & offline_gsea$database == db, ,
-                             drop = FALSE]
-        if (nrow(rows) == 0) {
-            cat(sprintf("No significant pathways (padj ≤ %s) in any ranking for this contrast/database.\n\n",
-                        format(gsea_cut)))
-            next
-        }
-        cat(sprintf("%d row(s): %d distinct pathway(s) across %d ranking(s).\n\n",
-                    nrow(rows), length(unique(rows$ID)), length(unique(rows$Ranking))))
-        print(knitr::kable(
-            rows[, c("Pathway", "ID", "Ranking", "NES", "Direction", "pval", "padj", "size")],
-            caption = sprintf("Significant pathways by ranking — %s, %s", cn, db),
-            row.names = FALSE, digits = 4))
-        cat("\n\n")
-    }
-} else if (length(fgsea_tables) > 0) {
+```{r fgsea-tables, eval=has_enrichment && !offline_ran, results='asis'}
+cat("\n## fGSEA Results {.tabset}\n\n")
+if (length(fgsea_tables) > 0) {
     for (i in seq_along(fgsea_tables)) {
         tbl <- fgsea_tables[[i]]
         cat(sprintf("\n### %s {.tabset}\n\n", tbl$label))
@@ -3108,9 +3242,6 @@ if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
             cat("\n\n")
         }
     }
-} else if (offline_ran) {
-    cat("No GSEA unit was evaluated in this run. Every evaluated unit is listed in ",
-        "`Enrichment/enrichment_manifest.csv`.\n")
 } else {
     cat("No fGSEA result files found.\n")
 }
@@ -3122,39 +3253,21 @@ cat("\n## Pathway Dotplots {.tabset}\n\n")
 ```
 
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
-if (length(offline_dotplots) > 0) {
-    # Show one tab per contrast/database, with all available rankings inside.
-    # Paths were checked against the unit layout in the setup chunk.
-    rel <- substring(offline_dotplots, nchar(gsea_plot_dir) + 2L)
-    p <- strsplit(rel, "/", fixed = TRUE)
-    db <- vapply(p, `[[`, character(1), 1L)
-    ranking <- sub("^ranking_by_", "", vapply(p, `[[`, character(1), 2L))
-    contrast <- vapply(p, `[[`, character(1), 3L)
-    group <- paste(contrast, db, sep = " — ")
-    for (key in unique(group)) {
-        cat(sprintf("\n### %s\n\n", key))
-        for (i in which(group == key)) {
-            label <- paste(contrast[i], db[i], ranking[i], sep = " — ")
-            cat(sprintf("\n**Ranking: %s**\n\n", ranking[i]))
-            cat(sprintf("![%s](%s)\n\n", label, offline_dotplots[i]))
-        }
-    }
-} else if (length(legacy_dotplots) > 0) {
-    for (pp in legacy_dotplots) {
-        label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
-        label <- gsub("_", " ", label_raw)
-        cat(sprintf("\n### %s\n\n", label))
-        cat(sprintf("![%s](%s)\n\n", label, pp))
-        render_commentary(paste0("pathway_", label_raw))
-    }
+for (pp in legacy_dotplots) {
+    label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
+    label <- gsub("_", " ", label_raw)
+    cat(sprintf("\n### %s\n\n", label))
+    cat(sprintf("![%s](%s)\n\n", label, pp))
+    render_commentary(paste0("pathway_", label_raw))
 }
 ```
 
-## Leading Edge Genes {.tabset}
+```{r leading-edge, eval=has_enrichment && !offline_ran, results='asis'}
+cat("\n## Leading Edge Genes {.tabset}\n\n")
+cat("The **leading edge** genes are those that contribute most to the enrichment ",
+    "signal of each pathway. These are the genes that appear before the peak of ",
+    "the running enrichment score.\n\n", sep = "")
 
-The **leading edge** genes are those that contribute most to the enrichment signal of each pathway. These are the genes that appear before the peak of the running enrichment score.
-
-```{r leading-edge, eval=has_enrichment, results='asis'}
 # Load annotation for gene name lookup
 anno_le <- NULL
 anno_file_le <- file.path(enrich_dir, "gene_annotation.csv")
@@ -3162,84 +3275,46 @@ if (file.exists(anno_file_le)) {
     anno_le <- read.csv(anno_file_le, stringsAsFactors = FALSE)
 }
 
-if (offline_ran && !is.null(offline_gsea) && nrow(offline_gsea) > 0) {
-    # The leading edge each ranking's GSEA reported (fgsea's leadingEdge, or
-    # clusterProfiler's core_enrichment), unchanged; top 10 pathways per ranking.
-    for (key in unique(paste(offline_gsea$contrast, offline_gsea$database, sep = "\r"))) {
-        rows <- offline_gsea[paste(offline_gsea$contrast, offline_gsea$database, sep = "\r") == key, ,
-                             drop = FALSE]
-        cat(sprintf("\n### %s — %s\n\n", rows$contrast[1], rows$database[1]))
-        le_rows <- do.call(rbind, lapply(split(rows, rows$ranking_method), function(r) {
-            head(r[order(r$padj), , drop = FALSE], 10)
-        }))
-        le_df <- data.frame(
-            Pathway = le_rows$Pathway,
-            ID = le_rows$ID,
-            Ranking = le_rows$Ranking,
-            NES = round(le_rows$NES, 2),
-            padj = signif(le_rows$padj, 3),
-            `Leading Edge Genes` = vapply(strsplit(le_rows$leading_edge, ",", fixed = TRUE),
-                function(g) {
-                    g <- g[!is.na(g) & nzchar(g)]
-                    if (!is.null(anno_le)) {
-                        sym <- anno_le$symbol[match(g, anno_le$gene_id)]
-                        g[!is.na(sym)] <- sym[!is.na(sym)]
-                    }
-                    paste(head(g, 15), collapse = ", ")
-                }, character(1)),
-            check.names = FALSE, stringsAsFactors = FALSE)
-        print(knitr::kable(le_df, caption = sprintf("Leading edge genes, top pathways per ranking — %s, %s",
-                                                    rows$contrast[1], rows$database[1]),
-                           row.names = FALSE))
-        cat("\n\n")
-    }
-} else if (offline_ran) {
-    cat("No significant pathways with leading edge information.\n\n")
-}
+fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+for (ff in fgsea_files) {
+    label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
+    label_clean <- gsub("_", " ", label)
+    cat(sprintf("\n### %s\n\n", label_clean))
 
-fgsea_files <- if (offline_ran) character(0) else
-    list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
-if (length(fgsea_files) > 0) {
-    for (ff in fgsea_files) {
-        label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
-        label_clean <- gsub("_", " ", label)
-        cat(sprintf("\n### %s\n\n", label_clean))
+    fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
+    sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj <= gsea_cut, ]
 
-        fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
-        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj <= gsea_cut, ]
+    if (nrow(sig) > 0 && "leadingEdge" %in% names(sig)) {
+        sig <- head(sig[order(sig$padj), ], 10)  # Top 10 pathways
 
-        if (nrow(sig) > 0 && "leadingEdge" %in% names(sig)) {
-            sig <- head(sig[order(sig$padj), ], 10)  # Top 10 pathways
+        le_list <- list()
+        for (i in seq_len(nrow(sig))) {
+            pathway_name <- if ("pathway_name" %in% names(sig)) sig$pathway_name[i] else sig$pathway[i]
+            le_genes <- strsplit(sig$leadingEdge[i], ",")[[1]]
 
-            le_list <- list()
-            for (i in seq_len(nrow(sig))) {
-                pathway_name <- if ("pathway_name" %in% names(sig)) sig$pathway_name[i] else sig$pathway[i]
-                le_genes <- strsplit(sig$leadingEdge[i], ",")[[1]]
-
-                # Convert to gene symbols if annotation available
-                if (!is.null(anno_le)) {
-                    le_symbols <- anno_le$symbol[match(le_genes, anno_le$gene_id)]
-                    le_symbols[is.na(le_symbols)] <- le_genes[is.na(le_symbols)]
-                    le_genes <- le_symbols
-                }
-
-                le_list[[i]] <- data.frame(
-                    Pathway = pathway_name,
-                    NES = round(sig$NES[i], 2),
-                    padj = signif(sig$padj[i], 3),
-                    `Leading Edge Genes` = paste(head(le_genes, 15), collapse = ", "),
-                    check.names = FALSE,
-                    stringsAsFactors = FALSE
-                )
+            # Convert to gene symbols if annotation available
+            if (!is.null(anno_le)) {
+                le_symbols <- anno_le$symbol[match(le_genes, anno_le$gene_id)]
+                le_symbols[is.na(le_symbols)] <- le_genes[is.na(le_symbols)]
+                le_genes <- le_symbols
             }
 
-            le_df <- do.call(rbind, le_list)
-            print(knitr::kable(le_df, caption = paste("Leading edge genes for top pathways —", label_clean),
-                               row.names = FALSE))
-            cat("\n\n")
-        } else {
-            cat("No significant pathways with leading edge information.\n\n")
+            le_list[[i]] <- data.frame(
+                Pathway = pathway_name,
+                NES = round(sig$NES[i], 2),
+                padj = signif(sig$padj[i], 3),
+                `Leading Edge Genes` = paste(head(le_genes, 15), collapse = ", "),
+                check.names = FALSE,
+                stringsAsFactors = FALSE
+            )
         }
+
+        le_df <- do.call(rbind, le_list)
+        print(knitr::kable(le_df, caption = paste("Leading edge genes for top pathways —", label_clean),
+                           row.names = FALSE))
+        cat("\n\n")
+    } else {
+        cat("No significant pathways with leading edge information.\n\n")
     }
 }
 ```

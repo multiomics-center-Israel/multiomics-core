@@ -680,7 +680,7 @@ test_that("an offline run that loads no pathway table is reported as failed", {
     expect_false(grepl("was not run", s$text, fixed = TRUE))
 })
 
-test_that("the RNA report finds offline GSEA dotplots and opens no empty section", {
+test_that("the RNA report shows the online dotplots only, and opens no empty section", {
     d <- withr::local_tempdir()
     touch <- function(...) {
         f <- file.path(d, ...)
@@ -697,28 +697,19 @@ test_that("the RNA report finds offline GSEA dotplots and opens no empty section
 
     expect_false(dotplots()$shown)                                  # no plots at all
 
-    touch("GSEA", "KEGG", "dotplot.png")                            # not a unit dotplot
+    # An offline unit's dotplot is not embedded: the GSEA view draws its own plot.
+    touch("GSEA", "KEGG", "ranking_by_fc", "c1", "dotplot.png")
     expect_false(dotplots()$shown)
 
-    touch("plots", "pathway_c1_KEGG.png")                           # legacy layout still shown
-    x <- dotplots()
-    expect_true(x$shown)
-    expect_match(x$text, "### c1 KEGG", fixed = TRUE)
-
-    touch("GSEA", "KEGG", "ranking_by_fc", "c1", "dotplot.png")
-    touch("GSEA", "KEGG", "ranking_by_pval_with_direction", "c1", "dotplot.png")
-    touch("GSEA", "GO_BP", "ranking_by_fc", "c1", "dotplot.png")
+    touch("plots", "pathway_c1_KEGG.png")                           # online layout
     x <- dotplots()
     expect_true(x$shown)
     expect_match(x$text, "## Pathway Dotplots", fixed = TRUE)
-    # One tab per contrast and database, every ranking inside it.
-    expect_identical(lengths(regmatches(x$text, gregexpr("### c1 — KEGG", x$text, fixed = TRUE))), 1L)
-    expect_match(x$text, "### c1 — GO_BP", fixed = TRUE)
-    expect_match(x$text, "**Ranking: fc**", fixed = TRUE)
-    expect_match(x$text, "**Ranking: pval_with_direction**", fixed = TRUE)
-    expect_match(x$text, file.path("KEGG", "ranking_by_pval_with_direction", "c1", "dotplot.png"),
-                 fixed = TRUE)
-    expect_false(grepl("### c1 KEGG", x$text, fixed = TRUE))       # offline plots take precedence
+    expect_match(x$text, "### c1 KEGG", fixed = TRUE)
+
+    # In an offline run a plots/ folder left by an earlier online run is not shown.
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", n_significant = 3L)))
+    expect_false(dotplots()$shown)
 })
 
 test_that("the RNA report counts the online flat files as a completed run", {
@@ -921,34 +912,127 @@ test_that("read_offline_gsea_tables returns the empty layout when nothing is the
     expect_true(all(c("Pathway", "ID", "Ranking", "NES", "pval", "padj", "size") %in% names(tab)))
 })
 
-test_that("the report shows every ranking per contrast/database, and units with no result", {
+test_that("the GSEA view lists every significant pathway per ranking, and keeps units with no result", {
     skip_if_not_installed("knitr")
+    skip_if_not_installed("ggplot2")
+    skip_if_not_installed("htmltools")
     d <- withr::local_tempdir()
-    write_fgsea_unit(d, "KEGG", "fc", "c1", c("T1", "T2"), c(0.01, 0.2), c(2, -1))
-    write_fgsea_unit(d, "KEGG", "pval_with_direction", "c1", "T1", 0.02, 1.8)
+    # 25 significant pathways: more than the plot shows, all of them in the table.
+    ids <- sprintf("T%02d", 1:26)
+    write_fgsea_unit(d, "KEGG", "fc", "c1", ids, c(seq(0.001, 0.025, length.out = 25), 0.2),
+                     rep(c(2, -1), 13))
+    write_fgsea_unit(d, "KEGG", "pval_with_direction", "c1", "T01", 0.02, 1.8)
+    write_fgsea_unit(d, "KEGG", "pval_wo_direction", "c1", "T01", 0.03, 1.5)
     write_fgsea_unit(d, "GO_BP", "fc", "c1", "G1", 0.6, 0.5)    # nothing significant
-    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc"),
-                           manifest_row("GSEA", "KEGG", "pval_with_direction"),
-                           manifest_row("GSEA", "GO_BP", "fc")))
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", n_significant = 25L),
+                           manifest_row("GSEA", "KEGG", "pval_with_direction", n_significant = 1L),
+                           manifest_row("GSEA", "KEGG", "pval_wo_direction", n_significant = 1L),
+                           manifest_row("GSEA", "GO_BP", "fc"),
+                           manifest_row("GSEA", "GO_BP", "pval_with_direction",
+                                        evaluated = FALSE)))
 
     env <- report_env(d)
-    tables <- render_chunks(env, c("fgsea-tables-prep", "fgsea-tables"))
-    expect_match(tables, "not independent evidence", fixed = TRUE)
-    expect_match(tables, "### c1 — KEGG", fixed = TRUE)
-    expect_match(tables, "2 row(s): 1 distinct pathway(s) across 2 ranking(s)", fixed = TRUE)
-    expect_match(tables, "log2 fold change", fixed = TRUE)
-    expect_match(tables, "signed -log10 p-value", fixed = TRUE)
-    expect_false(grepl("Term T2", tables, fixed = TRUE))       # not significant
-    expect_match(tables, "### c1 — GO_BP", fixed = TRUE)
-    expect_match(tables, "No significant pathways (padj ≤ 0.05) in any ranking", fixed = TRUE)
-    # Leading edge: per ranking, the genes as reported.
-    le <- render_chunks(env, "leading-edge")
-    expect_match(le, "g1, g2, g3", fixed = TRUE)
-    expect_match(le, "signed -log10 p-value", fixed = TRUE)
+    eval(parse(text = report_chunk("gsea-view-data")), envir = env)
+    expect_true(env$has_gsea_view)
+
+    # One row per pathway and ranking; a pathway significant under three
+    # rankings is three rows, each with its own statistics.
+    tbl <- env$gsea_tbl
+    expect_identical(names(tbl)[1:3], c("Contrast", "Database", "Ranking"))
+    expect_equal(sum(tbl$Ranking == "fc"), 25L)                 # not cut to the plot's 20
+    expect_false("Term T26" %in% tbl$Pathway)                   # not significant
+    t01 <- tbl[tbl$ID == "T01", ]
+    expect_setequal(t01$Ranking, c("fc", "pval_with_direction", "pval_wo_direction"))
+    expect_equal(t01$padj[t01$Ranking == "pval_with_direction"], 0.02)
+    expect_equal(t01$padj[t01$Ranking == "pval_wo_direction"], 0.03)
+    # No direction for the unsigned ranking.
+    expect_true(is.na(t01$Direction[t01$Ranking == "pval_wo_direction"]))
+    expect_identical(t01$Direction[t01$Ranking == "fc"], "Up-regulated")
+    expect_identical(t01$`Leading edge`[1], "g1, g2, g3")
+
+    # Every evaluated unit can be selected; a failed one is not offered.
+    view <- env$gsea_view
+    expect_setequal(names(view$c1), c("KEGG", "GO_BP"))
+    expect_identical(view$c1$KEGG$fc$n, 25L)
+    expect_match(view$c1$KEGG$fc$img, "^data:image/png;base64,")
+    expect_match(view$c1$KEGG$pval_wo_direction$img, "^data:image/png;base64,")
+    expect_identical(view$c1$GO_BP$fc$n, 0L)                    # evaluated, nothing significant
+    expect_null(view$c1$GO_BP$fc$img)
+    expect_null(view$c1$GO_BP$pval_with_direction)              # failed
+
+    env$figure_legend <- function(text) cat(text, "\n")
+    controls <- render_chunks(env, "gsea-view-controls")
+    expect_match(controls, "## GSEA", fixed = TRUE)
+    expect_match(controls, "not independent evidence", fixed = TRUE)
+    expect_match(controls, '<option value="c1">', fixed = TRUE)
+    expect_match(controls, '<option value="GO_BP">', fixed = TRUE)
+    # Rankings in label order, each selectable by its id.
+    expect_match(controls, '<option value="fc">fc (log2 fold change)</option>', fixed = TRUE)
+    expect_match(controls, '<option value="pval_wo_direction">', fixed = TRUE)
+    expect_true(regexpr('<option value="fc">', controls, fixed = TRUE) <
+                regexpr('<option value="pval_wo_direction">', controls, fixed = TRUE))
+    expect_match(controls, 'onchange="updateGseaView()"', fixed = TRUE)
+    # The plot of the first selection is in place before any selector is used.
+    expect_match(controls, paste0('<img id="gsea_view_image" src="', view$c1$KEGG$fc$img),
+                 fixed = TRUE)
+})
+
+test_that("the GSEA view shortens long leading edges and says how many genes are left out", {
+    skip_if_not_installed("knitr")
+    skip_if_not_installed("ggplot2")
+    d <- withr::local_tempdir()
+    genes <- paste0("g", 1:18)
+    cp <- data.frame(ID = "map00010", Description = "Glycolysis", setSize = 40L,
+                     enrichmentScore = -0.6, NES = -1.9, pvalue = 0.001, p.adjust = 0.01,
+                     core_enrichment = paste(genes, collapse = "/"), padj = 0.01,
+                     pathway = "Glycolysis", stringsAsFactors = FALSE)
+    write_gsea_unit(d, "KEGG", "fc", "c1", cp)
+    write.csv(data.frame(gene_id = "g1", symbol = "SYM1"),
+              file.path(d, "gene_annotation.csv"), row.names = FALSE)
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", n_significant = 1L)))
+
+    env <- report_env(d)
+    eval(parse(text = report_chunk("gsea-view-data")), envir = env)
+    expect_identical(env$gsea_tbl$`Leading edge`,
+                     paste0("SYM1, ", paste(genes[2:15], collapse = ", "), " (+3 more)"))
+    expect_identical(env$gsea_tbl$Size, 40L)
+})
+
+test_that("the GSEA table keeps make_dt's formatting and adds its own options locally", {
+    skip_if_not_installed("knitr")
+    skip_if_not_installed("ggplot2")
+    skip_if_not_installed("DT")
+    d <- withr::local_tempdir()
+    write_fgsea_unit(d, "KEGG", "fc", "c1", "T1", 1e-30, 2)
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", n_significant = 1L)))
+    env <- report_env(d)
+    # The report's own make_dt(), taken from its setup chunk.
+    for (e in parse(text = report_chunk("setup"))) {
+        if (is.call(e) && identical(e[[1]], as.name("<-")) && identical(e[[2]], as.name("make_dt"))) {
+            eval(e, envir = env)
+        }
+    }
+    eval(parse(text = report_chunk("gsea-view-data")), envir = env)
+    eval(parse(text = report_chunk("gsea-view-table")), envir = env)
+
+    dt <- env$gsea_dt
+    expect_s3_class(dt, "datatables")
+    expect_identical(dt$elementId, "gsea_view_table")           # what the selectors address
+    opt <- dt$x$options
+    expect_match(opt$dom, "l", fixed = TRUE)                    # rows-per-page menu
+    expect_true(opt$pageLength %in% opt$lengthMenu)
+    expect_identical(names(env$gsea_tbl)[opt$order[[1]][[1]] + 1L], "padj")
+    expect_setequal(vapply(opt$buttons, `[[`, character(1), "extend"), c("csv", "excel"))
+    for (b in opt$buttons) expect_identical(b$exportOptions$orthogonal, "export")
+    # The stored value is untouched; only its display is formatted.
+    expect_equal(dt$x$data[[which(names(env$gsea_tbl) == "padj")]], 1e-30)
+    render <- vapply(opt$columnDefs, function(def) as.character(def$render %||% ""), character(1))
+    expect_true(any(grepl("formatSignif", render, fixed = TRUE)))
 })
 
 test_that("the report filters GSEA tables at a non-default cutoff, inclusive", {
     skip_if_not_installed("knitr")
+    skip_if_not_installed("ggplot2")
     rna <- list(enrichment = list(gsea_pvalue_cutoff = 0.1))
 
     # Offline: per-ranking results.csv.
@@ -957,13 +1041,9 @@ test_that("the report filters GSEA tables at a non-default cutoff, inclusive", {
                      c(0.08, 0.1, 0.12), c(1, 1, 1))
     write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc")))
     env <- report_env(d, rna)
-    tables <- render_chunks(env, c("fgsea-tables-prep", "fgsea-tables"))
-    le <- render_chunks(env, "leading-edge")
-    for (out in list(tables, le)) {
-        expect_match(out, "Term Tin", fixed = TRUE)
-        expect_match(out, "Term Tat", fixed = TRUE)            # exactly on the cutoff
-        expect_false(grepl("Term Tout", out, fixed = TRUE))
-    }
+    eval(parse(text = report_chunk("gsea-view-data")), envir = env)
+    expect_setequal(env$gsea_tbl$Pathway, c("Term Tin", "Term Tat"))   # Tat: exactly on the cutoff
+    expect_identical(env$gsea_view$c1$KEGG$fc$n, 2L)
 
     # Online: the flat pathway_<contrast>_<db>_fgsea.csv file.
     d2 <- withr::local_tempdir()
