@@ -192,6 +192,29 @@ write_metabolomics_outputs <- function(pre, config, out_dir) {
 }
 
 
+#' Make the metabolomics final-results TSV safe for line-oriented readers.
+#'
+#' Chemical annotations can contain literal CR/LF/tab characters. The default
+#' unquoted TSV writer emits them as row/column delimiters, making one feature
+#' look like multiple records. Clean only a copy for TSV: the original table,
+#' including full annotations and numeric values, is retained for Excel.
+sanitize_metabolomics_tsv_records <- function(df) {
+    text_cols <- vapply(df, function(x) is.character(x) || is.factor(x),
+                        logical(1))
+    for (j in which(text_cols)) {
+        df[[j]] <- gsub("[\\r\\n\\t]+", " ", as.character(df[[j]]), perl = TRUE)
+    }
+    df
+}
+
+
+#' Export final results as a TSV with exactly one physical line per feature.
+write_metabolomics_final_results_tsv <- function(final_results, datasets_dir) {
+    save_tsv(sanitize_metabolomics_tsv_records(final_results), datasets_dir,
+             "Final_results_metabolomics.tsv")
+}
+
+
 #' Write metabolomics final results (TSV + Excel)
 #'
 #' Builds the final_results table from DE summary and exports:
@@ -236,8 +259,7 @@ write_metabolomics_final_results <- function(pre, de_res, config, out_dir,
     )
 
     # Write TSV
-    files <- c(files, save_tsv(final_results, dirs$datasets,
-                                "Final_results_metabolomics.tsv"))
+    files <- c(files, write_metabolomics_final_results_tsv(final_results, dirs$datasets))
 
     # Extract Excel config
     excel_cfg <- config$modes$metabolomics$excel %||% list()
