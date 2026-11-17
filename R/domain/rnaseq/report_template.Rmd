@@ -2932,6 +2932,97 @@ has_pathway_plots <- !offline_ran && length(legacy_dotplots) > 0
 enr_settings <- resolve_rna_gsea_settings(cfg)
 gsea_cut <- enr_settings$sig_cutoff
 ora_cut  <- enr_settings$ora_cutoff
+
+# --- Shared by the offline GSEA and ORA views below --------------------------
+# In each view three selectors choose one analysis: its bar plot (one embedded
+# image per analysis) is swapped in and the view's one table is narrowed to its
+# rows, by updateEnrichmentView() at the end of this section.
+
+# Genes of each row (a list of ID vectors): the first 15, as symbols where
+# gene_annotation.csv names them, and how many more there are.
+enrichment_gene_text <- function(genes) {
+    anno_file <- file.path(enrich_dir, "gene_annotation.csv")
+    anno <- if (file.exists(anno_file)) read.csv(anno_file, stringsAsFactors = FALSE)
+    vapply(genes, function(g) {
+        if (!is.null(anno)) {
+            sym <- anno$symbol[match(g, anno$gene_id)]
+            g[!is.na(sym)] <- sym[!is.na(sym)]
+        }
+        more <- length(g) - 15L
+        paste0(paste(head(g, 15), collapse = ", "),
+               if (more > 0) sprintf(" (+%d more)", more) else "")
+    }, character(1))
+}
+
+# A bar plot as an embedded PNG; NULL if it cannot be drawn, which leaves the
+# analysis in the table.
+enrichment_plot_uri <- function(p, n_bar) {
+    tryCatch({
+        png_file <- tempfile(fileext = ".png")
+        ggplot2::ggsave(png_file, p, width = 11,
+                        height = .enrich_bar_height_in(n_bar) + 0.6, dpi = 110)
+        uri <- knitr::image_uri(png_file)
+        unlink(png_file)
+        uri
+    }, error = function(e) NULL)
+}
+
+# The view's selectors (each list(name, label, values, text); their order is
+# the order of the table's first three columns), the plot of the first
+# selection, and the line where messages go.
+enrichment_view_controls <- function(view, selectors, units, alt) {
+    cat(sprintf('<div id="%s_view_controls" style="margin-bottom: 16px;">\n', view))
+    for (sel in selectors) {
+        id <- paste0(view, "_view_", sel$name)
+        cat(sprintf('<label for="%s"><strong>%s:</strong></label>\n', id, sel$label))
+        cat(sprintf(paste0('<select id="%s" onchange="updateEnrichmentView(\'%s\')" style="padding: 8px; ',
+                           'border-radius: 4px; border: 1px solid #ccc; font-size: 14px; margin-right: 18px;">\n'),
+                    id, view))
+        cat(sprintf('<option value="%s">%s</option>\n',
+                    htmltools::htmlEscape(sel$values, attribute = TRUE),
+                    htmltools::htmlEscape(sel$text)), sep = "")
+        cat('</select>\n')
+    }
+    cat('</div>\n\n')
+    # The first choice of each selector is shown until the reader changes one.
+    first <- units[[selectors[[1]]$values[1]]][[selectors[[2]]$values[1]]][[selectors[[3]]$values[1]]]
+    cat('<div style="text-align: center;">\n')
+    cat(sprintf('<img id="%s_view_image" ', view),
+        if (is.null(first$img)) 'style="display: none; ' else paste0('src="', first$img, '" style="'),
+        sprintf('width: 100%%; max-width: 1000px; height: auto;" alt="%s" />\n', alt), sep = "")
+    cat(sprintf('<p id="%s_view_message" style="font-style: italic;"></p>\n', view))
+    cat('</div>\n\n')
+}
+
+# The view's table: make_dt(), plus options local to it (make_dt() is shared):
+# the id the selectors address, a rows-per-page menu, smallest adjusted p
+# first, counts as whole numbers, exports that carry the stored numbers rather
+# than the rounded display, and the gene list closed until asked for, so it
+# adds no height to a row. Only the display of the list changes: search and
+# exports still see it. Its width is fixed so that opening a list changes the
+# row's height and no column's width, which would leave the header out of line.
+enrichment_view_dt <- function(tbl, view, caption, counts, list_col) {
+    dt <- make_dt(tbl, caption = caption)
+    dt$elementId <- paste0(view, "_view_table")
+    dt$x$options$dom <- "Blfrtip"
+    dt$x$options$lengthMenu <- c(15, 25, 50, 100)
+    dt$x$options$order <- list(list(which(names(tbl) == "padj") - 1L, "asc"))
+    for (b in seq_along(dt$x$options$buttons)) {
+        dt$x$options$buttons[[b]]$exportOptions <- list(orthogonal = "export")
+    }
+    dt <- DT::formatRound(dt, counts, digits = 0)
+    dt$x$options$columnDefs <- c(
+        list(list(
+            targets = which(names(tbl) == list_col) - 1L,
+            orderable = FALSE,
+            render = DT::JS(
+                "function(data, type) {",
+                "  return type === 'display' && data ?",
+                "    '<details style=\"width: 200px;\"><summary>show</summary>' + data + '</details>' : data;",
+                "}"))),
+        dt$x$options$columnDefs)
+    dt
+}
 ```
 
 ```{r pathway-skip, eval=!has_enrichment, results='asis'}
@@ -3002,25 +3093,11 @@ if (has_enrichment && offline_ran) {
 }
 if (has_gsea_view) {
     # Leading edge, compact: how many genes the GSEA reported, and the first 15
-    # of them (as symbols where annotated) for the table to show on request.
-    # The complete lists stay in each analysis's results.csv.
-    anno_le <- NULL
-    anno_file_le <- file.path(enrich_dir, "gene_annotation.csv")
-    if (file.exists(anno_file_le)) {
-        anno_le <- read.csv(anno_file_le, stringsAsFactors = FALSE)
-    }
+    # of them for the table to show on request. The complete lists stay in each
+    # analysis's results.csv.
     gsea_le_genes <- lapply(strsplit(offline_gsea$leading_edge, ",", fixed = TRUE),
                             function(g) g[!is.na(g) & nzchar(g)])
-    gsea_le <- vapply(gsea_le_genes,
-        function(g) {
-            if (!is.null(anno_le)) {
-                sym <- anno_le$symbol[match(g, anno_le$gene_id)]
-                g[!is.na(sym)] <- sym[!is.na(sym)]
-            }
-            more <- length(g) - 15L
-            paste0(paste(head(g, 15), collapse = ", "),
-                   if (more > 0) sprintf(" (+%d more)", more) else "")
-        }, character(1))
+    gsea_le <- enrichment_gene_text(gsea_le_genes)
     # Contrast, Database and Ranking come first: the selectors filter on them,
     # and they keep an exported table self-describing.
     gsea_tbl <- data.frame(
@@ -3049,8 +3126,7 @@ if (has_gsea_view) {
                 stringsAsFactors = FALSE)
             n_bar <- min(ENRICH_BAR_TOP_N, nrow(bar_df))
             # A plot that cannot be drawn leaves the analysis in the table.
-            unit$img <- tryCatch({
-                png_file <- tempfile(fileext = ".png")
+            bar_plot <- tryCatch({
                 bar_plot <- plot_gsea_enrichment_bar(bar_df, max_terms = n_bar)
                 # NES axis view, for the labels at the bar ends. It spans zero
                 # and every plotted bar (the builder's $data, so a pathway it
@@ -3062,17 +3138,13 @@ if (has_gsea_view) {
                 nes <- bar_plot$data$NES
                 room <- c(if (any(nes < 0)) 0.3 else 0.02, if (any(nes >= 0)) 0.3 else 0.02)
                 span <- (max(0, nes) - min(0, nes)) / (1 - sum(room))
-                bar_plot <- bar_plot +
+                bar_plot +
                     ggplot2::coord_cartesian(
                         xlim = c(min(0, nes) - room[1] * span, max(0, nes) + room[2] * span),
                         expand = c(left = FALSE, right = FALSE)) +
                     ggplot2::theme(legend.position = "bottom")
-                ggplot2::ggsave(png_file, bar_plot, width = 11,
-                                height = .enrich_bar_height_in(n_bar) + 0.6, dpi = 110)
-                uri <- knitr::image_uri(png_file)
-                unlink(png_file)
-                uri
             }, error = function(e) NULL)
+            if (!is.null(bar_plot)) unit$img <- enrichment_plot_uri(bar_plot, n_bar)
         }
         if (is.null(gsea_view[[cn]])) gsea_view[[cn]] <- list()
         if (is.null(gsea_view[[cn]][[db]])) gsea_view[[cn]][[db]] <- list()
@@ -3110,33 +3182,15 @@ if ("any_contrast" %in% gsea_units$contrast) {
 gsea_rankings <- c(intersect(names(.RNA_GSEA_RANKING_LABELS), gsea_units$ranking),
                    setdiff(gsea_units$ranking, names(.RNA_GSEA_RANKING_LABELS)))
 gsea_selectors <- list(
-    list(id = "gsea_view_contrast", label = "Contrast",
+    list(name = "contrast", label = "Contrast",
          values = unique(gsea_units$contrast), text = unique(gsea_units$contrast)),
-    list(id = "gsea_view_database", label = "Database",
+    list(name = "database", label = "Database",
          values = unique(gsea_units$database), text = unique(gsea_units$database)),
-    list(id = "gsea_view_ranking", label = "Ranking", values = gsea_rankings,
+    list(name = "ranking", label = "Ranking", values = gsea_rankings,
          text = ifelse(gsea_rankings %in% names(.RNA_GSEA_RANKING_LABELS),
                        paste0(gsea_rankings, " (", .RNA_GSEA_RANKING_LABELS[gsea_rankings], ")"),
                        gsea_rankings)))
-cat('<div style="margin-bottom: 16px;">\n')
-for (s in gsea_selectors) {
-    cat(sprintf('<label for="%s"><strong>%s:</strong></label>\n', s$id, s$label))
-    cat(sprintf('<select id="%s" onchange="updateGseaView()" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px; margin-right: 18px;">\n', s$id))
-    cat(sprintf('<option value="%s">%s</option>\n',
-                htmltools::htmlEscape(s$values, attribute = TRUE),
-                htmltools::htmlEscape(s$text)), sep = "")
-    cat('</select>\n')
-}
-cat('</div>\n\n')
-
-# The first choice of each selector is shown until the reader changes one.
-gsea_first <- gsea_view[[gsea_selectors[[1]]$values[1]]][[gsea_selectors[[2]]$values[1]]][[gsea_selectors[[3]]$values[1]]]
-cat('<div style="text-align: center;">\n')
-cat('<img id="gsea_view_image" ',
-    if (is.null(gsea_first$img)) 'style="display: none; ' else paste0('src="', gsea_first$img, '" style="'),
-    'width: 100%; max-width: 1000px; height: auto;" alt="GSEA enrichment bar plot" />\n', sep = "")
-cat('<p id="gsea_view_message" style="font-style: italic;"></p>\n')
-cat('</div>\n\n')
+enrichment_view_controls("gsea", gsea_selectors, gsea_view, "GSEA enrichment bar plot")
 figure_legend(paste0(
     "NES of up to ", ENRICH_BAR_TOP_N, " significant pathways of the selected analysis, ",
     "those with the smallest adjusted p-values, ordered by NES. Fill: −log10 adjusted ",
@@ -3145,53 +3199,159 @@ figure_legend(paste0(
 ```
 
 ```{r gsea-view-table, eval=has_gsea_view, echo=FALSE}
-gsea_dt <- make_dt(gsea_tbl, caption = "GSEA significant pathways")
-# Local to this table (make_dt() is shared): the id the selectors address, a
-# rows-per-page menu, smallest adjusted p first, counts as whole numbers,
-# and exports that carry the stored numbers rather than the rounded display.
-gsea_dt$elementId <- "gsea_view_table"
-gsea_dt$x$options$dom <- "Blfrtip"
-gsea_dt$x$options$lengthMenu <- c(15, 25, 50, 100)
-gsea_dt$x$options$order <- list(list(which(names(gsea_tbl) == "padj") - 1L, "asc"))
-for (b in seq_along(gsea_dt$x$options$buttons)) {
-    gsea_dt$x$options$buttons[[b]]$exportOptions <- list(orthogonal = "export")
-}
-gsea_dt <- DT::formatRound(gsea_dt, c("Size", "LE genes"), digits = 0)
-# The gene list stays closed until asked for, so it adds no height to a row.
-# Only the display changes: search and exports still see the list. The width is
-# fixed so that opening a list changes the row's height and no column's width,
-# which would leave the header out of line with the body.
-gsea_dt$x$options$columnDefs <- c(
-    list(list(
-        targets = which(names(gsea_tbl) == "Leading edge") - 1L,
-        orderable = FALSE,
-        render = DT::JS(
-            "function(data, type) {",
-            "  return type === 'display' && data ?",
-            "    '<details style=\"width: 200px;\"><summary>show</summary>' + data + '</details>' : data;",
-            "}"))),
-    gsea_dt$x$options$columnDefs)
+gsea_dt <- enrichment_view_dt(gsea_tbl, "gsea", "GSEA significant pathways",
+                              counts = c("Size", "LE genes"), list_col = "Leading edge")
 gsea_dt
 ```
 
-<script>
-// GSEA view: the three selectors choose one analysis. Its plot is swapped in,
-// as the PCA selector does, and the table is narrowed to its rows.
-var gseaViewUnits = `r if (has_gsea_view) jsonlite::toJSON(gsea_view, auto_unbox = TRUE) else "{}"`;
+```{r ora-view-data, include=FALSE}
+# Offline ORA view, laid out as the GSEA view: the ORA of DE genes only, per
+# contrast its All DE, Up and Down gene sets, and the union of DE genes across
+# contrasts (any_contrast). ORA of gene clusters and binary patterns is not
+# shown. Each gene set is its own test; nothing is combined across gene sets,
+# contrasts or databases. The selectable analyses come from the manifest, so
+# one with nothing significant can still be chosen.
+has_ora_view <- FALSE
+ora_view <- list()
+if (has_enrichment && offline_ran) {
+    ora_res <- read_offline_ora_tables(file.path(enrich_dir, "ORA"), enr_manifest, ora_cut)
+    ora_units <- ora_res$units
+    ora_terms <- ora_res$terms
+    has_ora_view <- nrow(ora_units) > 0
+}
+if (has_ora_view) {
+    ora_genes <- lapply(strsplit(ora_terms$geneID, "/", fixed = TRUE),
+                        function(g) g[!is.na(g) & nzchar(g)])
+    # Contrast, Database and Gene set come first: the selectors filter on them,
+    # and they keep an exported table self-describing.
+    ora_tbl <- data.frame(
+        Contrast = ora_terms$contrast, Database = ora_terms$database,
+        `Gene set` = ora_terms$gene_set, Pathway = ora_terms$Description,
+        ID = ora_terms$ID, Count = ora_terms$Count, GeneRatio = ora_terms$GeneRatio,
+        BgRatio = ora_terms$BgRatio, `Fold enrichment` = ora_terms$FoldEnrichment,
+        pvalue = ora_terms$pvalue, padj = ora_terms$p.adjust,
+        Genes = enrichment_gene_text(ora_genes),
+        check.names = FALSE, stringsAsFactors = FALSE)
 
-function updateGseaView() {
-    var picked = ["gsea_view_contrast", "gsea_view_database", "gsea_view_ranking"].map(
-        function (id) { return document.getElementById(id).value; });
-    var unit = ((gseaViewUnits[picked[0]] || {})[picked[1]] || {})[picked[2]];
-    var img = document.getElementById("gsea_view_image");
+    # One bar plot per analysis. plot_ora_enrichment_bar() is the builder of the
+    # exported enrichment_bar_top20.pdf; its axis starts at zero and keeps room
+    # right of the bars for their labels, so only the legend is moved below.
+    for (u in seq_len(nrow(ora_units))) {
+        cn <- ora_units$contrast[u]; db <- ora_units$database[u]; gs <- ora_units$gene_set[u]
+        rows <- ora_terms[ora_terms$contrast == cn & ora_terms$database == db &
+                          ora_terms$gene_set == gs, , drop = FALSE]
+        unit <- list(n = nrow(rows))
+        if (nrow(rows) > 0) {
+            n_bar <- min(ENRICH_BAR_TOP_N, nrow(rows))
+            ora_plot <- tryCatch(
+                plot_ora_enrichment_bar(rows, max_terms = n_bar) +
+                    ggplot2::theme(legend.position = "bottom"),
+                error = function(e) NULL)
+            if (!is.null(ora_plot)) unit$img <- enrichment_plot_uri(ora_plot, n_bar)
+        }
+        if (is.null(ora_view[[cn]])) ora_view[[cn]] <- list()
+        if (is.null(ora_view[[cn]][[db]])) ora_view[[cn]][[db]] <- list()
+        ora_view[[cn]][[db]][[gs]] <- unit
+    }
+}
+```
+
+```{r ora-view-none, eval=has_enrichment && offline_ran && !has_ora_view, results='asis', echo=FALSE}
+cat("\n## ORA\n\n")
+cat("No ORA of differentially expressed genes is recorded for this run in ",
+    "`Enrichment/enrichment_manifest.csv`. It runs for contrasts with DE genes, ",
+    "and not in multiomics mode.\n", sep = "")
+```
+
+```{r ora-view-controls, eval=has_ora_view, results='asis', echo=FALSE}
+cat("\n## ORA\n\n")
+cat("Over-representation analysis (ORA) tests whether a pathway holds more of a ",
+    "set of differentially expressed (DE) genes than expected by chance, against the ",
+    "genes annotated in that database. Each contrast has three gene sets: All DE, ",
+    "Up and Down, the genes the DE analysis called in that contrast. Each gene set ",
+    "is a separate test; p-values are not combined across gene sets, contrasts or ",
+    "databases. Choose a contrast, a database and a gene set: the plot and the ",
+    "table below both show that one analysis. The plot shows up to ",
+    ENRICH_BAR_TOP_N, " of its significant terms, those with the smallest adjusted ",
+    "p-values, ordered by gene count; the table lists every term with adjusted ",
+    "p-value < ", format(ora_cut), ". `Count` is the number of the gene set's genes ",
+    "in the term; `show` lists the first 15. GO terms are the full list, not the ",
+    "simplified one. The table each analysis exported is ",
+    "`Enrichment/ORA/<database>/contrasts/<contrast>/{de,up,down}/results.csv`. ",
+    "ORA of gene clusters and binary patterns is not shown here; it is exported ",
+    "under `Enrichment/ORA/<database>/partition` and `binary_patterns`.\n\n", sep = "")
+if ("any_contrast" %in% ora_units$contrast) {
+    cat("`any_contrast` is the union of genes DE in at least one contrast, tested ",
+        "once as All DE; its table is ",
+        "`Enrichment/ORA/<database>/all_DE/any_contrast/results.csv`.\n\n", sep = "")
+}
+
+# The union of DE genes after the contrasts, so the two kinds stay apart.
+ora_contrasts <- unique(ora_units$contrast)
+ora_contrasts <- c(setdiff(ora_contrasts, "any_contrast"),
+                   intersect(ora_contrasts, "any_contrast"))
+ora_gene_sets <- intersect(c("All DE", "Up", "Down"), ora_units$gene_set)
+ora_selectors <- list(
+    list(name = "contrast", label = "Contrast", values = ora_contrasts,
+         text = ifelse(ora_contrasts == "any_contrast",
+                       "any_contrast (union of DE genes)", ora_contrasts)),
+    list(name = "database", label = "Database",
+         values = unique(ora_units$database), text = unique(ora_units$database)),
+    list(name = "geneset", label = "Gene set", values = ora_gene_sets, text = ora_gene_sets))
+enrichment_view_controls("ora", ora_selectors, ora_view, "ORA enrichment bar plot")
+figure_legend(paste0(
+    "Gene count of up to ", ENRICH_BAR_TOP_N, " significant terms of the selected ",
+    "analysis, those with the smallest adjusted p-values, ordered by gene count. Fill: ",
+    "−log10 adjusted p-value. Bar labels: the gene set's genes in the term / genes ",
+    "annotated to the term, and fold enrichment (FE)."))
+```
+
+```{r ora-view-table, eval=has_ora_view, echo=FALSE}
+ora_dt <- enrichment_view_dt(ora_tbl, "ora", "ORA significant terms",
+                             counts = "Count", list_col = "Genes")
+ora_dt
+```
+
+```{r enrichment-views-js, include=FALSE}
+# What the selector script below needs of each view that is shown: its plots
+# and counts per analysis, and its two messages.
+enrichment_views <- Filter(Negate(is.null), list(
+    gsea = if (has_gsea_view) list(
+        units = gsea_view,
+        none = sprintf("No significant pathways (adjusted p-value ≤ %s) for this selection.",
+                       format(gsea_cut)),
+        not_run = paste("No result for this combination: it was not run, or it failed",
+                        "(see Enrichment/enrichment_manifest.csv).")),
+    ora = if (has_ora_view) list(
+        units = ora_view,
+        none = sprintf("No significant terms (adjusted p-value < %s) for this selection.",
+                       format(ora_cut)),
+        not_run = paste("No result for this combination: it was not run",
+                        "(see Enrichment/enrichment_manifest.csv). The union of DE genes",
+                        "(any_contrast) has All DE only."))))
+enrichment_views_json <- if (length(enrichment_views) > 0) {
+    jsonlite::toJSON(enrichment_views, auto_unbox = TRUE)
+} else "{}"
+```
+
+<script>
+// Enrichment views (GSEA, ORA): in each, three selectors choose one analysis.
+// Its plot is swapped in, as the PCA selector does, and the view's table is
+// narrowed to its rows: an exact match on the table's first three columns,
+// which hold the selected values in selector order.
+var enrichmentViews = `r enrichment_views_json`;
+
+function updateEnrichmentView(view) {
+    var spec = enrichmentViews[view];
+    var picked = $("#" + view + "_view_controls select").map(function () { return this.value; }).get();
+    var unit = ((spec.units[picked[0]] || {})[picked[1]] || {})[picked[2]];
+    var img = document.getElementById(view + "_view_image");
     if (unit && unit.img) img.src = unit.img;
     img.style.display = unit && unit.img ? "" : "none";
-    document.getElementById("gsea_view_message").textContent =
-        !unit ? "No result for this combination: it was not run, or it failed (see Enrichment/enrichment_manifest.csv)."
-        : unit.n === 0 ? "No significant pathways (adjusted p-value ≤ `r format(gsea_cut)`) for this selection."
-        : unit.img ? "" : "The plot could not be drawn; the table below lists the pathways.";
-    // Exact match on the first three columns: Contrast, Database, Ranking.
-    var table = $("#gsea_view_table").data("datatable");
+    document.getElementById(view + "_view_message").textContent =
+        !unit ? spec.not_run : unit.n === 0 ? spec.none
+        : unit.img ? "" : "The plot could not be drawn; the table below lists the results.";
+    var table = $("#" + view + "_view_table").data("datatable");
     if (!table) return;
     picked.forEach(function (value, column) {
         table.column(column).search(
@@ -3201,7 +3361,7 @@ function updateGseaView() {
 }
 
 $(window).on("load", function () {
-    if (document.getElementById("gsea_view_contrast")) updateGseaView();
+    for (var view in enrichmentViews) updateEnrichmentView(view);
 });
 </script>
 
