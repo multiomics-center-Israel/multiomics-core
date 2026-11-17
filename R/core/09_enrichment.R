@@ -4159,10 +4159,12 @@ write_cluster_ora_outputs <- function(ora_result, unit_dir,
                   quote = TRUE, row.names = TRUE)
     }
 
-    # Simplify table (only when GO simplify ran and produced a table)
+    # Simplify table (only when GO simplify ran and produced a table). Quoted
+    # like results.csv: GO term names often contain commas, which unquoted
+    # would split a row into extra columns.
     if (!is.null(enrichment_table_simplify)) {
         write.csv(x = enrichment_table_simplify, file = file.path(unit_dir, "simplify.csv"),
-                  quote = FALSE, row.names = TRUE)
+                  quote = TRUE, row.names = TRUE)
     }
 
     # Enrichment summary bar plots (config-gated: plots.dotplot toggle). §23 B:

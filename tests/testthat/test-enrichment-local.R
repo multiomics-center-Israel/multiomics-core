@@ -589,6 +589,26 @@ test_that("#5 plots.dotplot=FALSE suppresses the ORA enrichment bars; TRUE write
     expect_false(file.exists(file.path(d_on, "dotplot.pdf")))                # old dotplot retired
 })
 
+test_that("simplify.csv reads back with the columns it was written with", {
+    # GO term names with commas, as in the real GO tree.
+    tbl <- data.frame(
+        Cluster = c("up", "up"), ID = c("GO:0016772", "GO:0006355"),
+        Description = c("transferase activity, transferring phosphorus-containing groups",
+                        "regulation of DNA-templated transcription"),
+        GeneRatio = c("3/40", "5/40"), p.adjust = c(0.01, 0.02), geneID = c("g1/g2/g3", "g4"),
+        stringsAsFactors = FALSE)
+    d <- withr::local_tempdir()
+    write_cluster_ora_outputs(list(NULL, NULL, tbl, tbl), unit_dir = d,
+                              type = "GO", dotplot = FALSE)
+
+    for (f in c("results.csv", "simplify.csv")) {
+        back <- utils::read.csv(file.path(d, f), row.names = 1, stringsAsFactors = FALSE)
+        expect_identical(names(back), names(tbl))
+        expect_identical(back$Description, tbl$Description)
+        expect_identical(back$p.adjust, tbl$p.adjust)
+    }
+})
+
 test_that("#9 shared-gene keeps enriched terms with NA in optional columns", {
     skip_if_not_installed("pheatmap")
     # 2 terms, overlapping genes; one term has qvalue = NA (an optional column).
