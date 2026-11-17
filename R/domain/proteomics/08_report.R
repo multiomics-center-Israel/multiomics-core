@@ -690,6 +690,28 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     norm_m <- tolower(as.character(cfg$normalization$method %||% "none"))
     dp <- paste(dp, if (identical(norm_m, "median")) {
         "Sample intensities were median-centred on the log2 scale."
+    } else if (proteomics_uses_vsn(config)) {
+        # The fold-change sentences are left out for precomputed DE: those
+        # statistics were imported, not fitted on this matrix. They say which
+        # scale the cut-off was applied on and nothing about where: under
+        # multi-imputation that is each run, not the pooled value reported, and
+        # the differential-abundance paragraph is the one that says so.
+        paste(c(
+            paste("Intensities were calibrated and transformed with",
+                  "variance-stabilizing normalization (vsn): a per-sample affine",
+                  "calibration followed by a generalized-log2 transform."),
+            if (!is_precomputed) paste(
+                "Differential abundance was tested on that scale, so the reported",
+                "log2 fold changes are built from differences of generalized-log2 values. They",
+                "approximate log2 ratios of the calibrated intensities for",
+                "well-measured proteins and are compressed at low intensities. The",
+                "fold-change cut-off was applied to fold changes on this scale.",
+                "Because of the calibration and the transform, they are not directly",
+                "comparable with fold changes from an analysis without vsn."),
+            paste("Per-group coefficients of variation are not reported, because",
+                  "values on the generalized-log2 scale cannot be turned back into",
+                  "intensities.")
+        ), collapse = " ")
     } else {
         "No between-sample normalization was applied."
     })

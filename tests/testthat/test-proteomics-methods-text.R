@@ -64,6 +64,38 @@ test_that("no-normalization is stated explicitly, not omitted", {
     txt2 <- blocks_for(normalization = list(method = "median"))$data_processing
     expect_match(txt2, "median-centred on the log2 scale", fixed = TRUE)
     expect_false(grepl("No between-sample normalization", txt2, fixed = TRUE))
+
+    txt3 <- blocks_for(normalization = list(method = "vsn"))$data_processing
+    expect_match(txt3, "variance-stabilizing normalization (vsn)", fixed = TRUE)
+    expect_false(grepl("No between-sample normalization", txt3, fixed = TRUE))
+})
+
+test_that("under vsn the text says which scale the fold changes and the cut-off are on", {
+    # The cut-off sentences further down speak of fold changes without saying
+    # what they are. In a vsn run that has to be said here, or the reader takes
+    # them for ratios of intensities.
+    txt <- blocks_for(normalization = list(method = "vsn"))$data_processing
+    expect_match(txt, "differences of generalized-log2 values", fixed = TRUE)
+    # Which scale, not which value: under multi-imputation the cut-off is
+    # applied within each run, so the text must not say it was applied to the
+    # pooled fold change that is reported.
+    expect_match(txt, "cut-off was applied to fold changes on this scale", fixed = TRUE)
+    expect_false(grepl("as reported", txt, fixed = TRUE))
+    expect_match(txt, "not directly comparable", fixed = TRUE)
+    expect_match(txt, "coefficients of variation are not reported", fixed = TRUE)
+
+    # Precomputed DE: the statistics were imported, so nothing was tested on
+    # this matrix and the text must not say it was.
+    pre <- blocks_for(normalization = list(method = "vsn"),
+                      de_method = "precomputed")$data_processing
+    expect_match(pre, "variance-stabilizing normalization (vsn)", fixed = TRUE)
+    expect_false(grepl("was tested on that scale", pre, fixed = TRUE))
+
+    # The other methods say none of this.
+    for (m in c("none", "median")) {
+        other <- blocks_for(normalization = list(method = m))$data_processing
+        expect_false(grepl("generalized-log2", other, fixed = TRUE), info = m)
+    }
 })
 
 test_that("contaminant removal is claimed only when the flag is on", {
