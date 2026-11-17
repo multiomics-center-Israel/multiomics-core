@@ -1000,23 +1000,42 @@ test_that("the GSEA view shortens long leading edges and says how many genes are
     expect_identical(env$gsea_tbl$Size, 40L)
 })
 
+# The NES axis limits of the bar plot the GSEA view draws for one analysis.
+gsea_plot_xlim <- function(padj, nes) {
+    d <- withr::local_tempdir(.local_envir = parent.frame())
+    write_fgsea_unit(d, "KEGG", "fc", "c1", sprintf("T%02d", seq_along(nes)), padj, nes)
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", n_significant = length(nes))))
+    env <- report_env(d)
+    eval(parse(text = report_chunk("gsea-view-data")), envir = env)
+    p <- env$bar_plot
+    expect_identical(p$coordinates$expand, c(left = FALSE, right = FALSE))
+    list(xlim = p$coordinates$limits$x, plotted = p$data$NES, table = env$gsea_tbl)
+}
+
+test_that("the GSEA plot axis spans zero and the plotted bars, with room only where labels go", {
+    skip_if_not_installed("knitr")
+    skip_if_not_installed("ggplot2")
+    # Positive only: no room left of zero beyond a small gap.
+    x <- gsea_plot_xlim(c(0.01, 0.02), c(1, 2))
+    span <- 2 / 0.68
+    expect_equal(x$xlim, c(-0.02 * span, 2 + 0.3 * span))
+    # Negative only: the mirror image.
+    x <- gsea_plot_xlim(c(0.01, 0.02), c(-1, -2))
+    expect_equal(x$xlim, c(-2 - 0.3 * span, 0.02 * span))
+    # Mixed: room on both sides; zero stays between them.
+    x <- gsea_plot_xlim(c(0.01, 0.02), c(-1, 2))
+    expect_equal(x$xlim, c(-1 - 0.3 * 7.5, 2 + 0.3 * 7.5))
+})
+
 test_that("the GSEA plot takes its axis room from the pathways it shows", {
     skip_if_not_installed("knitr")
     skip_if_not_installed("ggplot2")
-    d <- withr::local_tempdir()
     # 21 significant pathways; the one the plot leaves out has by far the largest NES.
-    write_fgsea_unit(d, "KEGG", "fc", "c1", sprintf("T%02d", 1:21),
-                     c(seq(0.001, 0.02, length.out = 20), 0.04), c(rep(c(2, -1), 10), 9))
-    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", n_significant = 21L)))
-    env <- report_env(d)
-    eval(parse(text = report_chunk("gsea-view-data")), envir = env)
-
-    p <- env$bar_plot
-    expect_equal(nrow(p$data), 20L)
-    expect_false(9 %in% p$data$NES)
-    expect_equal(nrow(env$gsea_tbl), 21L)                       # still in the table
-    room <- p$layers[[length(p$layers)]]$data$x                 # the expand_limits() layer
-    expect_equal(range(room), c(-1.5, 3))
+    x <- gsea_plot_xlim(c(seq(0.001, 0.02, length.out = 20), 0.04), c(rep(c(2, -1), 10), 9))
+    expect_equal(length(x$plotted), 20L)
+    expect_false(9 %in% x$plotted)
+    expect_equal(nrow(x$table), 21L)                            # still in the table
+    expect_equal(x$xlim, c(-1 - 0.3 * 7.5, 2 + 0.3 * 7.5))
 })
 
 test_that("the GSEA table keeps make_dt's formatting and adds its own options locally", {

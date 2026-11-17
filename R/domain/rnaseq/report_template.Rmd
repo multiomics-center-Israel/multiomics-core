@@ -3052,14 +3052,20 @@ if (has_gsea_view) {
             unit$img <- tryCatch({
                 png_file <- tempfile(fileext = ".png")
                 bar_plot <- plot_gsea_enrichment_bar(bar_df, max_terms = n_bar)
-                # Room for the labels at the bar ends, which the panel otherwise
-                # clips: the legend goes below, giving the panel its width, and
-                # the NES axis is extended past the longest bars. The bars are
-                # the pathways the builder selected (its $data), so one it left
-                # out cannot stretch the axis. Layout only; the builder and what
-                # it draws are unchanged.
+                # NES axis view, for the labels at the bar ends. It spans zero
+                # and every plotted bar (the builder's $data, so a pathway it
+                # left out cannot stretch it), plus 30% of the axis on each side
+                # that has bars, where the builder puts their labels (right of
+                # NES >= 0, left of NES < 0), and a 2% gap on a side with none.
+                # The legend goes below, giving the plot area its width. Layout
+                # only; the builder and what it draws are unchanged.
+                nes <- bar_plot$data$NES
+                room <- c(if (any(nes < 0)) 0.3 else 0.02, if (any(nes >= 0)) 0.3 else 0.02)
+                span <- (max(0, nes) - min(0, nes)) / (1 - sum(room))
                 bar_plot <- bar_plot +
-                    ggplot2::expand_limits(x = range(bar_plot$data$NES) * 1.5) +
+                    ggplot2::coord_cartesian(
+                        xlim = c(min(0, nes) - room[1] * span, max(0, nes) + room[2] * span),
+                        expand = c(left = FALSE, right = FALSE)) +
                     ggplot2::theme(legend.position = "bottom")
                 ggplot2::ggsave(png_file, bar_plot, width = 11,
                                 height = .enrich_bar_height_in(n_bar) + 0.6, dpi = 110)
