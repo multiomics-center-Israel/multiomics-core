@@ -1000,6 +1000,25 @@ test_that("the GSEA view shortens long leading edges and says how many genes are
     expect_identical(env$gsea_tbl$Size, 40L)
 })
 
+test_that("the GSEA plot takes its axis room from the pathways it shows", {
+    skip_if_not_installed("knitr")
+    skip_if_not_installed("ggplot2")
+    d <- withr::local_tempdir()
+    # 21 significant pathways; the one the plot leaves out has by far the largest NES.
+    write_fgsea_unit(d, "KEGG", "fc", "c1", sprintf("T%02d", 1:21),
+                     c(seq(0.001, 0.02, length.out = 20), 0.04), c(rep(c(2, -1), 10), 9))
+    write_manifest(d, list(manifest_row("GSEA", "KEGG", "fc", n_significant = 21L)))
+    env <- report_env(d)
+    eval(parse(text = report_chunk("gsea-view-data")), envir = env)
+
+    p <- env$bar_plot
+    expect_equal(nrow(p$data), 20L)
+    expect_false(9 %in% p$data$NES)
+    expect_equal(nrow(env$gsea_tbl), 21L)                       # still in the table
+    room <- p$layers[[length(p$layers)]]$data$x                 # the expand_limits() layer
+    expect_equal(range(room), c(-1.5, 3))
+})
+
 test_that("the GSEA table keeps make_dt's formatting and adds its own options locally", {
     skip_if_not_installed("knitr")
     skip_if_not_installed("ggplot2")
@@ -1030,6 +1049,14 @@ test_that("the GSEA table keeps make_dt's formatting and adds its own options lo
     expect_equal(dt$x$data[[which(names(env$gsea_tbl) == "padj")]], 1e-30)
     render <- vapply(opt$columnDefs, function(def) as.character(def$render %||% ""), character(1))
     expect_true(any(grepl("formatSignif", render, fixed = TRUE)))
+    # Counts are whole numbers: with several renderers on one column DataTables
+    # uses the first listed, and that is the zero-digit one added after make_dt().
+    size_i <- which(names(env$gsea_tbl) == "Size") - 1L
+    on_size <- vapply(opt$columnDefs, function(def) {
+        !is.null(def$render) && size_i %in% unlist(def$targets)
+    }, logical(1))
+    expect_gt(sum(on_size), 1L)
+    expect_match(render[on_size][1], "formatRound(data, 0,", fixed = TRUE)
     # The leading-edge list is closed by default, for display only.
     le_def <- opt$columnDefs[[which(grepl("<details", render, fixed = TRUE))]]
     expect_identical(names(env$gsea_tbl)[le_def$targets + 1L], "Leading edge")
