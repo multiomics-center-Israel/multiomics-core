@@ -243,9 +243,12 @@ test_that("a vsn run adds a note under the cutoffs and leaves the cutoff cells a
     expect_false(is.na(cell_xml(vsn$sheet, "B8")))
     strings <- read_part(vsn$dir, "xl", "sharedStrings.xml")
     expect_true(grepl("normalized with vsn", strings, fixed = TRUE))
-    # It is the workbook's formula that uses the displayed value; the note must
-    # not read as a statement about how the pipeline made its call.
-    expect_true(grepl("manual_cutoffs formulas compare the cutoff above", strings, fixed = TRUE))
+    # linearFC is signed, so it is not 2^log2FC for a negative effect, and the
+    # formula compares its absolute value. The note speaks of the formula only
+    # where the column exists, and not of how the pipeline made its call.
+    expect_true(grepl("2 raised to its size, negative when log2FC.imputs is", strings, fixed = TRUE))
+    expect_true(grepl("Where the Results sheet has a manual_cutoffs column", strings, fixed = TRUE))
+    expect_true(grepl("absolute value of that linearFC", strings, fixed = TRUE))
 
     # The scale of imported fold changes is not known here: no note.
     imported <- cutoffs_of(vsn = TRUE, precomputed_de = TRUE)

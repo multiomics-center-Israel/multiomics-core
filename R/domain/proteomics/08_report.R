@@ -702,7 +702,7 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                   "calibration followed by a generalized-log2 transform."),
             if (!is_precomputed) paste(
                 "Differential abundance was tested on that scale, so the reported",
-                "log2 fold changes are differences of generalized-log2 values. They",
+                "log2 fold changes are built from differences of generalized-log2 values. They",
                 "approximate log2 ratios of the calibrated intensities for",
                 "well-measured proteins and are compressed at low intensities. The",
                 "fold-change cut-off was applied to fold changes on this scale.",

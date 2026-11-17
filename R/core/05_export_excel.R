@@ -192,11 +192,13 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
 #'
 #' @return Character vector, one element per row of the note.
 cutoffs_vsn_note <- function() {
-    c("This run was normalized with vsn. linearFC is 2 raised to a",
-      "difference of generalized-log2 values: close to a ratio of calibrated",
-      "intensities for well-measured proteins, compressed at low intensities.",
-      "The manual_cutoffs formulas compare the cutoff above with the",
-      "linearFC shown in each row.")
+    c("This run was normalized with vsn. linearFC is the signed form of",
+      "log2FC.imputs: 2 raised to its size, negative when log2FC.imputs is",
+      "negative. Here log2FC.imputs comes from differences of generalized-log2",
+      "values, so for well-measured proteins that size is close to a ratio of",
+      "calibrated intensities, and at low intensities it is compressed.",
+      "Where the Results sheet has a manual_cutoffs column, its formula",
+      "compares the cutoff above with the absolute value of that linearFC.")
 }
 
 #' Column glossary + fold-change reconciliation notes for a mode
@@ -379,6 +381,9 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE, vsn = 
             "This run was normalized with vsn (normalization$method: vsn). Wherever this sheet says log2 intensity,",
             "the value is a generalized-log2 (glog2) value of a calibrated intensity: close to log2 for well-measured",
             "proteins, compressed at low intensities.")
+        # log2FC_from_means is written only under multi-imputation.
+        multi_imp <- !isFALSE(multi_imputation)
+        from_cols <- if (multi_imp) "the _from_raw and _from_means columns" else "the _from_raw columns"
         fold_changes <- if (isTRUE(precomputed_de)) {
             # Imported statistics were not computed by this run, so what
             # scale they are on is an upstream fact this pipeline does not
@@ -388,23 +393,34 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE, vsn = 
                 "The DE statistics in this workbook were supplied as a precomputed table: log2FC.imputs,",
                 "linearFC.imputs and the p-values are as supplied. Their scale was decided upstream and is not known",
                 "to this pipeline; this run's vsn normalization was not applied to them.",
-                "The fold changes computed here from the values themselves (the _from_raw and _from_means columns)",
-                "are differences of glog2 values, so they need not agree with the supplied ones.")
+                "The fold changes computed here from the values themselves,", paste0("in ", from_cols, ","),
+                "are differences of glog2 group means, so they need not agree with the supplied ones.")
         } else {
             paste(
-                "Every log2FC column in the Results sheet is a difference of glog2 values, and each linearFC column",
-                "is 2 raised to such a difference under the rule above. Because vsn calibrates every sample and",
-                "changes the scale, they are not directly comparable with fold changes from a run without vsn.",
+                "The fold changes in the Results sheet are computed from glog2 values.",
+                # log2FC.imputs is pooled across runs on the linear scale, so
+                # under multi-imputation it is not itself a difference.
+                if (multi_imp) paste(
+                    "Within each imputation run the model estimates the fold change on the glog2 scale;",
+                    "log2FC.imputs is log2 of the mean, over the runs, of 2 raised to that estimate, as its row above says."
+                ) else "log2FC.imputs is the model's fold change estimate on the glog2 scale.",
+                "The fold changes in", from_cols, "are differences of glog2 group means.",
+                "Each linearFC column is the signed form of its log2FC under the rule above.",
+                "Because vsn calibrates every sample and changes the scale, none of them is directly comparable",
+                "with fold changes from a run without vsn.",
                 "The fold-change cutoff is applied to fold changes on this scale.",
                 # Two different comparisons, and only one of them uses the
-                # value printed in the row.
-                if (!isFALSE(multi_imputation)) paste(
+                # value printed in the row. Not every workbook carries the
+                # manual_cutoffs column, so its presence is not asserted.
+                if (multi_imp) paste(
                     "The pipeline applied it within each imputation run before taking the consensus, so its DE call",
-                    "was not decided on the pooled linearFC.imputs shown here; the manual_cutoffs formulas do compare",
-                    "the cutoff with that displayed value, so the two can differ for a protein near the cutoff."
+                    "was not decided on the pooled linearFC.imputs shown here. A workbook with a manual_cutoffs column",
+                    "compares the cutoff with the absolute value of that displayed linearFC.imputs instead,",
+                    "so the two can differ for a protein near the cutoff."
                 ) else paste(
-                    "The pipeline applied it to the fold change of its single imputation run, and the manual_cutoffs",
-                    "formulas compare the cutoff with the linearFC.imputs shown in the row."))
+                    "The pipeline applied it to the fold change of its single imputation run; a workbook with a",
+                    "manual_cutoffs column compares the cutoff with the absolute value of the linearFC.imputs",
+                    "shown in the row."))
         }
         notes <- c(paste(
             scale, fold_changes,

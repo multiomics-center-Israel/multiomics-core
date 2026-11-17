@@ -1059,7 +1059,21 @@ test_that("P6 a vsn run gets one note on the scale, first, and nothing else chan
         pooled <- grepl("was not decided on the pooled linearFC.imputs shown here",
                         with_vsn$notes[1], fixed = TRUE)
         expect_identical(pooled, mi, info = label)
-        expect_match(with_vsn$notes[1], "manual_cutoffs formulas", fixed = TRUE, info = label)
+        # The Final_results_DE workbook has this sheet but no manual_cutoffs
+        # column, so the note may only say what such a column does where it exists.
+        expect_match(with_vsn$notes[1], "workbook with a manual_cutoffs column",
+                     fixed = TRUE, info = label)
+        expect_false(grepl("the manual_cutoffs formulas", with_vsn$notes[1], fixed = TRUE),
+                     info = label)
+
+        # log2FC.imputs is pooled across runs on the linear scale. Calling every
+        # log2FC column a difference of glog2 values is wrong under
+        # multi-imputation, and log2FC_from_means exists only there.
+        expect_false(grepl("Every log2FC column", with_vsn$notes[1], fixed = TRUE), info = label)
+        expect_identical(grepl("log2FC.imputs is log2 of the mean, over the runs",
+                               with_vsn$notes[1], fixed = TRUE), mi, info = label)
+        expect_identical(grepl("_from_means", with_vsn$notes[1], fixed = TRUE), mi, info = label)
+        expect_match(with_vsn$notes[1], "signed form of its log2FC", fixed = TRUE, info = label)
 
         # Imported statistics were computed upstream, on a scale this pipeline
         # does not know. The note must say that: neither that they are on the
@@ -1072,7 +1086,9 @@ test_that("P6 a vsn run gets one note on the scale, first, and nothing else chan
                      fixed = TRUE, info = label)
         expect_false(grepl("not on the vsn scale", imported$notes[1], fixed = TRUE),
                      info = label)
-        expect_false(grepl("Every log2FC column", imported$notes[1], fixed = TRUE), info = label)
+        # ...and no statement about how log2FC.imputs was computed.
+        expect_false(grepl("log2FC.imputs is", imported$notes[1], fixed = TRUE), info = label)
+        expect_identical(grepl("_from_means", imported$notes[1], fixed = TRUE), mi, info = label)
         # Without vsn the flag changes nothing.
         expect_identical(build_provenance_notes("proteomics", multi_imputation = mi,
                                                 precomputed_de = TRUE), plain, info = label)
