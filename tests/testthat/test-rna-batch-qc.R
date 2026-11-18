@@ -290,6 +290,35 @@ test_that("both sides of the panel are fitted on the same genes", {
     expect_identical(length(fitted[[1]]), 199L)
 })
 
+test_that("rna_batch_pca_gene_label states the number of genes", {
+    expect_identical(rna_batch_pca_gene_label(199L), "PCA on 199 genes")
+    expect_identical(rna_batch_pca_gene_label(12345L), "PCA on 12,345 genes")
+    expect_identical(rna_batch_pca_gene_label(1L), "PCA on 1 gene")
+})
+
+test_that("every plot of the panel names the genes its PCA was fitted on", {
+    pre <- make_bc_pre()
+    cfg <- bc_config()
+    cfg$modes$rna$effects$color <- "Run"   # three colour rows: kept group, Run, batch
+    corrected <- compute_rna_batch_correction(pre, cfg)
+    before <- bc_plain(pre$expr_work)
+    after <- corrected$qc_expr
+    # Constant after correction: dropped from both sides, so 199 of 200 genes.
+    after["G200", ] <- 0
+
+    fn_env <- environment(build_rna_batch_pca_panels)
+    original <- get("qc_pca_scatter", envir = fn_env)
+    withr::defer(assign("qc_pca_scatter", original, envir = fn_env))
+    assign("qc_pca_scatter", function(expr_mat, ...) ggplot2::ggplot(), envir = fn_env)
+
+    panels <- build_rna_batch_pca_panels(before, after, pre$meta, cfg$modes$rna,
+                                         "Condition", "Batch", "limma")
+    expect_length(panels, 6)
+    subtitles <- vapply(panels, function(p) p$labels$subtitle %||% NA_character_, character(1))
+    # The actual count of shared genes, not a fixed top-N such as 5,000.
+    expect_identical(subtitles, rep("PCA on 199 genes", 6))
+})
+
 # --- Same gene subsets before and after ---------------------------------------
 
 # 2,100 genes, so the expression heatmaps (2,000 most variable genes) and the
@@ -412,6 +441,33 @@ test_that("the report's before/after PCA is the shared-gene panel only", {
     setup <- code("batch-correction-setup")
     outside <- setdiff(src[!grepl("^\\s*#", src)], c(qc, setup))
     expect_false(any(grepl("_batch_corr_|bc_suffix|bc_pair_tab", outside)))
+})
+
+test_that("the batch-correction section follows the PCA section in the pre-DE QC", {
+    rmd <- file.path(root_dir, "R", "domain", "rnaseq", "report_template.Rmd")
+    skip_if_not(file.exists(rmd), "report_template.Rmd not found")
+    src <- readLines(rmd, warn = FALSE)
+    heading <- function(text) {
+        at <- which(src == text)
+        expect_length(at, 1)
+        at
+    }
+    qc_start <- heading("# Quality Control — Pre-DE")
+    pca      <- heading("## Principal Component Analysis (PCA) {.tabset}")
+    setup    <- find_rmd_chunk_lines(rmd, "batch-correction-setup")
+    qc       <- find_rmd_chunk_lines(rmd, "batch-correction-qc")
+    # The first "## " heading after the PCA section is the next QC section.
+    next_section <- which(seq_along(src) > pca & grepl("^## ", src))[1]
+
+    expect_gt(pca, qc_start)
+    expect_gt(setup[1], pca)
+    expect_gt(qc[1], setup[2])
+    expect_lt(qc[2], next_section)
+    expect_identical(src[next_section], "## Sample Similarity")
+    expect_lt(qc[2], heading("# Differential Expression Analysis"))
+    # The panel legend names where the gene count is shown.
+    legend <- src[seq(qc[1], qc[2])]
+    expect_true(any(grepl("Their number is given under each panel title", legend, fixed = TRUE)))
 })
 
 test_that("a chosen gene that correction makes constant is reported once, not replaced", {

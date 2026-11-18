@@ -153,6 +153,11 @@ rna_shared_pca_features <- function(before, after) {
 #' two PCAs are still fitted independently: the same genes do not make the
 #' axes the same, and positions are not comparable between left and right.
 #'
+#' Every plot carries, as its subtitle, the number of genes the PCA was
+#' fitted on ([rna_batch_pca_gene_label()]): the shared genes, not a fixed
+#' top-N, so its variance percentages differ from those of the top-N PCAs in
+#' the main PCA section.
+#'
 #' @param before,after The QC matrix before and after correction.
 #' @param meta Sample metadata.
 #' @param cfg The `config$modes$rna` list.
@@ -163,6 +168,23 @@ rna_shared_pca_features <- function(before, after) {
 #' @return `out_file`.
 draw_rna_batch_pca_panel <- function(before, after, meta, cfg, group_col, batch_cols,
                                      method, out_file) {
+    panels <- build_rna_batch_pca_panels(before, after, meta, cfg, group_col,
+                                         batch_cols, method)
+    combined <- patchwork::wrap_plots(panels, ncol = 2)
+    ggplot2::ggsave(out_file, plot = combined, width = 12, height = 5 * length(panels) / 2)
+    out_file
+}
+
+#' Plots of the before/after PCA panel
+#'
+#' The plots [draw_rna_batch_pca_panel()] lays out, two per colour column
+#' (uncorrected, then batch-corrected), each fitted on the genes shared by
+#' both matrices ([rna_shared_pca_features()]).
+#'
+#' @inheritParams draw_rna_batch_pca_panel
+#' @return A list of ggplot objects, uncorrected and corrected alternating.
+build_rna_batch_pca_panels <- function(before, after, meta, cfg, group_col, batch_cols,
+                                       method) {
     if (!setequal(colnames(before), colnames(after))) {
         stop("[batch_correction] Before/after PCA: the uncorrected and the corrected QC ",
              "matrix hold different samples.", call. = FALSE)
@@ -170,6 +192,7 @@ draw_rna_batch_pca_panel <- function(before, after, meta, cfg, group_col, batch_
     ids <- rna_shared_pca_features(before, after)
     before <- before[ids, , drop = FALSE]
     after  <- after[ids, colnames(before), drop = FALSE]
+    gene_label <- rna_batch_pca_gene_label(length(ids))
 
     panel_cols <- rna_batch_pca_panel_columns(cfg, group_col, batch_cols)
     # A numeric label (e.g. pair 1, 2, 3) would get a colour gradient; the
@@ -187,13 +210,25 @@ draw_rna_batch_pca_panel <- function(before, after, meta, cfg, group_col, batch_
         }
         panels <- c(panels, list(
             qc_pca_scatter(before, meta, panel_cfg, pcs = c(1, 2)) +
-                ggplot2::ggtitle(sprintf("Uncorrected — by %s", panel_cols$label[i])),
+                ggplot2::ggtitle(sprintf("Uncorrected — by %s", panel_cols$label[i]),
+                                 subtitle = gene_label),
             qc_pca_scatter(after, meta, panel_cfg, pcs = c(1, 2)) +
                 ggplot2::ggtitle(sprintf("Batch-corrected (%s) — by %s", method,
-                                         panel_cols$label[i]))
+                                         panel_cols$label[i]),
+                                 subtitle = gene_label)
         ))
     }
-    combined <- patchwork::wrap_plots(panels, ncol = 2)
-    ggplot2::ggsave(out_file, plot = combined, width = 12, height = 5 * nrow(panel_cols))
-    out_file
+    panels
+}
+
+#' Subtitle naming the genes a before/after PCA was fitted on
+#'
+#' @param n_genes Number of genes the PCA used.
+#' @return A single string, e.g. `"PCA on 1,234 genes"`.
+#' @examples
+#' rna_batch_pca_gene_label(1234)  # "PCA on 1,234 genes"
+#' rna_batch_pca_gene_label(1)     # "PCA on 1 gene"
+rna_batch_pca_gene_label <- function(n_genes) {
+    sprintf("PCA on %s %s", format(n_genes, big.mark = ",", scientific = FALSE),
+            if (n_genes == 1) "gene" else "genes")
 }

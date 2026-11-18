@@ -5,9 +5,23 @@
 #' - For tximport: specify files$txi pointing to RDS file containing tximport object
 #'
 #' @param config list as returned by load_config()
-#' @return list with one of: (counts, ...) for raw counts OR (txi, ...) for tximport
+#' @return list with one of: (counts, ...) for raw counts OR (txi, ...) for tximport,
+#'   plus \code{input_keys}: the expression-input keys set in the config
+#'   (\code{configured}) and the key that filled the \code{txi} and the
+#'   \code{counts} slot (\code{NA} when empty). See
+#'   \code{describe_rna_input_source()}.
 load_rna_inputs <- function(config) {
     inputs <- load_omics_inputs(config, mode = "rna")
+    files <- config$modes$rna$files
+
+    # Which config key filled each expression slot. preprocess_rna() picks the
+    # slot it uses and reports that key, so nothing downstream has to guess
+    # which of several configured inputs the run was built on.
+    inputs$input_keys <- list(
+        configured = rna_configured_expression_inputs(files),
+        txi        = if (!is.null(inputs$txi)) rna_rds_input_key(files) else NA_character_,
+        counts     = if (!is.null(inputs$counts)) "counts" else NA_character_
+    )
 
     # Check if txi was loaded
     if (!is.null(inputs$txi)) {
@@ -28,6 +42,7 @@ load_rna_inputs <- function(config) {
         # Fallback: preprocessed_counts provided instead of raw counts
         message("[load_rna_inputs] Using preprocessed_counts as count matrix")
         inputs$counts <- inputs$preprocessed_counts
+        inputs$input_keys$counts <- "preprocessed_counts"
         inputs$source_type <- "matrix"
     }
 
