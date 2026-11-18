@@ -189,6 +189,12 @@ rna_cfg <- cfg$modes$rna
 # filtering config keys.
 rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
 
+# Gene counts and the input they belong to, as preprocess_rna() recorded them
+# for the input it actually used. Not re-read from files$counts: with files$txi
+# also set, that key can name a file the run never used.
+rna_gene_n <- rna_recorded_gene_counts(params$rna_info)
+rna_input_src <- params$rna_info$input_source
+
 # The normalization that produced expr_work, as recorded at runtime. Which
 # method to report is decided by resolve_rna_norm_method() below, the resolver
 # the pipeline summary, PowerPoint and commentary also use.
@@ -304,6 +310,16 @@ plotly::plot_ly(data.frame(x = 1, y = 1), x = ~x, y = ~y, type = "scatter", mode
 cat('<div style="background: #eef6ff; border: 1px solid #b8d4f0; border-radius: 6px; padding: 10px 16px; margin: 0 0 20px 0; font-size: 0.9em; color: #2c5282;">
 <strong>Report mode:</strong> This report is in <em>clean mode</em> by default (code hidden). To view the R code behind any section, click the <code style="background: #fff; padding: 1px 5px; border-radius: 3px; border: 1px solid #ccc;">Code</code> button that appears at the top-right of each section. Use the global <code style="background: #fff; padding: 1px 5px; border-radius: 3px; border: 1px solid #ccc;">Code</code> dropdown at the top of the page to show/hide all code at once.
 </div>\n')
+```
+
+```{r project-overview, results='asis', echo=FALSE}
+# project.user_notes, as documented in the config template. No notes, no
+# section; line breaks in a multi-line note are kept (wrap_notes_html()).
+project_overview_html <- project_notes_html(cfg$project$user_notes)
+if (!is.null(project_overview_html)) {
+    cat("# Project Overview\n\n")
+    cat(project_overview_html, "\n\n")
+}
 ```
 
 # Technical Summary
@@ -468,6 +484,21 @@ proj <- data.frame(
 kable(proj, col.names = c("Parameter", "Value"))
 ```
 
+## Input Data
+
+```{r params-input, results='asis'}
+# The input preprocess_rna() actually used (params$rna_info$input_source), not
+# the keys set in the config: several can be set, and only one is used.
+if (is.null(rna_input_src)) {
+    cat("The expression input this run used is not recorded for this report.\n\n")
+} else {
+    cat(sprintf("**Expression input used:** %s.\n\n", rna_input_src$description))
+    if (!is.null(rna_input_src$note)) {
+        cat(sprintf("> **Note:** %s\n\n", rna_input_src$note))
+    }
+}
+```
+
 ## Experimental Design
 
 ```{r params-design}
@@ -565,19 +596,7 @@ cat("\n\n")
 # Executive Summary
 
 ```{r executive-summary, results='asis', echo=FALSE}
-# Compute gene counts early (also used by filter-stats section later)
-raw_counts_file_exec <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
-filt_counts_file_exec <- file.path(datasets_dir, "rna_counts_filtered.tsv")
-n_genes_raw <- NA
-n_genes_filt <- NA
-# `files$counts` is NULL for tximport input (files$txi); `%||% ""` keeps nzchar()
-# length-1 so the `if` does not error with a zero-length/NA condition.
-if (nzchar(rna_cfg$files$counts %||% "") && file.exists(raw_counts_file_exec) && !dir.exists(raw_counts_file_exec)) {
-    n_genes_raw <- nrow(read.csv(raw_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
-}
-if (file.exists(filt_counts_file_exec) && !dir.exists(filt_counts_file_exec)) {
-    n_genes_filt <- nrow(read.delim(filt_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
-}
+n_genes_filt <- rna_gene_n$after
 
 exec_summary_path <- file.path(run_dir, "rna", "executive_summary.md")
 exec_available <- file.exists(exec_summary_path)
@@ -671,19 +690,8 @@ cat("</div>\n")
 
 ```{r technical-metadata-table-rna, results='asis'}
 # Technical metadata table — what ran, and gene counts before/after filtering.
-.tm_n_before <- if (!is.null(raw_counts <- tryCatch({
-    f <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
-    if (nzchar(rna_cfg$files$counts %||% "") && file.exists(f) && !dir.exists(f)) {
-        read.csv(f, stringsAsFactors = FALSE, check.names = FALSE)
-    } else NULL
-}, error = function(e) NULL))) nrow(raw_counts) else NA_integer_
-
-.tm_n_after <- if (!is.null(filt_counts <- tryCatch({
-    f <- file.path(datasets_dir, "rna_counts_filtered.tsv")
-    if (file.exists(f) && !dir.exists(f)) {
-        read.delim(f, stringsAsFactors = FALSE, check.names = FALSE)
-    } else NULL
-}, error = function(e) NULL))) nrow(filt_counts) else NA_integer_
+.tm_n_before <- rna_gene_n$before
+.tm_n_after  <- rna_gene_n$after
 
 .tm_steps <- list(
     list(label = "Filtering",
@@ -736,24 +744,24 @@ Counts before and after the gene filter described under *Analysis Parameters →
 (`r rna_filt$short`).
 
 ```{r filter-stats}
-# Read raw and filtered counts to get gene numbers
-raw_counts_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
-filt_counts_file <- file.path(datasets_dir, "rna_counts_filtered.tsv")
-
-n_genes_raw <- NA
-n_genes_filt <- NA
+# Gene numbers as the run recorded them (rna_gene_n, setup chunk).
+n_genes_raw <- rna_gene_n$before
+n_genes_filt <- rna_gene_n$after
 raw_counts <- NULL
 filt_counts <- NULL
 
-# `files$counts` is NULL for tximport input (files$txi); `%||% ""` keeps nzchar()
-# length-1 so the `if` does not collapse to NA / zero-length and error.
-if (nzchar(rna_cfg$files$counts %||% "") && file.exists(raw_counts_file) && !dir.exists(raw_counts_file)) {
-    raw_counts <- read.csv(raw_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
-    n_genes_raw <- nrow(raw_counts)
+# The "before" histogram needs the unfiltered matrix, which only exists on
+# disk as the input file. Read it only when the run is recorded to have used
+# files$counts as a raw count matrix, so it never draws a file the run ignored.
+if (identical(rna_input_src$used_key, "counts") && identical(rna_input_src$source_type, "matrix")) {
+    raw_counts_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_input_src$used_file)
+    if (file.exists(raw_counts_file) && !dir.exists(raw_counts_file)) {
+        raw_counts <- read.csv(raw_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
+    }
 }
+filt_counts_file <- file.path(datasets_dir, "rna_counts_filtered.tsv")
 if (file.exists(filt_counts_file) && !dir.exists(filt_counts_file)) {
     filt_counts <- read.delim(filt_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
-    n_genes_filt <- nrow(filt_counts)
 }
 
 if (!is.na(n_genes_raw) && !is.na(n_genes_filt)) {
@@ -809,7 +817,7 @@ if (!is.null(raw_counts)) {
                lty = 2, lwd = 2, col = "black", bty = "n")
     }
 } else {
-    cat("Raw counts not available for histogram.\n")
+    cat("Raw counts not available for histogram: it is drawn only from a raw count matrix input (files$counts) that this run is recorded to have used.\n")
 }
 ```
 
@@ -1101,6 +1109,57 @@ if (file.exists(pca3d_file)) {
 ```
 
 
+```{r batch-correction-setup, include=FALSE}
+# Built from Datasets/batch_correction.tsv, the record written by the correction
+# that ran -- not from batch_correction in the config, which only asked for it.
+.bc_file <- file.path(datasets_dir, "batch_correction.tsv")
+bc_record <- if (file.exists(.bc_file)) read.delim(.bc_file, stringsAsFactors = FALSE) else NULL
+bc_text <- rna_batch_correction_sentence(bc_record)
+bc_show <- !is.null(bc_text)
+bc_suffix <- if (bc_show) paste0("_batch_corr_", bc_record$method[1]) else ""
+
+# One tab with the uncorrected figure on the left and its batch-corrected
+# counterpart on the right; skipped unless both files exist.
+bc_pair_tab <- function(heading, base, legend) {
+    before <- file.path(diag_dir, paste0(base, ".png"))
+    after  <- file.path(diag_dir, paste0(base, bc_suffix, ".png"))
+    if (!file.exists(before) || !file.exists(after)) return(invisible(NULL))
+    cat(sprintf("\n### %s\n\n", heading))
+    # Markdown images inside the divs, as the clustering section embeds its
+    # figures, so pandoc resolves the paths the same way.
+    side <- function(label, path) {
+        cat(sprintf("<div style='flex: 1; text-align: center;'>\n\n**%s**\n\n![%s](%s){width=100%%}\n\n</div>\n",
+                    label, label, path))
+    }
+    cat("<div style='display: flex; gap: 10px; align-items: flex-start;'>\n")
+    side("Uncorrected", before)
+    side(sprintf("Batch-corrected (%s)", bc_record$method[1]), after)
+    cat("</div>\n\n")
+    figure_legend(legend)
+}
+```
+
+```{r batch-correction-qc, eval=bc_show, results='asis'}
+cat("## Batch Correction (exploratory) {.tabset}\n\n")
+cat(bc_text, "\n\n")
+cat("Each figure is shown before and after the correction. Every other figure, table and statistic in this report uses the uncorrected data.\n\n")
+
+bc_panel <- file.path(diag_dir, "PCA_batch_before_after.png")
+if (file.exists(bc_panel)) {
+    cat("\n### PCA by group and batch\n\n")
+    cat(sprintf("![PCA before and after batch correction](%s){width=100%%}\n\n", bc_panel))
+    figure_legend("PC1 vs PC2 before (left) and after (right) batch correction. Each row is coloured by one metadata column, named in the panel titles: first the group that the correction kept, then the report's primary colour column when that is a different one, then each batch column. Both sides use the same genes: every filtered gene that varies in both matrices, not a top-variable subset. Their number is given under each panel title, and because it differs from the top-N gene sets above, the percentages of variance do not match those PCAs. PCA is fitted separately for each side, so axes are not comparable between left and right. A batch structure that fades while the group separation remains is the expected pattern; it is a visual check, not a test.")
+}
+# No pair of the standalone PCA plots here: each of those is fitted on the
+# genes usable in its own matrix, so the two sides need not hold the same
+# genes. The panel above is the before/after PCA, fitted on shared genes.
+bc_pair_tab("Distance Heatmap", "sample_distance_heatmap",
+            "Sample-to-sample Euclidean distances before and after batch correction.")
+bc_pair_tab("Top DE Heatmap", "heatmap_top_DE",
+            "Row z-scores of the same genes before and after batch correction: the genes with the smallest adjusted p-value across contrasts. They are ranked among all tested genes, so the heatmap can include genes that were not called differentially expressed. The ranking comes from the differential expression results, which do not use the corrected values.")
+cat("\n")
+```
+
 ## Sample Similarity
 
 Pairwise sample distance assesses overall reproducibility within and between experimental groups. Clear between-group separation indicates a detectable biological signal. `r rna_qc_sentence`
@@ -1192,57 +1251,6 @@ if (file.exists(p)) knitr::include_graphics(p)
 
 ```{r legend-expr-heatmap-nocol, results='asis', echo=FALSE}
 figure_legend("Expression heatmap with hierarchical row clustering but without column reordering, preserving the original sample order for comparison with the fully clustered version above.")
-```
-
-```{r batch-correction-setup, include=FALSE}
-# Built from Datasets/batch_correction.tsv, the record written by the correction
-# that ran -- not from batch_correction in the config, which only asked for it.
-.bc_file <- file.path(datasets_dir, "batch_correction.tsv")
-bc_record <- if (file.exists(.bc_file)) read.delim(.bc_file, stringsAsFactors = FALSE) else NULL
-bc_text <- rna_batch_correction_sentence(bc_record)
-bc_show <- !is.null(bc_text)
-bc_suffix <- if (bc_show) paste0("_batch_corr_", bc_record$method[1]) else ""
-
-# One tab with the uncorrected figure on the left and its batch-corrected
-# counterpart on the right; skipped unless both files exist.
-bc_pair_tab <- function(heading, base, legend) {
-    before <- file.path(diag_dir, paste0(base, ".png"))
-    after  <- file.path(diag_dir, paste0(base, bc_suffix, ".png"))
-    if (!file.exists(before) || !file.exists(after)) return(invisible(NULL))
-    cat(sprintf("\n### %s\n\n", heading))
-    # Markdown images inside the divs, as the clustering section embeds its
-    # figures, so pandoc resolves the paths the same way.
-    side <- function(label, path) {
-        cat(sprintf("<div style='flex: 1; text-align: center;'>\n\n**%s**\n\n![%s](%s){width=100%%}\n\n</div>\n",
-                    label, label, path))
-    }
-    cat("<div style='display: flex; gap: 10px; align-items: flex-start;'>\n")
-    side("Uncorrected", before)
-    side(sprintf("Batch-corrected (%s)", bc_record$method[1]), after)
-    cat("</div>\n\n")
-    figure_legend(legend)
-}
-```
-
-```{r batch-correction-qc, eval=bc_show, results='asis'}
-cat("## Batch Correction (exploratory) {.tabset}\n\n")
-cat(bc_text, "\n\n")
-cat("Each figure is shown before and after the correction. Every other figure, table and statistic in this report uses the uncorrected data.\n\n")
-
-bc_panel <- file.path(diag_dir, "PCA_batch_before_after.png")
-if (file.exists(bc_panel)) {
-    cat("\n### PCA by group and batch\n\n")
-    cat(sprintf("![PCA before and after batch correction](%s){width=100%%}\n\n", bc_panel))
-    figure_legend("PC1 vs PC2 before (left) and after (right) batch correction. Each row is coloured by one metadata column, named in the panel titles: first the group that the correction kept, then the report's primary colour column when that is a different one, then each batch column. Both sides use the same genes, but PCA is fitted separately for each side, so axes are not comparable between left and right. A batch structure that fades while the group separation remains is the expected pattern; it is a visual check, not a test.")
-}
-# No pair of the standalone PCA plots here: each of those is fitted on the
-# genes usable in its own matrix, so the two sides need not hold the same
-# genes. The panel above is the before/after PCA, fitted on shared genes.
-bc_pair_tab("Distance Heatmap", "sample_distance_heatmap",
-            "Sample-to-sample Euclidean distances before and after batch correction.")
-bc_pair_tab("Top DE Heatmap", "heatmap_top_DE",
-            "Row z-scores of the same genes before and after batch correction: the genes with the smallest adjusted p-value across contrasts. They are ranked among all tested genes, so the heatmap can include genes that were not called differentially expressed. The ranking comes from the differential expression results, which do not use the corrected values.")
-cat("\n")
 ```
 
 ---
