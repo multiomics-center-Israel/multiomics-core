@@ -285,7 +285,14 @@ modes:
 
     # ---- Differential abundance (the key is "de" for historical reasons) ----
     de:
-      method: "limma"               # "limma" | "t_test" | "t_test_equal" | "wilcoxon"
+      # "limma" | "limma_percontrast" | "t_test" | "t_test_equal" | "wilcoxon"
+      # limma_percontrast: each contrast keeps only the samples of its two
+      # groups, normalizes them together (chosen_norm: pqn, tss or none; PQN
+      # reference = those samples), and fits limma on them alone. QC plots,
+      # clustering and the exported expression values keep the whole-run
+      # normalization; each contrast's own matrix is written to
+      # Datasets/percontrast_normalized/. Not combinable with drift correction.
+      method: "limma"
       condition_column: "group"     # <-- YOUR DATA: the column whose groups the contrasts compare
 
       # A feature is called significant when its p-value is below p_cutoff AND
