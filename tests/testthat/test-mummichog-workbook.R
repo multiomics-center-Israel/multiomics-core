@@ -39,7 +39,13 @@ test_that("every sheet equals the section objects the report shows -- all rows",
     ec <- s$evidence$ec_table; rownames(ec) <- NULL
     expect_identical(strip_contrast(sh[["EC Evidence"]], ct), ec)
     ft <- s$evidence$feature_table; rownames(ft) <- NULL
-    expect_identical(strip_contrast(sh[["Feature Evidence"]], ct), ft)
+    # Every evidence column, same values, types and row order; the sheet only
+    # relabels the candidate ids, adds their names and reorders columns.
+    fe <- strip_contrast(sh[["Feature Evidence"]], ct)
+    names(fe)[names(fe) == "Pathway-matched metabolite candidate ID(s)"] <-
+      "Pathway candidate(s) matched by feature"
+    expect_setequal(setdiff(names(fe), "Candidate metabolite name(s) (putative)"), names(ft))
+    expect_identical(fe[, names(ft), drop = FALSE], ft)
     g <- strip_contrast(sh[["GSEA Results"]], ct)
     expect_equal(g[["GSEA raw p"]], s$gsea$table$P.Value)
     expect_equal(g[["GSEA BH FDR"]], s$gsea$table$padj)
@@ -70,6 +76,120 @@ test_that("repeated features and repeated candidates are preserved, not collapse
   ec <- sh[["EC Evidence"]]
   e2 <- ec[ec$EmpiricalCompound == "EC0002" & ec$Contrast == "HL_vs_LL", ]
   expect_setequal(e2[["Pathway-matching candidate(s)"]], c("C00022", "C00022; C00186"))
+})
+
+test_that("Feature Evidence names each feature's own pathway candidates, paired in order", {
+  tc <- ma_two_contrast_sections()
+  fe <- build_mummichog_workbook_sheets(tc$sections)[["Feature Evidence"]]
+  # The candidate ids and names sit just before the original annotation, every
+  # other column in its evidence order.
+  expect_identical(names(fe), c(
+    "Contrast", "Pathway", "EmpiricalCompound", "Feature", "Polarity", "m/z", "RT",
+    "Adduct/ion", "Matched compound(s)", "Matched via pathway candidate",
+    "Feature p-value", "Feature statistic (MetaboAnalyst input)",
+    "Feature log2FC (DE)", "Pathway-matched metabolite candidate ID(s)",
+    "Candidate metabolite name(s) (putative)", "Original annotation",
+    "Annotation ID", "Annotation confidence", "Agreement"))
+  expect_false(any(c("Pathway candidate(s) matched by feature",
+                     "Pathway candidate name(s) (putative)") %in% names(fe)))
+  row <- function(ct, pw, ec, f) {
+    r <- fe[fe$Contrast == ct & fe$Pathway == pw & fe$EmpiricalCompound == ec &
+              fe$Feature == f, , drop = FALSE]
+    expect_identical(nrow(r), 1L, label = paste(ct, pw, ec, f))
+    r
+  }
+  name_of <- function(r) r[["Candidate metabolite name(s) (putative)"]]
+  # One candidate.
+  expect_identical(name_of(row("HL_vs_LL", "Glycolysis", "EC0001", "F01")), "D-Glucose")
+  # The same feature in another EC gets that EC's own candidate, not EC0001's.
+  expect_identical(name_of(row("HL_vs_LL", "Glycolysis", "EC0003", "F01")), "alpha-D-Glucose")
+  # Only the candidates this feature matched IN THIS PATHWAY: "0012" matched
+  # C00022 and C00186, but only C00022 is a Glycolysis compound.
+  expect_identical(name_of(row("HL_vs_LL", "Glycolysis", "EC0002", "0012")), "Pyruvate")
+  # Two candidates, names in the same order as the ids.
+  r <- row("HL_vs_LL", "Pyruvate metabolism", "EC0002", "0012")
+  expect_identical(r[["Pathway-matched metabolite candidate ID(s)"]], "C00022; C00186")
+  expect_identical(name_of(r), "Pyruvate; (S)-Lactate")
+  # No own pathway candidate: no name, never the EC's candidate.
+  expect_true(is.na(name_of(row("HL_vs_LL", "Glycolysis", "EC0001", "F04"))))
+  # A repeated candidate always gets the same name.
+  pyr <- fe[grepl("^C00022$", fe[["Pathway-matched metabolite candidate ID(s)"]]), ]
+  expect_true(nrow(pyr) > 1L)
+  expect_true(all(pyr[["Candidate metabolite name(s) (putative)"]] == "Pyruvate"))
+  # Agreement and annotations are the evidence's own, row for row.
+  ft <- do.call(rbind, lapply(names(tc$sections), function(ct)
+    tc$sections[[ct]]$evidence$feature_table))
+  expect_identical(fe$Agreement, ft$Agreement)
+  expect_identical(fe[["Original annotation"]], ft[["Original annotation"]])
+})
+
+test_that("candidate names: first model synonym, and a missing name keeps its slot", {
+  ft <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                   "Pathway candidate(s) matched by feature" = c("C1; C2", "C2", NA))
+  map <- mmc_candidate_name_map(ft, list(compound_names = c(C1 = "Alpha;A", C2 = NA)))
+  expect_identical(map, c(C1 = "Alpha", C2 = NA_character_))
+  fe <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                   Contrast = "X", Feature = c("f1", "f2", "f3"),
+                   "Pathway candidate(s) matched by feature" = c("C1; C2", "C2", NA),
+                   Agreement = "Not assessed")
+  out <- .mmc_add_candidate_names(fe, list(X = list(candidate_names = map)))
+  expect_identical(names(out), c("Contrast", "Feature",
+                                 "Pathway candidate(s) matched by feature",
+                                 "Candidate metabolite name(s) (putative)", "Agreement"))
+  expect_identical(out[["Candidate metabolite name(s) (putative)"]],
+                   c("Alpha; (no name in model)", "(no name in model)", NA))
+  # Without a candidate column (python engine) the sheet is left as it is.
+  py <- data.frame(Contrast = "X", Feature = "f1", stringsAsFactors = FALSE)
+  expect_identical(.mmc_add_candidate_names(py, list()), py)
+  expect_null(mmc_candidate_name_map(py, list(compound_names = character(0))))
+})
+
+test_that("the Feature Evidence layout only relabels and moves the candidate columns", {
+  fe <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                   Contrast = c("X", "X"), Feature = c("f1", "0012"),
+                   "Pathway candidate(s) matched by feature" = c("C1; C2", NA),
+                   "Candidate metabolite name(s) (putative)" = c("A; B", NA),
+                   "Feature p-value" = c(0.01, 2e-7),
+                   "Feature log2FC (DE)" = c(1.5, NA),
+                   "Original annotation" = c("A", NA), "Annotation ID" = c("C1", NA),
+                   "Annotation confidence" = c("Level 1", NA),
+                   Agreement = c("Match", "Not assessed"))
+  out <- .mmc_feature_sheet_layout(fe)
+  expect_identical(names(out), c(
+    "Contrast", "Feature", "Feature p-value", "Feature log2FC (DE)",
+    "Pathway-matched metabolite candidate ID(s)", "Candidate metabolite name(s) (putative)",
+    "Original annotation", "Annotation ID", "Annotation confidence", "Agreement"))
+  # Same values, types and row order under the new labels.
+  expect_identical(out[["Pathway-matched metabolite candidate ID(s)"]],
+                   fe[["Pathway candidate(s) matched by feature"]])
+  for (cl in setdiff(names(fe), "Pathway candidate(s) matched by feature")) {
+    expect_identical(out[[cl]], fe[[cl]], label = cl)
+  }
+  # No candidate column (python engine): left exactly as it is.
+  py <- fe[, c("Contrast", "Feature", "Original annotation", "Agreement")]
+  expect_identical(.mmc_feature_sheet_layout(py), py)
+})
+
+test_that("the candidate names touch only the Feature Evidence sheet, not the evidence", {
+  tc <- ma_two_contrast_sections()
+  s <- tc$sections[["HL_vs_LL"]]
+  # The evidence (CSV/TSV exports, HTML) has no name column.
+  expect_false(any(c("Candidate metabolite name(s) (putative)",
+                     "Pathway-matched metabolite candidate ID(s)") %in%
+                     names(s$evidence$feature_table)))
+  # ... and keeps its own column order.
+  expect_identical(match("Pathway candidate(s) matched by feature",
+                         names(s$evidence$feature_table)),
+                   match("Matched compound(s)", names(s$evidence$feature_table)) + 1L)
+  # The Shiny entry does not carry the map.
+  expect_false("candidate_names" %in% names(metab_shiny_mummichog_entry(s)))
+  # Every other sheet is what it was without the map.
+  bare <- lapply(tc$sections, function(x) { x$candidate_names <- NULL; x })
+  a <- build_mummichog_workbook_sheets(tc$sections)
+  b <- build_mummichog_workbook_sheets(bare)
+  for (nm in setdiff(names(a), "Feature Evidence")) {
+    expect_identical(a[[nm]], b[[nm]], label = nm)
+  }
 })
 
 test_that("evidence status and input counts reach the README", {
@@ -104,7 +224,8 @@ test_that("before writing, statistics are numbers, identifiers text, missing val
     "EC Evidence"      = c("EmpiricalCompound", "Pathway-matching candidate(s)",
                            "Candidate KEGG ID(s)"),
     "Feature Evidence" = c("Feature", "EmpiricalCompound", "Matched compound(s)",
-                           "Pathway candidate(s) matched by feature"))
+                           "Pathway-matched metabolite candidate ID(s)",
+                           "Candidate metabolite name(s) (putative)"))
   for (nm in names(txt)) for (cl in txt[[nm]]) {
     expect_true(is.character(sh[[nm]][[cl]]), label = paste0(nm, ": ", cl))
   }

@@ -517,6 +517,43 @@ test_that("an MA section renders its restored Pathway Evidence", {
   expect_false(grepl("Feature log2FC (mummichog input)", html, fixed = TRUE))
 })
 
+test_that("the input line, table and methodology state the run's counts and cutoff", {
+  skip_unless_renderable()
+
+  # The run recorded p <= 0.01 while the config now says 0.05: every stated
+  # cutoff must be the recorded one. Counts are the fixture's run record:
+  # 6 DE features, 5 retained, 4 ORA-significant.
+  fx <- ma_evidence_fixture(run_p_cutoff = 0.01)
+  secs <- suppressWarnings(suppressMessages(build_mummichog_report_sections(
+    list(HL_vs_LL = fx$pathways), fx$config, files = fx$files,
+    row_data = fx$row_data, de_res = fx$de_res, model = fx$model)))
+  html <- render_mummichog_section(secs, withr::local_tempdir(), MA_RENDER_CFG)
+
+  summary_tab <- tab_body(html, "summary", "ora-plot")
+  expect_match(summary_tab, "5 features retained for Mummichog analysis (out of 6 DE features, after input filtering)", fixed = TRUE)
+  expect_match(summary_tab, "Of these, 4 have raw DE p ≤ 0.01 and form the ORA significant feature list", fixed = TRUE)
+  expect_match(summary_tab, "GSEA does not use this cutoff; it ranks empirical compounds", fixed = TRUE)
+
+  meth <- substr(html, anchor_at(html, "methodology"), anchor_at(html, "hl-vs-ll"))
+  # Table headers and cells live in the widget's JSON, where "≤" may be
+  # written as the escape \u2264.
+  meth_tables <- tab_table_data(meth)
+  le <- "(≤|\\\\u2264)"
+  expect_match(meth_tables, "Features retained for Mummichog analysis", fixed = TRUE)
+  expect_match(meth_tables, paste0("ORA significant features \\(raw DE p ", le, " cutoff\\)"))
+  expect_match(meth_tables, "Significance rule", fixed = TRUE)
+  expect_match(meth_tables, paste0("raw DE p ", le, " 0\\.01"))
+  expect_false(grepl("Eligible input features|Significant input features", html))
+  # The input panel, in words a biologist can follow.
+  expect_match(meth, "features retained for Mummichog analysis", fixed = TRUE)
+  expect_match(meth, "at or below the configured cutoff (p ≤ 0.01)", fixed = TRUE)
+  expect_match(meth, "includes significant features that match no compound", fixed = TRUE)
+  expect_match(meth, "drawn at random from all retained features", fixed = TRUE)
+  expect_match(meth, "GSEA does not use this cutoff", fixed = TRUE)
+  expect_match(meth, "raw DE p ≤ 0.01", fixed = TRUE)
+  expect_false(grepl("raw DE p ≤ 0.05", meth, fixed = TRUE))
+})
+
 test_that("two MA contrasts render the Across contrasts tab first, with caveats", {
   skip_unless_renderable()
 

@@ -287,8 +287,10 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #'   fields (06t), which the Shiny payload does not carry: `overview` (every
 #'   pathway, `build_mummichog_overview()`; its first rows are `summary`'s),
 #'   `ora_detail` (`build_mummichog_ora_detail()`), `input_counts`
-#'   (`mmc_input_counts()`) and `p_cutoff`. Empty list when there is nothing to
-#'   show.
+#'   (`mmc_input_counts()`), `p_cutoff`, and `candidate_names` (model names of
+#'   the candidates the features matched, `mmc_candidate_name_map()`; NULL for
+#'   the python engine), read by the workbook only. Empty list when there is
+#'   nothing to show.
 build_mummichog_report_sections <- function(pathways_by_contrast, config,
                                             files = NULL, row_data = NULL,
                                             de_res = NULL, model = NULL,
@@ -459,6 +461,10 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
                                  evidence = evidence, summary = summary,
                                  evidence_note = evidence_note,
                                  evidence_log2fc_note = evidence_log2fc_note,
+                                 # Model names of the candidates the features
+                                 # matched, for the workbook (06v) only.
+                                 candidate_names = if (is_ma && !is.null(evidence))
+                                   mmc_candidate_name_map(evidence$feature_table, model),
                                  overview = overview,
                                  ora_detail = build_mummichog_ora_detail(pw, tbl),
                                  input_counts = mmc_input_counts(

@@ -64,7 +64,7 @@ ma_evidence_fixture <- function(dir = tempfile("ma_ev_"), sig_ec = c(3, 1),
                                 contrast = "HL_vs_LL",
                                 fet = c(0.01, 0.2), holm = c(0.02, 0.2),
                                 gsea_p = c(0.03, 0.6), gsea_fdr = c(0.06, 0.6),
-                                gsea_only = FALSE) {
+                                gsea_only = FALSE, run_p_cutoff = 0.05) {
   ma_dir <- file.path(dir, "mummichog_pinned", contrast, "metaboanalyst")
   dir.create(ma_dir, recursive = TRUE, showWarnings = FALSE)
   cpd <- data.frame(
@@ -127,7 +127,7 @@ ma_evidence_fixture <- function(dir = tempfile("ma_ev_"), sig_ec = c(3, 1),
   info <- list(engine = "metaboanalyst", contrast = contrast,
                params = list(ionization_mode = "mixed",
                              polarity_column = "Reference Ion",
-                             tolerance_ppm = 10, p_cutoff = 0.05,
+                             tolerance_ppm = 10, p_cutoff = run_p_cutoff,
                              n_permutations = 100, force_primary_ion = TRUE,
                              rt_frac = 0.02, min_pathway_size = 3),
                model = list(id = "syn_model", version = "20000101",
@@ -135,7 +135,14 @@ ma_evidence_fixture <- function(dir = tempfile("ma_ev_"), sig_ec = c(3, 1),
                reference = list(repo = "xia-lab/MetaboAnalystR",
                                 commit = "398476ae2a0c996e390925fa62adc46b5ecde334"),
                fitdistrplus_version = "0.0.0",
-               gamma = list(fitted = FALSE, error = "synthetic fixture"))
+               gamma = list(fitted = FALSE, error = "synthetic fixture"),
+               # As the engine records them: 6 DE features, all passed; F07
+               # removed as a duplicate m/z; 4 of the 5 retained have p <= 0.05.
+               counts = list(features_given = 6, features_kept = 5,
+                             removed_out_of_range = 0, removed_duplicate_mz = 1,
+                             significant_features = 4, empirical_compounds = 3,
+                             significant_ecs = 3, pathways_tested = 3,
+                             pathways_reported = 2))
   if (with_gsea) {
     gsea <- data.frame(
       check.names = FALSE, stringsAsFactors = FALSE,

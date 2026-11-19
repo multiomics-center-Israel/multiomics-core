@@ -2635,9 +2635,11 @@ if (identical(mummi_engine, "metaboanalyst")) {
   ma1 <- if (length(ma_infos)) ma_infos[[1]] else list()
   ma_p <- ma1$params %||% list()
   ma_mode <- ma_p$ionization_mode %||% "?"
+  # The feature cutoff the engine recorded for the run (ma_run_info.json).
+  ma_cut <- ma_p$p_cutoff %||% p_cut
   cat("**Mummichog pathway analysis (MetaboAnalyst-compatible engine).** For each contrast, Mummichog asks whether metabolic pathways hold more LC–MS signal than expected **without requiring identified metabolites**: features are matched by m/z to candidate compounds of the metabolic model, grouped into **EmpiricalCompounds (ECs)**, and pathways are tested on those ECs. Its results are pathway-level **hypotheses**, and its candidate compounds are putative matches, not identifications. It complements, and does not replace, enrichment based on identified metabolites.\n\n", sep = "")
   cat("**Read the results with these in mind:**\n\n")
-  cat(sprintf("- **What enters:** every feature that reached DE for the contrast — not only the features passing the overall DE selection (`pass_any_contrast`). A feature counts as significant at **raw DE p ≤ %s**, not at adjusted DE significance.\n", p_cut))
+  cat(sprintf("- **What enters:** every feature that reached DE for the contrast — not only the features passing the overall DE selection (`pass_any_contrast`). A feature counts as significant at **raw DE p ≤ %s**, not at adjusted DE significance.\n", ma_cut))
   cat(sprintf("- **ORA** gives Fisher's exact test (FET) raw p and its **Holm** adjustment; Holm is applied over the pathways in the ORA table only (those with at least one significant EC), not every pathway tested. **GSEA** gives a raw p and a **Benjamini–Hochberg FDR**. *Nominal* (raw p < %s) marks a hypothesis, not a result that survives multiple testing.\n", p_cut))
   cat("- **Counts are not additive:** one EC is not one metabolite, and the same EC and feature can support several pathways and contrasts.\n\n")
 
@@ -2650,7 +2652,8 @@ if (identical(mummi_engine, "metaboanalyst")) {
     show_cols <- c("Contrast", "Features at DE (this contrast)", "Passed to the engine",
                    "Not passed (missing m/z, RT, p or statistic)",
                    "Removed: m/z out of range", "Removed: duplicate m/z",
-                   "Eligible input features", "Significant input features")
+                   "Features retained for Mummichog analysis",
+                   "ORA significant features (raw DE p ≤ cutoff)", "Significance rule")
     print(htmltools::tagList(make_mm_dt(in_tbl[, intersect(show_cols, names(in_tbl)), drop = FALSE],
                                      caption = "What entered Mummichog, per contrast (from each contrast's run record)",
                                      pageLength = 25)))
@@ -2665,9 +2668,9 @@ if (identical(mummi_engine, "metaboanalyst")) {
   info_panel("Mummichog input and feature selection", c(
     if (identical(ma_mode, "mixed")) sprintf("**Mixed-polarity data, analysed jointly.** Positive- and negative-ion features form **one** analysis per contrast, with each feature's polarity read from the `%s` column. Each feature is matched only against the ion forms of its own polarity (MetaboAnalyst's 25 positive and 16 negative forms). A compound's matches from either polarity at similar retention times form **one** EmpiricalCompound. Significant features, the background of ECs and the permutation null are shared by both polarities, and retention times of both polarities are compared on one scale.\n\n", ma_p$polarity_column %||% "?")
     else sprintf("Every feature was read as a **%s** ion (MetaboAnalyst's %s ion forms).\n\n", ma_mode, if (identical(ma_mode, "positive")) "25 positive" else "16 negative"),
-    "**Input filtering, by the engine's own rules.** The contrast's complete DE table is joined to each feature's m/z, retention time and (mixed mode) polarity. Features missing an m/z, retention time, p-value or statistic are not passed to the engine. The engine then keeps m/z between 50 and 2001 and, where features share exactly the same m/z — including a positive- and a negative-ion feature — keeps only the one with the smallest p-value. It refuses a peak list of fewer than 100 features, or with fewer than 11 significant features or under 1% of the list. The table above gives each count from the contrast's run record.\n\n",
-    sprintf("**Significant features** have a raw DE p-value of at most %s (p ≤ %s), MetaboAnalyst's inclusive rule. An EC is significant when it holds at least one significant feature.\n\n", p_cut, p_cut),
-    "**GSEA ranking.** Each feature is scored by a signed statistic chosen from the DE method: the signed t statistic when the method reports one (limma, t-test), otherwise the log2 fold change. An EC's score is the maximum of its features' scores.\n\n"))
+    "**Which features are retained.** Every measured feature in the contrast's DE results is considered. Features with a missing or invalid m/z, retention time, p-value or statistic are left out, as are features with m/z outside 50–2001. When several features have exactly the same m/z — including a positive- and a negative-ion feature — only the one with the smallest p-value is kept. What remains are the **features retained for Mummichog analysis**. The analysis does not run for a contrast with fewer than 100 retained features, or with fewer than 11 (or under 1% of) significant ones. The table above gives each contrast's counts, as recorded by the run.\n\n",
+    sprintf("**ORA significant features.** ORA uses the contrast's unadjusted DE p-value: a retained feature is significant when its p-value is at or below the configured cutoff (p ≤ %s). This count includes significant features that match no compound in the metabolic model; such features belong to no empirical compound, so they cannot make one significant. An empirical compound is significant when at least one of its features is. To judge enrichment, ORA repeats the test many times with the same number of features drawn at random from all retained features.\n\n", ma_cut),
+    "**GSEA does not use this cutoff.** It ranks empirical compounds, each scored by the largest signed statistic among its features. The statistic is chosen from the DE method: the t statistic when the method reports one (limma, t-test), otherwise the log2 fold change.\n\n"))
 
   info_panel("ORA and statistical significance", c(
     "Per pathway, over-representation of significant ECs among the pathway's ECs is tested with **Fisher's exact test (FET)** — the ORA p-value shown throughout, and the plot's y axis, as in MetaboAnalyst's own plot — and with the EASE score. A **Gamma**-adjusted p-value is MetaboAnalyst's: a Gamma distribution fitted to the permutation p-values of all pathways, then applied to FET. An **empirical** p-value is the share of permutations, each drawing as many features at random from the whole peak list, whose pathway p-value is at most FET.\n\n",
@@ -2706,7 +2709,7 @@ if (identical(mummi_engine, "metaboanalyst")) {
   info_panel("Parameters and reproducibility", c(
     sprintf("- Engine: native R reimplementation of MetaboAnalyst's MS Peaks-to-Pathways mummichog, MetaboAnalystR `%s`; each step checked against that version's own output on synthetic reference data\n", substr(ma1$reference$commit %||% "398476ae2a0c996e390925fa62adc46b5ecde334", 1, 10)),
     sprintf("- Ionization mode: %s\n", ma_mode),
-    sprintf("- Significant features: raw DE p <= %s\n", p_cut),
+    sprintf("- ORA significant features: raw DE p ≤ %s\n", ma_cut),
     sprintf("- Mass tolerance: %s ppm\n", ma_p$tolerance_ppm %||% ppm),
     sprintf("- Primary-ion rule: %s\n", if (isTRUE(ma_p$force_primary_ion)) "on (an EC needs at least one primary ion: M+H, M+Na, M-H2O+H, M-H, M-2H or M-H2O-H)" else "off"),
     sprintf("- Retention-time tolerance fraction: %s\n", ma_p$rt_frac %||% 0.02),
@@ -2890,11 +2893,14 @@ for (contrast in names(mummi_sections)) {
   }
   # What entered the engine for this contrast, from its run record (06t).
   ic <- s$input_counts
-  if (is.data.frame(ic) && !is.na(ic[["Eligible input features"]])) {
-    cat(sprintf("**Input:** %s eligible features (of %s at the DE stage), %s of them significant at raw DE p ≤ %s. See **Methodology** for what is filtered out.\n\n",
-                format(ic[["Eligible input features"]], big.mark = ","),
+  if (is.data.frame(ic) && !is.na(ic[["Features retained for Mummichog analysis"]])) {
+    # The cutoff this contrast was run with (its run record), else the config's.
+    ic_cut <- s$ma_info$params$p_cutoff %||% p_cut
+    cat(sprintf("**Input:** %s features retained for Mummichog analysis (out of %s DE features, after input filtering). Of these, %s have raw DE p ≤ %s and form the ORA significant feature list. GSEA does not use this cutoff; it ranks empirical compounds.\n\n",
+                format(ic[["Features retained for Mummichog analysis"]], big.mark = ","),
                 format(ic[["Features at DE (this contrast)"]], big.mark = ","),
-                format(ic[["Significant input features"]], big.mark = ","), p_cut))
+                format(ic[["ORA significant features (raw DE p ≤ cutoff)"]], big.mark = ","),
+                ic_cut))
   }
   if (is.null(s$summary)) {
     cat("The Summary could not be built for this contrast; the full results are under **Advanced / Downloads**.\n\n")

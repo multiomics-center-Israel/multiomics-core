@@ -369,10 +369,11 @@ mmc_input_counts <- function(pathways, de_table, de_res) {
     "Not passed (missing m/z, RT, p or statistic)" = at_de - given,
     "Removed: m/z out of range"                   = num1(ct$removed_out_of_range),
     "Removed: duplicate m/z"                      = num1(ct$removed_duplicate_mz),
-    "Eligible input features"                     = num1(ct$features_kept),
-    "Significant input features"                  = num1(ct$significant_features),
+    "Features retained for Mummichog analysis"    = num1(ct$features_kept),
+    "ORA significant features (raw DE p ≤ cutoff)" = num1(ct$significant_features),
+    # The cutoff the engine recorded for this contrast, not today's config.
     "Significance rule"                           = if (is.null(info$params$p_cutoff))
-      NA_character_ else sprintf("raw DE p <= %s", info$params$p_cutoff),
+      NA_character_ else sprintf("raw DE p ≤ %s", info$params$p_cutoff),
     "Empirical compounds"                         = num1(ct$empirical_compounds),
     "Significant ECs"                             = num1(ct$significant_ecs),
     "Pathways tested"                             = num1(ct$pathways_tested),

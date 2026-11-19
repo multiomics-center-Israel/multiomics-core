@@ -196,14 +196,21 @@ test_that("input counts are the run record's, and pass_any_contrast is only repo
   expect_equal(ic[["Passed to the engine"]], 5)
   expect_equal(ic[["Not passed (missing m/z, RT, p or statistic)"]], 1)
   expect_equal(ic[["Removed: duplicate m/z"]], 1)
-  expect_equal(ic[["Eligible input features"]], 4)
-  expect_equal(ic[["Significant input features"]], 3)
-  expect_identical(ic[["Significance rule"]], "raw DE p <= 0.05")
+  expect_equal(ic[["Features retained for Mummichog analysis"]], 4)
+  expect_equal(ic[["ORA significant features (raw DE p ≤ cutoff)"]], 3)
+  expect_identical(ic[["Significance rule"]], "raw DE p ≤ 0.05")
+  expect_false(any(c("Eligible input features", "Significant input features") %in% names(ic)))
+  # The rule is the cutoff the run recorded, whatever the config says now.
+  info$params$p_cutoff <- 0.01
+  attr(fx$pathways, "ma_info") <- info
+  expect_identical(mmc_input_counts(fx$pathways, fx$de, de_res)[["Significance rule"]],
+                   "raw DE p ≤ 0.01")
   expect_equal(ic[["Features in DE results (all contrasts)"]], 6)
   expect_equal(ic[["Passing overall DE selection (pass_any_contrast; not the Mummichog input)"]], 3)
   # No run record (python engine): engine counts are NA, nothing is invented.
   py <- mmc_input_counts(data.frame(pathway = "a"), fx$de, NULL)
-  expect_true(is.na(py[["Eligible input features"]]))
+  expect_true(is.na(py[["Features retained for Mummichog analysis"]]))
+  expect_true(is.na(py[["Significance rule"]]))
   expect_equal(py[["Features at DE (this contrast)"]], 6)
 })
 
