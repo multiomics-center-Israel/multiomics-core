@@ -247,6 +247,21 @@ tab_table_data <- function(tab) {
   paste(m, collapse = " ")
 }
 
+# Real MetaboAnalyst-compatible sections, built by
+# build_mummichog_report_sections() from the synthetic result files of
+# ma_evidence_fixture() (helper-mummichog-ma.R). Defined here, before any test,
+# because testthat runs a file top to bottom.
+render_ma_sections <- function(model_sha = NULL, de_res = NULL) {
+  fx <- ma_evidence_fixture()
+  model <- fx$model
+  if (!is.null(model_sha)) attr(model, "sha256") <- model_sha
+  suppressWarnings(suppressMessages(build_mummichog_report_sections(
+    list(HL_vs_LL = fx$pathways), fx$config, files = fx$files,
+    row_data = fx$row_data, de_res = de_res %||% fx$de_res, model = model)))
+}
+MA_RENDER_CFG <- list(engine = "metaboanalyst", ionization_mode = "mixed",
+                      polarity_column = "Reference Ion")
+
 
 test_that("the mummichog section renders with GSEA and evidence", {
   skip_unless_renderable()
@@ -324,6 +339,51 @@ test_that("the mummichog section renders with GSEA and evidence", {
   expect_match(html, "MetaboAnalystR")
   expect_match(html, substr(.MMC_GSEA_REF_COMMIT, 1, 12))
   expect_match(html, "not.{0,40}Best guess", perl = TRUE)
+})
+
+test_that("every EC's feature table shows annotation and agreement, not only Mixed ECs", {
+  skip_unless_renderable()
+
+  # The HTML of one EC's drill-down block: from its summary line to its end.
+  ec_block <- function(html, summary_text) {
+    at <- regexpr(summary_text, html, fixed = TRUE)
+    expect_true(at > 0, label = summary_text)
+    rest <- substr(html, at, nchar(html))
+    substr(rest, 1L, regexpr("</details>", rest, fixed = TRUE))
+  }
+
+  # python engine fixture: E196 is Match, E3 is Conflict.
+  html <- render_mummichog_section(render_fixture_sections(), withr::local_tempdir())
+  ev_tab <- tab_body(html, "pathway-evidence", "advanced-downloads")
+  # Column checks read the table widget only: the candidate block above the
+  # table prints "Annotation confidence" itself.
+  for (ec in c("E196 — Match", "E3 — Conflict")) {
+    tbl <- tab_table_data(ec_block(ev_tab, ec))
+    for (col in c("Original annotation", "Annotation confidence", "Agreement")) {
+      expect_match(tbl, col, fixed = TRUE, label = paste(ec, col))
+    }
+  }
+  # The Conflict EC's single feature carries its own annotation and verdict.
+  e3 <- ec_block(ev_tab, "E3 — Conflict")
+  e3_tbl <- tab_table_data(e3)
+  expect_match(e3_tbl, "feat_4", fixed = TRUE)
+  expect_match(e3_tbl, "D-Glucose", fixed = TRUE)
+  expect_match(e3_tbl, "Conflict", fixed = TRUE)
+  # The candidate block stays above the table.
+  expect_lt(regexpr("Mummichog pathway candidate", e3, fixed = TRUE)[[1]],
+            regexpr("feat_4", e3, fixed = TRUE)[[1]])
+
+  # MetaboAnalyst-compatible engine: EC0003 (Conflict) and EC0002 (Match).
+  # The fixture declares no confidence, so that column is left out everywhere.
+  ma <- render_mummichog_section(render_ma_sections(), withr::local_tempdir(),
+                                 MA_RENDER_CFG)
+  ma_ev <- tab_body(ma, "pathway-evidence", "advanced-downloads")
+  for (ec in c("EC0003 — Conflict", "EC0002 — Match", "EC0001 — Mixed")) {
+    tbl <- tab_table_data(ec_block(ma_ev, ec))
+    expect_match(tbl, "Original annotation", fixed = TRUE, label = ec)
+    expect_match(tbl, "Agreement", fixed = TRUE, label = ec)
+    expect_false(grepl("Annotation confidence", tbl, fixed = TRUE), label = ec)
+  }
 })
 
 test_that("the mummichog section renders without GSEA or evidence", {
@@ -416,6 +476,126 @@ test_that("a contrast without GSEA says so when another contrast has it", {
   # cannot know.
   expect_match(html, "No GSEA results for this contrast")
   expect_match(html, "no pathway passed the size filter")
+})
+
+# ---- MetaboAnalyst-compatible engine: Pathway Evidence ---------------------------
+# (render_ma_sections() and MA_RENDER_CFG are defined with the helpers above.)
+
+test_that("an MA section renders its restored Pathway Evidence", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(render_ma_sections(), withr::local_tempdir(),
+                                   MA_RENDER_CFG)
+  tabs <- c("summary", "ora-plot", "gsea-plot", "pathway-evidence",
+            "advanced-downloads")
+  at <- vapply(tabs, function(id) anchor_at(html, id), integer(1))
+  expect_false(anyNA(at), info = paste(tabs[is.na(at)], collapse = ", "))
+  expect_true(all(diff(at) > 0))
+
+  # The Summary shows the reader-facing overview: raw FET and Holm kept apart,
+  # overlap ECs and the features in them as their own columns.
+  summary_tab <- tab_body(html, "summary", "ora-plot")
+  expect_match(summary_tab, "Features in overlap ECs", fixed = TRUE)
+  expect_match(summary_tab, "FET p = 0.01", fixed = TRUE)
+  expect_match(summary_tab, "Holm = 0.02", fixed = TRUE)
+  expect_false(grepl("Confirms identified signal", summary_tab, fixed = TRUE))
+  expect_match(summary_tab, "class=\"mmc-info\"", fixed = TRUE)
+  ev_tab <- tab_body(html, "pathway-evidence", "advanced-downloads")
+  expect_match(ev_tab, "Glycolysis", fixed = TRUE)
+  expect_match(ev_tab, "EC0001 — Mixed", fixed = TRUE)
+  # The engine's own columns reach the drill-down table.
+  expect_match(ev_tab, "Matched via pathway candidate", fixed = TRUE)
+  expect_match(ev_tab, "Polarity", fixed = TRUE)
+  expect_false(grepl("could not be built", ev_tab, fixed = TRUE))
+  expect_match(html, "<code>mummichog_evidence_features</code>", fixed = TRUE)
+
+  # Methodology: the engine's own evidence rules, and no claim it has none.
+  expect_false(grepl("Not produced by this engine", html, fixed = TRUE))
+  expect_match(html, "that feature itself matched", fixed = TRUE)
+  expect_match(ev_tab, "the feature matched no pathway candidate itself", fixed = TRUE)
+  expect_match(html, "Feature statistic (MetaboAnalyst input)", fixed = TRUE)
+  expect_false(grepl("Feature log2FC (mummichog input)", html, fixed = TRUE))
+})
+
+test_that("two MA contrasts render the Across contrasts tab first, with caveats", {
+  skip_unless_renderable()
+
+  secs <- ma_two_contrast_sections()$sections
+  html <- render_mummichog_section(secs, withr::local_tempdir(), MA_RENDER_CFG)
+  # Methodology, then Across contrasts, then the contrast tabs.
+  at <- vapply(c("methodology", "across-contrasts", "hl-vs-ll", "ll-vs-dd"),
+               function(id) anchor_at(html, id), integer(1))
+  expect_false(anyNA(at), info = paste(names(at)[is.na(at)], collapse = ", "))
+  expect_true(all(diff(at) > 0))
+  across_tab <- tab_body(html, "across-contrasts", "hl-vs-ll")
+  expect_match(across_tab, "Recurring is not replicating", fixed = TRUE)
+  expect_match(across_tab, "Glycolysis", fixed = TRUE)          # nominal in both
+  # Listed through adjusted significance in one contrast only.
+  expect_match(across_tab, "TCA cycle", fixed = TRUE)           # GSEA FDR in HL_vs_LL
+  expect_match(across_tab, "Pyruvate metabolism", fixed = TRUE) # ORA Holm in LL_vs_DD
+  expect_match(across_tab, "<strong>adjusted significance in at least one</strong>",
+               fixed = TRUE)
+  expect_match(across_tab, "ORA Holm", fixed = TRUE)
+
+  # Methodology: essential caveats visible, detail in ⓘ panels.
+  meth <- tab_body(html, "methodology", "across-contrasts")
+  expect_match(meth, "not only the features passing the overall DE selection", fixed = TRUE)
+  expect_match(meth, "raw DE p ≤ 0.05", fixed = TRUE)
+  expect_match(meth, "pathways in the ORA table only", fixed = TRUE)
+  expect_match(meth, "Counts are not additive", fixed = TRUE)
+  expect_match(meth, "What entered Mummichog, per contrast", fixed = TRUE)
+  expect_identical(lengths(regmatches(meth, gregexpr("class=\"mmc-info\"", meth, fixed = TRUE))), 5L)
+  expect_match(meth, "Holm, not Benjamini", fixed = TRUE)
+  expect_match(meth, "analysed jointly", fixed = TRUE)
+
+  # The GSEA-only pathway with no significant EC is never "Not tested".
+  # Asserted on the tables' data, not the legend prose (which names both).
+  hl_rows <- tab_table_data(tab_body(html, "hl-vs-ll", "ll-vs-dd"))
+  expect_match(hl_rows, "No significant EC overlap", fixed = TRUE)
+  expect_match(hl_rows, "GSEA-only signal: no ORA evidence shown", fixed = TRUE)
+  expect_false(grepl("\"Not tested\"", hl_rows, fixed = TRUE))
+})
+
+test_that("an MA section with no matched DE table explains its empty log2FC", {
+  skip_unless_renderable()
+
+  de <- ma_evidence_fixture()$de
+  secs <- render_ma_sections(de_res = list(de_tables = list(A_vs_B = de, C_vs_D = de)))
+  html <- render_mummichog_section(secs, withr::local_tempdir(), MA_RENDER_CFG)
+  ev_tab <- tab_body(html, "pathway-evidence", "advanced-downloads")
+  expect_match(ev_tab, "Feature log2FC (DE) is incomplete for this contrast", fixed = TRUE)
+  expect_match(ev_tab, "could be matched to contrast", fixed = TRUE)
+  # Said again where the full feature table sits.
+  adv <- substr(html, anchor_at(html, "advanced-downloads"), nchar(html))
+  expect_match(adv, "Feature log2FC (DE) is incomplete for this contrast", fixed = TRUE)
+})
+
+test_that("an MA section with complete log2FC shows no incompleteness note", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(render_ma_sections(), withr::local_tempdir(),
+                                   MA_RENDER_CFG)
+  expect_false(grepl("is incomplete for this contrast", html, fixed = TRUE))
+})
+
+test_that("an MA section whose evidence was refused keeps the tab and says why", {
+  skip_unless_renderable()
+
+  secs <- render_ma_sections(model_sha = strrep("b", 64))
+  expect_null(secs[["HL_vs_LL"]]$evidence)
+  html <- render_mummichog_section(secs, withr::local_tempdir(), MA_RENDER_CFG)
+
+  ev_tab <- tab_body(html, "pathway-evidence", "advanced-downloads")
+  expect_match(ev_tab, "Pathway evidence could not be built for this contrast",
+               fixed = TRUE)
+  expect_match(ev_tab, "not the model this contrast was analysed with", fixed = TRUE)
+  expect_match(ev_tab, "ORA and GSEA results above are unaffected", fixed = TRUE)
+  expect_match(tab_body(html, "summary", "ora-plot"),
+               "Pathway evidence is not available for this contrast", fixed = TRUE)
+  # ORA and GSEA still render.
+  expect_match(html, "Each bubble is a pathway")
+  expect_match(html, "x = NES", fixed = TRUE)
+  expect_false(grepl("mummichog_evidence_", html, fixed = TRUE))
 })
 
 test_that("the mummichog section renders with no results at all", {

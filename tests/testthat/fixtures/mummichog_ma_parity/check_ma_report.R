@@ -18,7 +18,11 @@
 #   * the Mummichog section: the original per-polarity tabs
 #     ("<contrast>, positive ions" / ", negative ions") must map onto exactly
 #     the new per-contrast tabs, and each new tab must carry Summary, ORA plot,
-#     GSEA plot and Advanced / Downloads.
+#     GSEA plot, Pathway Evidence and Advanced / Downloads;
+#   * the evidence exports: Supporting ECs equal the engine's Sig.EC, the
+#     feature counts match the feature table, every feature id is an input
+#     feature, and a feature without its own pathway-candidate match is
+#     "Not assessed".
 # Shiny payload: same keys as the original; every key the original filled is
 # filled; the embedded final Excel files are byte-identical to the original's.
 
@@ -57,8 +61,10 @@
   for (i in seq_len(nrow(blk))) {
     if (blk$level[i] == 2) {
       cur <- blk$text[i]
-      if (!identical(cur, "Methodology")) tabs[[cur]] <- character()
-    } else if (blk$level[i] == 3 && !is.null(cur) && !identical(cur, "Methodology")) {
+      # Methodology and Across contrasts are report-wide tabs, not contrasts.
+      if (!cur %in% c("Methodology", "Across contrasts")) tabs[[cur]] <- character()
+    } else if (blk$level[i] == 3 && !is.null(cur) &&
+               !cur %in% c("Methodology", "Across contrasts")) {
       tabs[[cur]] <- c(tabs[[cur]], blk$text[i])
     }
   }
@@ -123,10 +129,13 @@ check_ma_report <- function(orig, dest, check) {
         sprintf("original %s | new %s", paste(base_old, collapse = ", "),
                 paste(names(t_new), collapse = ", ")))
   check("Mummichog: no per-polarity tab left", !any(grepl("(positive|negative) ions$", names(t_new))))
-  want <- c("Summary", "ORA plot", "GSEA plot", "Advanced / Downloads")
+  want <- c("Summary", "ORA plot", "GSEA plot", "Pathway Evidence",
+            "Advanced / Downloads")
   lacking <- names(t_new)[!vapply(t_new, function(s) all(want %in% s), logical(1))]
-  check("Mummichog: every contrast tab has Summary, ORA plot, GSEA plot, Advanced / Downloads",
+  check("Mummichog: every contrast tab has Summary, ORA plot, GSEA plot, Pathway Evidence, Advanced / Downloads",
         length(lacking) == 0, paste(lacking, collapse = ", "))
+  check("Mummichog: no contrast reports that its Pathway Evidence could not be built",
+        !grepl("Pathway evidence could not be built", new, fixed = TRUE))
   n_gsea <- lengths(regmatches(new, gregexpr("GSEA over the complete ranked list of",
                                              new, fixed = TRUE)))
   check("Mummichog: every contrast tab shows GSEA results (no placeholder)",
@@ -174,6 +183,58 @@ check_ma_report <- function(orig, dest, check) {
     }, logical(1))
     check("exported ORA tables carry FET + Holm columns, no BH/FDR column",
           length(hdr_ok) > 0 && all(hdr_ok))
+
+    # -- Pathway Evidence exports, against the engine's own tables ------------
+    rd <- function(f) utils::read.delim(f, colClasses = "character",
+                                        check.names = FALSE, na.strings = c("", "NA"))
+    mm_dir <- file.path(dest, "metabolomics", "mummichog_pinned")
+    ev_fail <- character()
+    for (k in seq_along(slugs)) {
+      fp <- file.path(mm_dir, sprintf("mummichog_evidence_%s_%s.tsv",
+                                      c("pathways", "empirical_compounds", "features"),
+                                      slugs[[k]]))
+      res_f <- file.path(per[[k]], "ma_pathway_results.tsv")
+      in_f  <- file.path(per[[k]], "ma_input.tsv")
+      if (!all(file.exists(c(fp, res_f, in_f)))) {
+        ev_fail <- c(ev_fail, sprintf("%s: evidence export(s) missing", slugs[[k]]))
+        next
+      }
+      ps <- rd(fp[1]); ft <- rd(fp[3]); res <- rd(res_f); inp <- rd(in_f)
+      # Supporting ECs is the engine's Sig.EC, pathway by pathway.
+      sig <- stats::setNames(as.numeric(res[["Sig.EC"]]), res$pathway)
+      if (!setequal(ps$Pathway, res$pathway) ||
+          any(as.numeric(ps[["Supporting ECs"]]) != sig[ps$Pathway])) {
+        ev_fail <- c(ev_fail, sprintf("%s: Supporting ECs differ from Sig.EC", slugs[[k]]))
+      }
+      # Distinct features and feature-EC links agree with the feature table.
+      n_feat <- tapply(ft$Feature, ft$Pathway, function(x) length(unique(x)))
+      n_link <- table(ft$Pathway)
+      if (any(as.numeric(ps[["Supporting features"]]) != n_feat[ps$Pathway]) ||
+          any(as.numeric(ps[["Feature-EC links"]]) != as.numeric(n_link[ps$Pathway]))) {
+        ev_fail <- c(ev_fail, sprintf("%s: feature counts disagree with the feature table", slugs[[k]]))
+      }
+      if (!all(ft$Feature %in% inp$feature_id)) {
+        ev_fail <- c(ev_fail, sprintf("%s: evidence names a feature id not in ma_input.tsv", slugs[[k]]))
+      }
+      if (!all(c("Feature statistic (MetaboAnalyst input)", "Feature log2FC (DE)",
+                 "Polarity", "Matched via pathway candidate") %in% names(ft)) ||
+          "Feature log2FC (mummichog input)" %in% names(ft)) {
+        ev_fail <- c(ev_fail, sprintf("%s: feature-table columns are not the MetaboAnalyst-compatible set", slugs[[k]]))
+      }
+      # A feature that matched no pathway candidate itself is never assessed.
+      if (any(ft[["Matched via pathway candidate"]] == "FALSE" &
+              ft$Agreement != "Not assessed")) {
+        ev_fail <- c(ev_fail, sprintf("%s: a feature without its own pathway-candidate match was assessed", slugs[[k]]))
+      }
+    }
+    check("evidence exports: present, Supporting ECs == Sig.EC, counts and feature ids consistent",
+          length(ev_fail) == 0, paste(utils::head(ev_fail, 4), collapse = "; "))
+    sm <- file.path(mm_dir, sprintf("mummichog_summary_%s.tsv", slugs))
+    sm <- sm[file.exists(sm)]
+    unfilled <- vapply(sm, function(f) any(rd(f)[["Supporting evidence"]] %in% "Not available"),
+                       logical(1))
+    check("Summary: every ORA-nominal pathway has its Supporting evidence filled",
+          length(sm) > 0 && !any(unfilled), paste(basename(sm[unfilled]), collapse = ", "))
     check("exported GSEA tables carry P.Value / padj (BH) / NES, no Holm column",
           length(ghdr_ok) > 0 && all(ghdr_ok))
   } else {

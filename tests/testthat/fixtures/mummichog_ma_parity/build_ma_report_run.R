@@ -25,8 +25,9 @@
 #   5. writes MUMMICHOG_UPDATE_NOTE.md (methods / provenance);
 #   6. checks: original unchanged; no old Mummichog artefact in --dest; the new
 #      report states the new method and none of the old per-polarity wording;
-#      every report heading of the original report is still present, except the
-#      Mummichog sub-tabs this engine does not produce; Excel files present.
+#      every report heading of the original report is still present; the
+#      engine's result files are unchanged by the report layer; Pathway
+#      Evidence was built for every contrast; Excel files present.
 #
 # --dest should be a SIBLING of the original run directory: the report finds
 # its interactive cutoff-panel helpers by walking up from where it is rendered.
@@ -209,6 +210,15 @@ if (rerun_mm) {
 }
 check("GSEA results written for every contrast",
       length(files[basename(files) == "ma_gsea_results.tsv"]) == length(de_res$de_tables))
+# Every engine result file, by content: building the sections (Pathway Evidence
+# included), exports, report and Shiny payload must leave them all as they are.
+engine_files <- function() {
+  f <- list.files(file.path(out_dir, "mummichog_pinned"), recursive = TRUE,
+                  full.names = TRUE)
+  f <- sort(f[basename(dirname(f)) == "metaboanalyst"])
+  stats::setNames(unname(tools::md5sum(f)), f)
+}
+engine_before <- engine_files()
 pathways <- read_mummichog_pathways_by_contrast(files)
 sections <- mod_mummichog_sections(pathways, files, pre, de_res, cfg_ma,
                                    enrichment_res = enrichment_res)
@@ -236,6 +246,12 @@ shiny_ok <- tryCatch({
   TRUE
 }, error = function(e) { message("Shiny payload: ", conditionMessage(e)); FALSE })
 check("Shiny payload written", shiny_ok)
+check("engine result files (ORA, GSEA, matched features, run record) unchanged by sections, evidence, exports, report and Shiny payload",
+      length(engine_before) > 0 && identical(engine_before, engine_files()))
+ev_notes <- Filter(Negate(is.null), lapply(sections, `[[`, "evidence_note"))
+check("Pathway Evidence built for every contrast",
+      length(ev_notes) == 0 && all(vapply(sections, function(s) !is.null(s$evidence), logical(1))),
+      paste(sprintf("%s: %s", names(ev_notes), unlist(ev_notes)), collapse = " | "))
 
 # ---- 5. methods / provenance note --------------------------------------------------
 info1 <- attr(pathways[[1]], "ma_info")
@@ -253,7 +269,7 @@ note <- c(
   "- `adj.p Holm *` columns are **Holm** (family-wise) adjustments over the reported pathways, as MetaboAnalyst computes them — **not** Benjamini–Hochberg FDR.",
   "- A pathway nominal by FET is a pathway-level hypothesis, **not** a result that is significant after multiple-testing correction.",
   "- GSEA (MetaboAnalyst's peaks GSEA) runs on the same joint-polarity empirical compounds and pathway sets as the ORA, over the complete ranked list; `P.Value` is its raw permutation p-value and `padj` its **Benjamini–Hochberg FDR** (ORA: Holm; GSEA: BH — as in MetaboAnalyst). NES sign is not a biological direction.",
-  "- The Pathway Evidence section (python engine only) is not produced.", "",
+  "- Pathway Evidence is read from this engine's own results: each pathway's significant ECs (as many as its Sig.EC), every feature the engine grouped into them (both polarities in mixed mode), and annotation agreement, which compares each feature's annotation only with the pathway candidates that feature itself matched.", "",
   "## Provenance", "",
   sprintf("- multiomics-core commit: %s", core_sha),
   sprintf("- MetaboAnalystR reference: %s @ %s", info1$reference$repo, info1$reference$commit),
@@ -275,10 +291,10 @@ check("original run unchanged (same files, sizes, mtimes)", identical(before, af
 
 dest_files <- list.files(dest, recursive = TRUE)
 mm_files <- dest_files[grepl("mummichog|mcg_", dest_files, ignore.case = TRUE)]
-# Python-engine artefacts. GSEA exports are legitimate now (the new engine's
-# own GSEA); evidence exports exist only for the python engine.
-old <- mm_files[grepl("/v2/|mcg_|_positive_ions|_negative_ions|mummichog_evidence_",
-                      mm_files)]
+# Python-engine artefacts. GSEA and evidence exports are legitimate (the new
+# engine's own); the old run's mummichog_pinned/ is never copied, so any here
+# were written by this build.
+old <- mm_files[grepl("/v2/|mcg_|_positive_ions|_negative_ions", mm_files)]
 check("no old Mummichog artefact in the new run", length(old) == 0,
       if (length(old)) paste(utils::head(old, 3), collapse = "; ") else "")
 check("every Mummichog file outside the new engine's tree is a new export",
