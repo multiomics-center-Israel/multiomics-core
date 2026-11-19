@@ -89,9 +89,7 @@ rubin_pool_estimates <- function(Q, U, df_com) {
 #' Option A: per draw, the squared standard error is the eBayes posterior
 #' variance times the squared unscaled standard deviation
 #' (\code{s2.post * stdev.unscaled^2}), so the moderated t of a single draw is
-#' reproduced exactly when all draws agree. fdrtool, when enabled, rewrites only
-#' \code{fit2$p.value}; this reads coefficients and variances, so it is
-#' unaffected.
+#' reproduced exactly when all draws agree.
 #'
 #' @param runs List of per-imputation results from run_limma_multimp(); each
 #'   needs \code{fit2} (an eBayes MArrayLM). Per-contrast limma, t-test and

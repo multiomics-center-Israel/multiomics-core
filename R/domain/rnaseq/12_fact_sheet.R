@@ -38,7 +38,7 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
     counts <- read_artifact_or_null(file.path(dirs$datasets, "rna_counts_filtered.tsv"))
     final <- read_artifact_or_null(file.path(dirs$datasets, "final_results.tsv"))
     de_counts <- .read_de_summary_counts(out_dir, dirs)
-    norm_path <- list.files(dirs$datasets, pattern = "^rna_norm_.*\\.tsv$", full.names = TRUE)[1]
+    norm_path <- .resolve_rna_norm_path(dirs$datasets, pre$info$expr_work_method)
     norm <- read_artifact_or_null(norm_path)
     contrast_names <- if (!is.null(inputs$contrasts)) as.character(inputs$contrasts$Contrast_name) else character(0)
 
@@ -49,6 +49,40 @@ build_rnaseq_fact_sheet <- function(out_dir, config, pre = NULL, inputs = NULL,
         .facts_rnaseq_enrichment(dirs$enrichment, p_cut, contrast_names, gsea_cut),
         .facts_run_provenance(run_dir)
     )
+}
+
+#' Locate the normalized expression table written by this run
+#'
+#' \code{write_rnaseq_datasets_legacy()} names the table after the method that
+#' produced \code{expr_work} (\code{rna_norm_<method>.tsv}) and never removes
+#' older ones, so after reruns with different methods \code{Datasets/} can hold
+#' several. A pattern match would then take whichever sorts first, which may be
+#' a stale table. With a recorded method, read that exact file. Without one, use
+#' the table only when there is exactly one: with several, nothing says which
+#' belongs to these results, so return none (with a warning) rather than
+#' describe the wrong matrix. Same resolution as the RNA HTML report's \code{rna_norm_file}.
+#'
+#' @param datasets_dir The run's Datasets/ directory.
+#' @param method The method that ran (\code{pre$info$expr_work_method}), or
+#'   NULL when no runtime record is available.
+#' @return A single path (which may not exist), or \code{NA_character_} when
+#'   no table can be attributed to this run.
+#' @keywords internal
+.resolve_rna_norm_path <- function(datasets_dir, method = NULL) {
+    if (!is.null(method)) {
+        return(file.path(datasets_dir, sprintf("rna_norm_%s.tsv", method)))
+    }
+    found <- list.files(datasets_dir, pattern = "^rna_norm_.*\\.tsv$", full.names = TRUE)
+    if (length(found) > 1) {
+        warning(sprintf(paste0(
+            "results fact sheet: %d normalized tables in %s (%s) and no record of which method ran; ",
+            "none is read. Pass pre with pre$info, or remove the tables ",
+            "from earlier runs."),
+            length(found), datasets_dir, paste(basename(found), collapse = ", ")),
+            call. = FALSE)
+        return(NA_character_)
+    }
+    found[1]
 }
 
 #' Read the DE summary counts, whichever schema this run wrote

@@ -111,6 +111,8 @@
 #' @return Character vector of every file produced across all contrasts
 #'   (per-contrast inputs, id-maps, result trees, manifests), suitable for a
 #'   `format = "file"` target; NULL when mummichog is disabled in config.
+#'   An enabled config that does not select `engine: python` (see
+#'   `mmc_engine()`) stops before anything is run or written.
 mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
                                  python = Sys.getenv("MUMMICHOG_PYTHON",
                                                      .mmc_default_python())) {
@@ -122,6 +124,17 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   if (!isTRUE(mummi_cfg$enabled)) {
     message("mummichog (pinned): disabled in config — skipping")
     return(NULL)
+  }
+  # Engine gate, after the enable gate (a disabled config resolves no engine)
+  # and before anything is read, written or run. The DAG only wires this stage
+  # in when mmc_engine() says python; this covers direct callers, so the stage
+  # can never run python for a config that the engine record and the report
+  # read as metaboanalyst.
+  if (!identical(mmc_engine(config), "python")) {
+    .mmc_stop("mod_mummichog_pinned() runs the python engine, but this config ",
+              "selects mummichog.engine '", mmc_engine(config), "'",
+              if (is.null(mummi_cfg$engine)) " (the default: it names no engine)",
+              ". Set engine: python to run the pinned python mummichog.")
   }
 
   # Analysis knobs from config (sensible defaults when unset).

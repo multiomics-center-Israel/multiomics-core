@@ -52,15 +52,18 @@
 
   out <- withr::local_tempdir()
   cfg <- list(modes = list(metabolomics = list(enrichment = list(
-    mummichog = utils::modifyList(list(enabled = TRUE), mummi_cfg)))))
+    mummichog = utils::modifyList(list(enabled = TRUE, engine = "python"),
+                                  mummi_cfg)))))
   mod_mummichog_pinned(pre, de_res, cfg, out_dir = out, python = "python")
   map <- utils::read.delim(file.path(out, "mummichog_pinned", "contrasts.tsv"),
                            colClasses = "character")
   list(runs = calls$runs, map = map)
 }
 
-.mixed_cfg <- list(ionization_mode = "mixed", polarity_column = "Reference Ion",
-                   positive_mode = "positive")
+# The python engine's mixed mode; named explicitly since metaboanalyst is the
+# default engine.
+.mixed_cfg <- list(engine = "python", ionization_mode = "mixed",
+                   polarity_column = "Reference Ion", positive_mode = "positive")
 
 
 # ---- polarity parsing and labels ----------------------------------------------
@@ -181,7 +184,7 @@ test_that("a polarity section keys DE and identified support back to its contras
   writeLines(c("p1\tPW_pos\tC00001", "p2\tPW_mid\tC00009", "p3\tPW_neg\tC00017"), gmt)
   cfg <- list(modes = list(metabolomics = list(enrichment = list(
     gmt_file  = gmt,
-    mummichog = list(p_cutoff = 0.05, ionization_mode = "mixed",
+    mummichog = list(engine = "python", p_cutoff = 0.05, ionization_mode = "mixed",
                      polarity_column = "Reference Ion", positive_mode = "positive")))))
   # Two DE tables, so a lookup by the run label (not the contrast) cannot fall
   # back to "the only table".
@@ -208,7 +211,7 @@ test_that("a polarity section keys DE and identified support back to its contras
 
 test_that("a run label is split into contrast and polarity only in mixed mode", {
   mode_cfg <- function(m) list(modes = list(metabolomics = list(enrichment = list(
-    mummichog = list(ionization_mode = m)))))
+    mummichog = list(engine = "python", ionization_mode = m)))))
   lab <- "X, positive ions"
 
   mixed <- mmc_run_label_parts(lab, mode_cfg("mixed"))

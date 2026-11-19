@@ -88,12 +88,246 @@ There is no separate `normalization:` block.
 | `metab_de_res` | `mod_metabolomics_de()` | `03_differential.R`: `run_metabolomics_de()` (`de.method`: `limma`, `t_test` (Welch), `t_test_equal`, `wilcoxon`), `load_precomputed_metabolomics_de()`, `build_de_summary()` |
 | `metab_feature_sel_res` | `mod_metabolomics_feature_selection()` | `04_feature_selection.R` (random forest, PLS-DA) |
 | `metab_enrichment_res` | `mod_metabolomics_enrichment()` | `06_enrichment.R`: QEA, ssGSEA, ORA, GSEA |
-| `metab_mummichog_pinned_files` | `mod_mummichog_pinned()` (only when mummichog is enabled) | `06c`–`06e_mummichog_*.R` |
+| `metab_mummichog_pinned_files` | `mod_mummichog_pinned()` (only when mummichog is enabled), or `mod_mummichog_metaboanalyst()` with `mummichog.engine: metaboanalyst` | `06c`–`06e_mummichog_*.R`; MetaboAnalyst-compatible engine `06j`–`06n_mummichog_ma_*.R` |
 | `metab_mummichog_sections` | `mod_mummichog_sections()` | `06e_mummichog_plots.R`: `build_mummichog_report_sections()` (ORA plot + table, GSEA, evidence, Summary) |
 | `metab_mummichog_exports` | `mod_mummichog_exports()` | `06e_mummichog_plots.R`: `save_mummichog_exports()`, `clear_orphan_mummichog_gsea_exports()` |
 | `metab_final_results` | `write_metabolomics_final_results()` | `05_outputs_legacy.R`: `build_final_results_metabolomics()`, `build_group_cv_metabolomics()` |
 | `metab_shiny_payload` | `save_shiny_payload_metabolomics()` → `build_shiny_payload_metabolomics()` | `07_shiny_export.R` |
 | `metab_report` | `mod_metabolomics_report()` | `R/pipeline/metabolomics/templates/report_metabolomics.Rmd` |
+
+## Enrichment reference files
+
+Two files outside the data folder decide enrichment results, and both are
+tracked by `{targets}`:
+
+| Config key | Read by | Target that carries its fingerprint |
+|---|---|---|
+| `enrichment.gmt_file` (one or a list) | `metab_enrichment_res`, `metab_mummichog_sections` | `metab_enrichment_gmt_ref` |
+| `enrichment.mapping_file` (HMDB → KEGG) | `met_raw`, `metab_enrichment_res`, `metab_mummichog_sections` | `metab_kegg_mapping_ref` |
+
+The fingerprint is the md5 of each existing file, taken each time the plan is
+defined and written into the target's command
+(`06q_enrichment_reference_files.R`). So a library edited in place, or a
+configured library that was missing and now exists, reruns enrichment; a changed
+mapping table reruns `met_raw` and enrichment; and when nothing changed, nothing
+is outdated. A changed GMT does not rerun `met_raw`.
+
+When mummichog is enabled, its report sections (`metab_mummichog_sections`)
+read the same two files themselves: the GMT libraries to decide which mummichog
+pathways can be compared with the identified-metabolite enrichment, and the
+mapping table for the supporting evidence. The sections therefore depend on
+both fingerprints directly, and rerun when either file changes even if the
+enrichment result and the preprocessed data come back unchanged (for example
+with `run_enrichment: false`). The mummichog run itself reads neither file, so
+a changed GMT does not rerun it.
+
+This is separate from **mummichog's own reference files** — the pathway model
+it runs on (the built-in one, or `model_ref` / `model_json`). Those are not
+tracked by these two targets and are outside this mechanism.
+
+A configured file that does not exist is not tracked and is not an error, as
+before: the enrichment code skips it. For a relative `mapping_file`, `met_raw`
+reads the path as written and the enrichment stage resolves it under the raw
+data folder; both locations are tracked.
+
+## ORA and GSEA provenance
+
+ORA and GSEA test **compounds**, and several measured features can map to one
+compound. Each result therefore carries a `provenance` element beside its
+unchanged `table` (and `ranks`), built in `06r_enrichment_provenance.R` from
+the objects the test computed. It never changes a statistic, and no column is
+added to any table or `results.tsv`.
+
+| Element | What it records |
+|---|---|
+| `status`, `diagnostics`, `error` | `"ok"`, `"inconsistent"` (a check against the result failed) or `"failed"` (could not be built) |
+| `reference_files` | the GMT and mapping files the test was given, whether each was read, and its md5 taken before the read; a library is hashed again after its read, and a file that changed while the test ran makes the provenance inconsistent |
+| `feature_compounds` | per measured feature: the compound id used, which step chose it (`kegg_column` > `hmdb_mapping` > `name_column`), every KEGG id in the cell, and whether the cell was ambiguous |
+| `pathway_sources` | every GMT line and what became of it: tested, replaced by a later line with the same id, replaced by an equal label earlier in the same file or in a later library, too few matches, or not returned by fgsea |
+| `pathway_members` | every listed member of every set given to the test, duplicates kept |
+| ORA: `thresholds`, `compounds`, `features` | universe and foreground per compound; significance per feature, separately |
+| GSEA: `ranked`, `features` | the final ranking with the representative feature of each compound; every feature's role |
+
+Three distinctions the tables cannot make:
+
+-   **Feature roles in ORA.** A feature can be non-significant and still belong
+    to a foreground compound, because another feature of that compound is
+    significant. Counts are per compound; `features` keeps significance,
+    universe and foreground as separate flags.
+-   **The GSEA representative.** When several features share a compound, the
+    ranking keeps the one with the largest |logFC|, and on a tie the one that
+    comes first in the DE table. `ranked$representative_feature` is the
+    feature that was kept, recorded during the deduplication, not worked out
+    again from the logFC. Ties are flagged, including ties of opposite sign,
+    where the row order decides the sign the compound is ranked with.
+-   **Given to the test versus used by it.** A set can list one compound
+    twice, typically after HMDB ids are translated to KEGG. `in_input_set`
+    marks every occurrence in the vector the test received;
+    `in_effective_statistic` marks what counted. ORA counts every occurrence in
+    the pathway size, so the two are equal. fgsea keeps each member once, and
+    drops a set that is then too small. Both behaviours are as they were.
+
+`metab_pathway_feature_membership(provenance)` lists every measured feature of
+every pathway compound for display, with those roles per row. It shows more
+than the test used: in GSEA a feature that did not represent its compound, or
+a compound that was not ranked, is listed and never marked as contributing to
+the score or the leading edge.
+
+Code that needs provenance calls `require_metab_enrichment_provenance(res)`,
+which stops unless the status is `"ok"`. A failed or inconsistent provenance
+leaves the statistical result untouched and raises a warning. The warning can
+never end the analysis: where warnings are turned into errors
+(`options(warn = 2)`) it is dropped, and the status stays on the record.
+
+`upstream_origin = "not_tracked"` on an id taken from the `KEGG` column means
+the enrichment stage read the column as it found it: it cannot tell whether
+the value came with the input annotation or was filled earlier from a mapping
+file.
+
+## ORA and GSEA in the Shiny payload
+
+`build_metab_enrichment_payload()` (`07b_shiny_enrichment_payload.R`) turns a
+run's ORA and GSEA results into the two keys the Shiny payload carries side by
+side. It is a re-encoding of results and provenance: nothing is recomputed, and
+a result whose provenance is not `"ok"` stops it.
+
+There is **no option to set**. `build_shiny_payload_metabolomics()` adds the two
+keys whenever the run has enrichment results (`run_enrichment: true`):
+
+-   No existing key changes: the legacy `enrichment_ora`, `enrichment_gsea`,
+    `enrichment_qea` and `enrichment_ssgsea` tables stay, and `mummichog` is
+    built on its own, with or without enrichment results.
+-   A run without enrichment adds nothing.
+-   A run whose ORA and GSEA produced no result gets a block with
+    `available = FALSE` and every contrast listed as `no_result`.
+-   Results that cannot be encoded correctly (for example results cached
+    before provenance was recorded) are not added: the payload is still
+    written with every other key, a warning names the reasons, and
+    `enrichment_provenance` holds `available = FALSE`, `reason = "blocked"`
+    and the complete preflight table. Blocked results are never shown as
+    results: `enrichment` stays `NULL`.
+
+A reader of the payload can tell these states apart, and must not treat them
+alike:
+
+| State | `enrichment` | `enrichment_provenance` |
+|---|---|---|
+| Enrichment was not run | `NULL` | key absent |
+| **Blocked**: results exist and could not be encoded | `NULL` | `available = FALSE`, `reason = "blocked"`, `preflight` |
+| Ran, ORA and GSEA produced no result | `available = FALSE`, empty components | `status$state` is `no_result` for every contrast |
+| Ran, a contrast has no significant pathway | `available = TRUE`; manifest status `empty`, zero-row table | `status$state` is `no_significant_pathways`; the tested pathways are in `all_tested` |
+| Ran, significant pathways | `available = TRUE`; manifest status `significant` | `status$state` is `significant` |
+
+"Blocked" says nothing about the biology: it means the results could not be
+re-encoded safely, and the reasons are in `preflight`. `enrichment` being `NULL`
+is therefore not enough to conclude that enrichment was not run; the
+`enrichment_provenance` key decides.
+
+The blocked fallback covers what the preflight detects: results without
+usable provenance, a feature id containing `/`, duplicated or empty ids in the
+exported matrix, and pathway ids that clash within or across results. It is
+not a catch-all. An unexpected error while building the block (a bug, or a
+state the preflight does not check) is not caught: it stops the payload
+target with its own message, so that it is seen and fixed instead of being
+recorded as "blocked".
+
+-   **`enrichment`** has exactly the nine components the app reads for RNA-seq
+    (`available`, `gene_index`, `config`, `manifest`, `ora`, `gsea`,
+    `gsea_leading_edge`, `gsea_rankings`, `pathway_membership`), under database
+    `combined` and ranking `fc`. Ids are feature ids.
+-   **`enrichment_provenance`** holds what that shape cannot: every tested
+    pathway with its full statistics (`all_tested`), compounds, per-feature
+    roles, pathway members with multiplicity, and the state of each analysis.
+
+The two are joined by analysis, contrast and pathway id. Four things are kept
+apart throughout:
+
+| What | Where |
+|---|---|
+| Significant measured features behind the ORA foreground | `geneID` and `n_features` of an ORA row; `features$significant` |
+| Compounds the ORA test counted | `Count`, `GeneRatio`, `BgRatio`, `FoldEnrichment` |
+| Pathways significant in a result | the tables under `enrichment$ora` / `enrichment$gsea` |
+| Exploratory membership, significant or not, ranked or not | `enrichment$pathway_membership` |
+
+-   The display tables hold the significant pathways only, at the threshold
+    the enrichment stage itself reports with (`.METAB_ENRICHMENT_SIG_FDR`).
+    Non-significant tested pathways are in `all_tested`.
+-   GSEA rankings and leading edges are in the representative feature of each
+    compound; no other feature of a compound appears in them.
+-   `gene_index` starts with the feature ids of the exported matrix, in its row
+    order. Every other feature the block or its provenance names follows, and
+    `enrichment_provenance$feature_index$in_expr_norm` tells them apart.
+-   An analysis that ran and found nothing has a manifest row with status
+    `empty` and a zero-row table. One with no result has no manifest row and
+    is `no_result` in `enrichment_provenance$status`.
+-   A pathway that was given to fgsea and came back without a result (its
+    members collapse below fgsea's size limit once duplicates are dropped) is
+    listed in `enrichment_provenance$gsea[[contrast]]$no_result`, apart from
+    `all_tested`, and the detail reader returns it with state `no_result`.
+-   The manifest rows are the layout's own; `storage_key` here names the unit's
+    place in the block, not a directory.
+
+`preflight_metab_enrichment_payload()` reports, without stopping, what would
+block the build on a given run: results without usable provenance, a feature id
+containing `/`, duplicated ids in the exported matrix, or two tested pathways
+sharing an id. `metab_enrichment_pathway_detail(payload, analysis, contrast,
+pathway_id)` returns the result row, the listed compounds and the measured
+features behind any tested pathway, from the payload alone.
+
+## Enrichment output layout
+
+`mod_metabolomics_enrichment()` writes each result unit to its own directory
+under `<mode>/Enrichment/`. The layout follows the RNA-seq one: the analysis
+context is in the path, and file names inside a unit are short and fixed. All
+paths are built in `06p_enrichment_layout.R`.
+
+```
+Enrichment/
+├── enrichment_manifest.csv            the units this run wrote (same columns as RNA-seq)
+├── ORA/combined/contrasts/<contrast>/de/       results.tsv, dotplot.png, lollipop.png, barplot.png
+├── GSEA/combined/ranking_by_fc/<contrast>/     results.tsv, nes_barplot.png, lollipop.png, barplot.png
+├── QEA/combined/all_samples/                   results.tsv, barplot.png, lollipop.png, library_<library>.png
+├── QEA/combined/contrasts/<contrast>/          results.tsv, lollipop.png, barplot.png
+├── ssGSEA/combined/all_samples/                results.tsv, barplot.png, boxplots.png, lollipop.png
+└── ssGSEA/combined/contrasts/<contrast>/       results.tsv, lollipop.png, barplot.png
+```
+
+-   **`combined`** is the database level. Each method adjusts FDR across all
+    configured GMT libraries together, so there is one result family per unit;
+    the library of a pathway is the `library` column of the table where the
+    method records it (QEA, ORA, GSEA).
+-   **`<contrast>`** is the contrast label made file-safe. Labels that collide
+    after that get a numeric suffix, with a warning, and a label that is a
+    Windows device name (`CON`, `NUL`, `COM1`, ...) is prefixed with
+    `contrast_`.
+-   **`enrichment_manifest.csv`** is removed when an enrichment run starts (the
+    run stops, before writing anything, if it cannot be removed) and written
+    once all results are on disk, through a temporary file that is
+    renamed into place, so it is either complete or absent: a run that stopped
+    part-way has none. Only units that produced a table are listed. Its columns
+    are the RNA-seq ones, **except that `storage_key` means something else
+    here**: the unit directory relative to `Enrichment/`, not the key of a table
+    inside a results object as in RNA-seq.
+-   **Files from an earlier run.** After the manifest is written, the run
+    removes the files of this stage that it did not write: a contrast that is
+    gone or gave no result, a plot that was not drawn this time, the flat
+    `enrichment_*` files that preceded this layout. A file counts as this
+    stage's only when both its path and its name are ones the stage produces:
+    -   in a unit directory of the tree above: `results.tsv`, the plots listed
+        for that method, and `library_*.png` in `QEA/combined/all_samples/`;
+    -   directly in `Enrichment/`: `enrichment_<method>_<plot>[_<contrast>].png`
+        for those same plot names, and `enrichment_qea_*.png`;
+    -   directly in `Datasets/`: `enrichment_<method>[_<contrast>]_results.tsv`.
+
+    Any other file is left alone, including another PNG inside a method folder.
+    Directories are never removed. Nothing is removed by a run that fails
+    (including a failure to write the manifest), a run that produces no result
+    at all, or a run with enrichment disabled. A file that could not be deleted
+    is named in a warning, not reported as removed.
+-   **Still written for compatibility:** the first contrast's ORA and GSEA table
+    in `Datasets/enrichment_{ora,gsea}_results.tsv` and its plots as
+    `Enrichment/enrichment_{ora,gsea}_*.png`.
+-   The mummichog stage is separate and keeps its own `mummichog_pinned/` tree.
 
 Other domain files: `08_metabolite_network.R`, `10_drift_correction.R`,
 `10_pipeline_summary.R`, `11_powerpoint.R`. The preprocessing modules

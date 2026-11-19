@@ -132,6 +132,20 @@ build_mummichog_pathway_table <- function(pathways) {
     "Enrichment ratio" = round(overlap / pathway_size, 3),
     "p.value"          = pval
   )
+  if (.mmc_is_ma_table(pathways)) {
+    # MetaboAnalyst-compatible engine (06n): p.value is FET, MetaboAnalyst's
+    # plotted p-value; its other statistics follow, and the adjusted columns
+    # are HOLM (MetaboAnalyst's p.adjust default), named so that no reader can
+    # take them for BH/FDR. Rows stay in MetaboAnalyst's own order.
+    num <- function(col) suppressWarnings(as.numeric(pathways[[col]]))
+    out[["p.value EASE"]]      <- num("EASE")
+    out[["p.value Gamma"]]     <- num("Gamma")
+    out[["p.value empirical"]] <- num("Empirical")
+    out[["adj.p Holm FET"]]    <- num("Holm_adj_FET")
+    out[["adj.p Holm EASE"]]   <- num("Holm_adj_EASE")
+    out[["adj.p Holm Gamma"]]  <- num("Holm_adj_Gamma")
+    return(out[order(num("ma_rank")), , drop = FALSE])
+  }
   out[order(out[["p.value"]]), , drop = FALSE]
 }
 
@@ -325,6 +339,11 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     # either there is nothing to trace, and a failure here must not cost the
     # contrast its ORA plot and table.
     cfiles   <- files_by_contrast[[contrast]]
+    # The MetaboAnalyst-compatible engine writes no python EmpiricalCompound
+    # tables, which both python layers below read: they are skipped for it, by
+    # name, rather than attempted and failed. Its own GSEA is attached below.
+    is_ma <- .mmc_is_ma_table(pw)
+    if (is_ma) cfiles <- NULL
     evidence <- if (is.null(cfiles) || is.null(model)) NULL else tryCatch(
       build_mummichog_pathway_evidence(pw, cfiles, model, annot),
       error = function(e) {
@@ -382,6 +401,11 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
         )
       }
     }
+    # The MetaboAnalyst-compatible engine ran its GSEA in the stage, on its
+    # own joint-polarity ECs (06o); its result travels with the pathway table.
+    # The python GSEA above never runs for it (cfiles is NULL), so the two
+    # engines' results cannot be mixed in one section.
+    if (is_ma && gsea_enabled) gsea <- attr(pw, "ma_gsea")
     # Same cutoff the ORA plot and the report's figure legends use: the legend
     # states the value from config, so a scatter drawn at the function default
     # would put its dashed line somewhere the caption does not claim.
@@ -399,7 +423,9 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
                                  plot = plot, table = tbl,
                                  gsea = gsea, gsea_plot = gsea_plot,
                                  evidence = evidence, summary = summary,
-                                 polarity = lab$polarity)
+                                 polarity = lab$polarity,
+                                 engine = if (is_ma) "metaboanalyst" else "python",
+                                 ma_info = if (is_ma) attr(pw, "ma_info") else NULL)
   }
 
   # Assign a de-duplicated, filesystem-safe slug per section (same sanitise +
@@ -411,6 +437,31 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     for (i in seq_along(sections)) sections[[i]]$slug <- slugs[[i]]
   }
   sections
+}
+
+#' The presentation export paths of one contrast slug
+#'
+#' The single list of the file names `save_mummichog_exports()` writes for a
+#' contrast, used wherever those exports are cleared without a section.
+#'
+#' @param dest_dir The `mummichog_pinned/` directory.
+#' @param slug     The contrast's export slug.
+#' @param all      FALSE for the GSEA and Summary exports only; TRUE adds the
+#'   ORA bubble and pathway table and the evidence tables.
+#' @return Character vector of paths (whether or not they exist).
+#' @noRd
+.mmc_contrast_export_paths <- function(dest_dir, slug, all = FALSE) {
+  stem <- function(s, ext) file.path(dest_dir, paste0(s, slug, ext))
+  c(stem("mummichog_gsea_table_", c(".tsv", ".csv")),
+    stem("mummichog_gsea_scatter_", c(".png", ".pdf")),
+    stem("mummichog_summary_", c(".tsv", ".csv")),
+    if (all) c(
+      stem("mummichog_pathway_bubble_", c(".png", ".pdf")),
+      stem("mummichog_pathway_table_", c(".tsv", ".csv")),
+      stem(rep(c("mummichog_evidence_pathways_",
+                 "mummichog_evidence_empirical_compounds_",
+                 "mummichog_evidence_features_"), each = 2),
+           c(".tsv", ".csv"))))
 }
 
 #' Clear GSEA and Summary exports belonging to contrasts with no report section
@@ -426,6 +477,10 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
 #' section owns. Whether such a
 #' contrast should get a GSEA analysis at all is a separate question about the
 #' section contract, tracked rather than decided here.
+#'
+#' One exception widens it: a contrast the MetaboAnalyst-compatible engine
+#' recorded as failed (`ma_failed.json`, 06n) has no current result at all, so
+#' its ORA bubble and pathway table and its evidence exports are removed too.
 #'
 #' @param files    Flat character vector of every mummichog output file.
 #' @param sections The sections from `build_mummichog_report_sections()`.
@@ -453,13 +508,17 @@ clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
   all_slugs <- make.unique(gsub("[^A-Za-z0-9]+", "_", names(groups)), sep = "_")
   orphans <- setdiff(all_slugs, live)
   if (length(orphans) == 0) return(character(0))
+  # A contrast the MetaboAnalyst-compatible engine recorded as FAILED this run
+  # (06n) has no current result of any kind, so every export of its slug is
+  # stale -- the ORA bubble and table and the evidence tables too, not only
+  # the GSEA and Summary files every orphan loses.
+  failed_slugs <- all_slugs[vapply(groups, .mmc_ma_contrast_failed, logical(1),
+                                   USE.NAMES = FALSE)]
 
   dest_dir <- file.path(out_dir, "mummichog_pinned")
-  paths <- unlist(lapply(orphans, function(slug) c(
-    file.path(dest_dir, paste0("mummichog_gsea_table_", slug, c(".tsv", ".csv"))),
-    file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf"))),
-    file.path(dest_dir, paste0("mummichog_summary_", slug, c(".tsv", ".csv")))
-  )), use.names = FALSE)
+  paths <- unlist(lapply(orphans, function(slug) {
+    .mmc_contrast_export_paths(dest_dir, slug, all = slug %in% failed_slugs)
+  }), use.names = FALSE)
 
   gone <- paths[file.exists(paths)]
   unlink(gone)

@@ -126,8 +126,15 @@ drop_dangling_drawing_rels <- function(wb) {
 #' @param config full config
 #' @param mode string; e.g. "proteomics", "rna"
 #' @param sheet sheet name (default "Cutoffs")
+#' @param vsn Logical; TRUE when the fold changes in a proteomics workbook were
+#'   fitted on a vsn-normalized matrix (not when they were imported from a
+#'   precomputed table). A short note is then written below the cutoff cells
+#'   saying what linearFC holds in such a run. The cutoff cells, their named
+#'   regions and the comparison they feed are the same either way. Ignored for
+#'   other modes.
 #' @return TRUE, invisibly.
-add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "Cutoffs") {
+add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "Cutoffs",
+                                     vsn = FALSE) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
 
     de_cfg <- config$modes[[mode]]$de
@@ -167,8 +174,31 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
         openxlsx::addStyle(wb, sheet, style_not_used, rows = 5, cols = 3, stack = FALSE)
         openxlsx::addStyle(wb, sheet, style_used, rows = c(4, 6), cols = 3, stack = FALSE)
     }
+    if (isTRUE(vsn) && identical(mode, "proteomics")) {
+        # Below the cutoff cells, which stay where the named regions expect
+        # them. The label above still names the right column: this says what
+        # that column holds in a vsn run, and that the comparison is unchanged.
+        openxlsx::writeData(wb, sheet, x = cutoffs_vsn_note(),
+                            startCol = 2, startRow = 8, colNames = FALSE, rowNames = FALSE)
+    }
     openxlsx::setColWidths(wb, sheet, cols = 2, widths = "auto")
     invisible(TRUE)
+}
+
+#' Note written under the cutoffs of a vsn-normalized proteomics run
+#'
+#' Kept as short lines, one per row: the column they are written to is sized to
+#' its longest cell.
+#'
+#' @return Character vector, one element per row of the note.
+cutoffs_vsn_note <- function() {
+    c("This run was normalized with vsn. linearFC is the signed form of",
+      "log2FC.imputs: 2 raised to its size, negative when log2FC.imputs is",
+      "negative. Here log2FC.imputs comes from differences of generalized-log2",
+      "values, so for well-measured proteins that size is close to a ratio of",
+      "calibrated intensities, and at low intensities it is compressed.",
+      "Where the Results sheet has a manual_cutoffs column, its formula",
+      "compares the cutoff above with the absolute value of that linearFC.")
 }
 
 #' Column glossary + fold-change reconciliation notes for a mode
@@ -184,9 +214,19 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
 #'   columns come from the first run while log2FC.imputs is the consensus across
 #'   all of them, so the reconciliation the notes describe is different. Ignored
 #'   for other modes.
+#' @param vsn Logical; TRUE when a proteomics run was normalized with vsn. One
+#'   paragraph is then put first in \code{notes}, saying that the values are on
+#'   vsn's generalized-log2 scale and what that means for the fold changes. The
+#'   glossary and the other notes are unchanged. Ignored for other modes.
+#' @param precomputed_de Logical; TRUE when the DE statistics were imported
+#'   from a precomputed table instead of fitted by the pipeline. Only read
+#'   together with \code{vsn}: the note then says that this run's vsn
+#'   normalization was not applied to the supplied statistics and that their
+#'   scale is not known here, rather than describing them as vsn-scale values.
 #' @return List with \code{glossary} (data.frame: Column, Meaning) and
 #'   \code{notes} (character vector, one paragraph per element).
-build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
+build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE, vsn = FALSE,
+                                   precomputed_de = FALSE) {
     fc_rule <- paste(
         "linearFC = 2^log2FC when log2FC is at least 0, and -1 / 2^log2FC when it is negative.",
         "It is a signed linear fold change, not a log: linearFC = -1.61 means 1.61-fold lower in the numerator group."
@@ -334,6 +374,60 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
         notes <- "Group means are descriptive summaries. The reported fold change is a model estimate, so the two agree closely but are not identical."
     }
 
+    if (isTRUE(vsn) && identical(mode, "proteomics")) {
+        # First, not last: the numbered steps below speak of log2 values and
+        # fold changes, and this says what those words mean in this workbook.
+        scale <- paste(
+            "This run was normalized with vsn (normalization$method: vsn). Wherever this sheet says log2 intensity,",
+            "the value is a generalized-log2 (glog2) value of a calibrated intensity: close to log2 for well-measured",
+            "proteins, compressed at low intensities.")
+        # log2FC_from_means is written only under multi-imputation.
+        multi_imp <- !isFALSE(multi_imputation)
+        from_cols <- if (multi_imp) "the _from_raw and _from_means columns" else "the _from_raw columns"
+        fold_changes <- if (isTRUE(precomputed_de)) {
+            # Imported statistics were not computed by this run, so what
+            # scale they are on is an upstream fact this pipeline does not
+            # have. The note says that, and claims a scale only for the fold
+            # changes this workbook derives from the values itself.
+            paste(
+                "The DE statistics in this workbook were supplied as a precomputed table: log2FC.imputs,",
+                "linearFC.imputs and the p-values are as supplied. Their scale was decided upstream and is not known",
+                "to this pipeline; this run's vsn normalization was not applied to them.",
+                "The fold changes computed here from the values themselves,", paste0("in ", from_cols, ","),
+                "are differences of glog2 group means, so they need not agree with the supplied ones.")
+        } else {
+            paste(
+                "The fold changes in the Results sheet are computed from glog2 values.",
+                # log2FC.imputs is pooled across runs on the linear scale, so
+                # under multi-imputation it is not itself a difference.
+                if (multi_imp) paste(
+                    "Within each imputation run the model estimates the fold change on the glog2 scale;",
+                    "log2FC.imputs is log2 of the mean, over the runs, of 2 raised to that estimate, as its row above says."
+                ) else "log2FC.imputs is the model's fold change estimate on the glog2 scale.",
+                "The fold changes in", from_cols, "are differences of glog2 group means.",
+                "Each linearFC column is the signed form of its log2FC under the rule above.",
+                "Because vsn calibrates every sample and changes the scale, none of them is directly comparable",
+                "with fold changes from a run without vsn.",
+                "The fold-change cutoff is applied to fold changes on this scale.",
+                # Two different comparisons, and only one of them uses the
+                # value printed in the row. Not every workbook carries the
+                # manual_cutoffs column, so its presence is not asserted.
+                if (multi_imp) paste(
+                    "The pipeline applied it within each imputation run before taking the consensus, so its DE call",
+                    "was not decided on the pooled linearFC.imputs shown here. A workbook with a manual_cutoffs column",
+                    "compares the cutoff with the absolute value of that displayed linearFC.imputs instead,",
+                    "so the two can differ for a protein near the cutoff."
+                ) else paste(
+                    "The pipeline applied it to the fold change of its single imputation run; a workbook with a",
+                    "manual_cutoffs column compares the cutoff with the absolute value of the linearFC.imputs",
+                    "shown in the row."))
+        }
+        notes <- c(paste(
+            scale, fold_changes,
+            "The CV.<group> columns are not written: 2 raised to a glog2 value is not an intensity."
+        ), notes)
+    }
+
     list(glossary = glossary, notes = notes)
 }
 
@@ -347,12 +441,16 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
 #' @param sheet Sheet name (default "How to read").
 #' @param multi_imputation Logical; passed to \code{\link{build_provenance_notes}}
 #'   so the reconciliation notes match how many times this run imputed.
+#' @param vsn,precomputed_de Logicals; passed to
+#'   \code{\link{build_provenance_notes}}.
 #' @return TRUE, invisibly.
 add_provenance_sheet <- function(wb, mode = "rna", sheet = "How to read",
-                                 multi_imputation = TRUE) {
+                                 multi_imputation = TRUE, vsn = FALSE,
+                                 precomputed_de = FALSE) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
 
-    info <- build_provenance_notes(mode, multi_imputation = multi_imputation)
+    info <- build_provenance_notes(mode, multi_imputation = multi_imputation, vsn = vsn,
+                                   precomputed_de = precomputed_de)
 
     if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)
     openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = FALSE)
@@ -465,6 +563,14 @@ p_tag_generic <- function(config, mode, default = "NA") {
 #'   for every mode that does not pool several model fits into one reported
 #'   statistic, which today is every mode but proteomics under
 #'   multi-imputation.
+#' @param vsn Logical; TRUE when a proteomics run was normalized with vsn.
+#'   \code{\link{add_provenance_sheet}} then adds a note about the scale. The
+#'   caller decides; this layer does not read the setting.
+#' @param precomputed_de Logical; TRUE when the DE statistics were imported
+#'   from a precomputed table. Only read together with \code{vsn}: the
+#'   provenance note then says the scale of the supplied fold changes is not
+#'   known here, and the Cutoffs sheet gets no vsn note, because nothing can be
+#'   said here about the scale of the linearFC it compares against.
 write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col,
                                                        expr_for_de, with_cutoffs = TRUE,
                                                        clustering_res = NULL,
@@ -473,7 +579,9 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                                                        annotation_rows = NULL,
                                                        sample_label_cols = NULL,
                                                        provenance_sheet = FALSE,
-                                                       de_reconciliation = NULL) {
+                                                       de_reconciliation = NULL,
+                                                       vsn = FALSE,
+                                                       precomputed_de = FALSE) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
     # Validate inputs
     if (is.null(final_results)) {
@@ -709,7 +817,8 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         openxlsx::setColWidths(wb, sheet, cols = 1, widths = "auto")
 
         if (with_cutoffs) {
-            add_cutoffs_sheet_legacy(wb, config, mode = mode)
+            add_cutoffs_sheet_legacy(wb, config, mode = mode,
+                                     vsn = isTRUE(vsn) && !isTRUE(precomputed_de))
             fill_manual_cutoffs_formulas_legacy(wb, sheet, df_out, config,
                                                  mode = mode,
                                                  start_row = data_start_row + 1)
@@ -720,7 +829,8 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             # assuming the default.
             add_provenance_sheet(
                 wb, mode = mode,
-                multi_imputation = config$modes[[mode]]$imputation$multi_imputation %||% TRUE
+                multi_imputation = config$modes[[mode]]$imputation$multi_imputation %||% TRUE,
+                vsn = vsn, precomputed_de = precomputed_de
             )
         }
         if (!is.null(de_reconciliation) && is.data.frame(de_reconciliation) &&

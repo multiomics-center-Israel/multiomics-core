@@ -98,6 +98,17 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
         )
       ),
       
+      # ---- Before/after batch-correction PCA (no-op unless a correction ran) ----
+      tar_target(
+        prot_batch_pca_file,
+        mod_proteomics_batch_pca(
+          pre_raw = prot_pre_raw,
+          pre     = prot_pre,
+          config  = config,
+          out_dir = prot_out_dir
+        )
+      ),
+
       # ---- QC post ----
       tar_target(
         prot_qc_post_obj,
@@ -221,6 +232,7 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
           force(prot_commentary_file)
           force(prot_exec_summary)
           force(prot_exports)
+          force(prot_batch_pca_file)
           render_proteomics_report(
             run_dir     = prot_out_dir,
             config      = config,

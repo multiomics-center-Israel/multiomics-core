@@ -756,6 +756,13 @@ read_mummichog_pathways_by_contrast <- function(files) {
   out <- list()
   for (label in names(groups)) {
     grp <- groups[[label]]
+    # The MetaboAnalyst-compatible engine (05d) writes its own result table
+    # into the same per-contrast directory; read it with its own reader (06n).
+    ma <- read_mummichog_ma_pathways(grp)
+    if (!is.null(ma)) {
+      out[[label]] <- ma
+      next
+    }
     # Distinguish "this contrast produced no pathway table" (expected — skip it
     # quietly so the report just omits the section) from "the table exists but
     # cannot be read" (a corrupt/truncated output). Only the former is suppressed;

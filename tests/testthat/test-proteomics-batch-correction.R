@@ -92,6 +92,15 @@ test_that("de_mode defaults follow whether a correction runs, and explicit value
     expect_silent(resolve(method = "combat", de_mode = "legacy_corrected"))
 })
 
+test_that("combat_mean_only defaults to FALSE and must be a single logical", {
+    resolve <- function(...) get_proteomics_batch_config(list(batch_correction = list(...)))
+    expect_false(resolve(method = "combat")$combat_mean_only)
+    expect_true(resolve(method = "combat", combat_mean_only = TRUE)$combat_mean_only)
+    for (bad in list("yes", NA, c(TRUE, FALSE), 1)) {
+        expect_error(resolve(method = "combat", combat_mean_only = bad), "combat_mean_only")
+    }
+})
+
 # --- Pass-through / dispatch ---
 
 test_that("correct_batch_proteomics is a no-op when disabled", {

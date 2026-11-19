@@ -2,6 +2,8 @@
 
 > Moved here from the top-level README; the stochasticity caveat has since been corrected to match the code. Back to the [docs index](README.md).
 
+> **Engine.** `engine: metaboanalyst` (the MetaboAnalyst-compatible engine, ORA + GSEA with joint mixed polarity; [below](#metaboanalyst-compatible-engine-joint-mixed-polarity)) is the **default**: an enabled config that names no engine runs it, and the stage says so in its log. `engine: python` selects the pinned python mummichog engine described in the next sections, and must be named to be used. The default is not a fallback: if the MetaboAnalyst-compatible engine's prerequisites are missing (a model JSON, a supported `ionization_mode`, `fitdistrplus`), the stage stops; it never switches to python. A disabled config selects no engine. The engine selected for the last enabled run is recorded in `mummichog_pinned/mummichog_engine.json`. Each stage also checks the selection itself: the python stage stops unless the config selects `python`. **Re-running an older config that has no `engine` may not reproduce it** — see [Backward compatibility](#backward-compatibility-configs-without-engine).
+
 The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
 
 ## One-time setup
@@ -84,6 +86,107 @@ Each contrast is then run **once per polarity**: the positive-ion features in `p
 
 Each run is its own unit, labelled `<contrast>, positive ions` / `<contrast>, negative ions`: its own directory (`mummichog_pinned/<contrast>_positive_ions/`), its own report tab and its own export suffix. The two runs' p-values are not combined. The identified-metabolite support shown in each tab is contrast-level (full dataset), not polarity-specific. Single-polarity modes (`pos_default`, `positive`, `negative`) behave exactly as before.
 
+This per-polarity behaviour is the **python engine's**. For one joint analysis of both polarities, as MetaboAnalyst runs it, use the MetaboAnalyst-compatible engine below.
+
+## MetaboAnalyst-compatible engine (joint mixed polarity)
+
+`engine: metaboanalyst` replaces the python subprocess with a native R reimplementation of the mummichog algorithm in MetaboAnalyst's MS Peaks-to-Pathways module. The reference is MetaboAnalystR at commit `398476ae2a0c996e390925fa62adc46b5ecde334`. Each step was ported from that commit's source and checked against that commit's own output on synthetic fixtures (`tests/testthat/fixtures/mummichog_ma_parity/`):
+
+- the compound library built from our model JSON;
+- peak preparation and per-polarity m/z matching;
+- empirical compounds;
+- permutations and pathway statistics.
+
+This engine is the default: it runs when `engine` is `metaboanalyst` or absent. The python engine is untouched and selectable with `engine: python`.
+
+What only the python engine provides (lost if it is ever removed): the Pathway Evidence section (supporting features and annotation agreement), mummichog's modular/network analysis outputs and `result.html`, the `pos_default` ion list, the built-in `human_mfn` model, and its own GSEA variant on python mummichog's m/z-merged ECs.
+
+``` yaml
+        engine: metaboanalyst
+        ionization_mode: mixed             # or positive / negative
+        polarity_column: "Reference Ion"   # required for mixed
+        model_ref: { url: ..., sha256: ... }   # or model_json; required
+        # optional (MetaboAnalyst defaults): rt_frac: 0.02, min_pathway_size: 3
+```
+
+What differs from the python engine:
+
+| | python engine | `engine: metaboanalyst` |
+|---|---|---|
+| `mixed` | one run per polarity, each with its own background | **one joint run**: one peak list, one EC grouping, one background, one permutation null. Each feature is still matched only against its own polarity's ion forms, and a compound's positive- and negative-ion matches at similar retention time form one EC |
+| ion lists | `pos_default` (8) or `positive` (25); `negative` | MetaboAnalyst's: 25 positive, 16 negative (`pos_default` refused) |
+| significant features | `p < p_cutoff` | `p <= p_cutoff` (MetaboAnalyst's rule) |
+| headline pathway p | mummichog's empirical p-value | **FET** (Fisher's exact test), MetaboAnalyst's plotted p-value |
+| other pathway statistics | — | EASE, Gamma-adjusted, empirical (from permutations) |
+| adjusted p-values | none | **Holm** (`adj.p Holm *` columns), MetaboAnalyst's `p.adjust()` default — **not BH/FDR** |
+| permutation seeds | `params.seed` | `123 + i` for permutation `i` (MetaboAnalyst's own) |
+| model | built-in `human_mfn` or a custom JSON | a custom JSON (`model_ref` / `model_json`) is required |
+| GSEA | on python mummichog's ECs (m/z-merged scores) | MetaboAnalyst's peaks GSEA on the **same joint-polarity ECs and pathway sets as the ORA**; EC score = max of its features' signed DE statistic; `padj` is **BH** |
+| Pathway Evidence | yes | not produced (it reads the python engine's EC tables) |
+
+Reproduced on purpose, because MetaboAnalyst does it:
+
+- **Duplicate m/z across polarities:** a positive- and a negative-ion feature with the *same* m/z keep only the one with the smaller p-value.
+- **Gamma parameterization:** the Gamma p-value is `1 - pgamma(1 - FET, shape, rate = <scale estimate>)`, so the scale estimate is passed as the rate.
+- **Row order:** rows are ordered by Gamma as text.
+- **Rounding:** values are rounded to 5 significant digits before the Holm adjustment.
+- **fitdistrplus warnings:** these may concern the standard errors of the Gamma fit; the engine uses only the estimates.
+
+Outputs, per contrast, in `mummichog_pinned/<contrast>/metaboanalyst/`:
+
+- `ma_pathway_results.tsv`: the pathway table.
+- `mummichog_pathway_enrichment_mummichog.csv`: MetaboAnalyst's own result table, verbatim.
+- `ma_matched_features.tsv`: every match with its EC, feature id and polarity.
+- `ma_input.tsv`: the peak list the analysis was given.
+- `ma_gsea_results.tsv`: the GSEA table in MetaboAnalyst's order (raw p, BH `padj`, NES, leading edge, each pathway's ECs).
+- `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts.
+
+GSEA is optional: if it fails, the stage warns, the contrast's ORA is still written, and `ma_run_info.json` records the GSEA error. If a whole contrast fails, the stage warns and its earlier result files are replaced by `ma_failed.json`, which holds the error. That contrast gets no report section, and all of its earlier exports are cleared. If every contrast fails, the stage first clears every contrast's earlier exports and then stops.
+
+The report, its exports and the Shiny payload read these through the same targets as before. The report's ORA table adds the EASE, Gamma, empirical and Holm columns; its GSEA tab, scatter and GSEA table export show this engine's GSEA. Python GSEA never runs with this engine, so the two engines' results are never mixed in one report.
+
+GSEA reproduces `.compute.mummichog.RT.fgsea()` at the pinned commit, with two documented exceptions that change no statistic: MetaboAnalyst's result CSV attaches EC hits in library order to rows sorted by p-value (here each row carries its own pathway's ECs), and a single tested pathway stays a row. Validated end to end against that commit on the synthetic fixtures (`generate_gsea_reference.R`).
+
+Limits:
+
+- Retention time is required. MetaboAnalyst's no-RT, compound-level path is not reproduced.
+- In mixed mode, both polarities' retention times must be on one scale.
+- Pathway names must be unique in the model, because MetaboAnalyst identifies pathways by name. A model that repeats a name stops the stage.
+- MetaboAnalyst's custom-adduct and currency-customisation options are not offered. The default currency list is applied.
+
+## Backward compatibility: configs without `engine`
+
+What an enabled config with no `engine` key does has changed more than once, so **the absence of the key does not tell you which engine an older analysis used**:
+
+| Code | Enabled config with no `engine` |
+|---|---|
+| Before the `engine` key existed | ran the python engine (the only one) |
+| Development commits of the MetaboAnalyst-compatible engine, before it was merged to `main` | first ran **python** (the key was opt-in), then ran **metaboanalyst** (stopping only if the config had `ionization_mode: pos_default` or `positive_mode`), then stopped |
+| `main`, from the merge of the MetaboAnalyst-compatible engine until this change | stopped and asked for the key; nothing ran |
+| Now | runs **metaboanalyst**, and records `engine_source: "default"` |
+
+In addition, the real-data validation scripts in `tests/testthat/fixtures/mummichog_ma_parity/` (`validate_real_run.R`, `build_ma_report_run.R`) set `engine: metaboanalyst` in memory on top of a stored run, so their outputs are MetaboAnalyst-compatible while the run's config file names no engine.
+
+So an older analysis whose config has no `engine` may have used either engine. **To reproduce an older analysis, set `engine` explicitly to the engine that analysis actually used.** Leaving the key out now always means `metaboanalyst`: an analysis that ran python will give different results (different statistics, headline p-value, ion lists and mixed-polarity handling — see the table above), or will stop on a MetaboAnalyst prerequisite such as the missing model JSON.
+
+To find out which engine an older run used, read the run, not the config:
+
+- **Its report.** The mummichog methodology text names the MetaboAnalyst-compatible engine (joint-polarity ORA and GSEA, FET and Holm columns) when that engine produced the results; a python run has the Pathway Evidence section and, for mixed data, one tab per polarity.
+- **Its output tree.** `mummichog_pinned/<contrast>/metaboanalyst/ma_run_info.json` exists only for the MetaboAnalyst-compatible engine; `mummichog_pinned/<contrast>/v2/` (with `mummichog_manifest.tsv`) only for python.
+- **Its code version.** `execution_info/git_commit.txt` gives the commit the run was made from.
+
+From this change on, `mummichog_pinned/mummichog_engine.json` answers the question directly:
+
+``` json
+{
+  "engine": "metaboanalyst",
+  "engine_source": "default",
+  "configured_engine": null
+}
+```
+
+`engine` is the engine selected for the run; `engine_source` is `"config"` when the config named it and `"default"` when it did not; `configured_engine` is the config value as written. The file records the engine selected for the **last run in which mummichog was enabled**. It does not say that the analysis completed — the engine's own result files show that — and it does not say whether mummichog is enabled in the current config: if mummichog is later disabled and the pipeline is rerun into the same output directory, the record stays where it is, like the earlier result trees and exports beside it, and still names the engine that produced them. Nothing under `mummichog_pinned/` is removed when mummichog is disabled. It is written by its own target (`metab_mummichog_engine_info`), only when mummichog is enabled, and before the engine stage runs, so a stage that stops still leaves the current selection on disk.
+
 ## Choosing a metabolic model
 
 The `-n` model is selected from the `mummichog` config block with this precedence:
@@ -113,6 +216,8 @@ Under `<metab_out_dir>/mummichog_pinned/`, one subdirectory per contrast (`<cont
 -   `<contrast>/input.tsv` and `<contrast>/input.tsv.idmap.tsv` — the exact table sent to mummichog for that contrast (m/z, retention time, p-value, statistic, **feature\_id as the 5th column**) plus a provenance id-map.
 -   `<contrast>/v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
 -   `<contrast>/v2/mummichog_manifest.tsv` and `<contrast>/v2/runner.log`.
+
+Directly under `mummichog_pinned/`, `mummichog_engine.json` records the engine selected for the last enabled run (see [Backward compatibility](#backward-compatibility-configs-without-engine)).
 
 Plus, directly under `mummichog_pinned/`, the presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), the GSEA exports described below, the `mummichog_evidence_*_<contrast>.{tsv,csv}` supporting-evidence tables, `mummichog_summary_<contrast>.{tsv,csv}` (the Summary table, described below), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
 
