@@ -1,3 +1,19 @@
+#' Keys the pipeline reads under \code{modes$proteomics$de}
+#'
+#' \code{validate_proteomics_config()} refuses any other key: an unread key is
+#' otherwise dropped without a word, and a run that looks configured one way is
+#' fitted another. A new \code{de} setting must be added here in the same
+#' change that first reads it. \code{use_adj} and \code{use_adjusted_pval} are
+#' left out on purpose; they get their own message naming the proteomics key.
+PROTEOMICS_DE_KEYS <- c(
+    "method", "control_condition", "p_cutoff", "linear_fc_cutoff",
+    "p_adjust_method", "fdrtool_correction", "paired", "pairing_col",
+    "block_col", "volcano_n_label", "use_adj_for_pass1", "use_fdr_for_pass1",
+    # Read outside the DE fit: multiomics precomputed-DE loader, PowerPoint
+    # grouping, Shiny payload cutoff, effect-size reference level.
+    "contrasts", "condition_column", "padj_cutoff", "reference_level"
+)
+
 #' Validate Proteomics Configuration
 validate_proteomics_config <- function(cfg) {
     assert_named_list(cfg, "modes$proteomics")
@@ -112,6 +128,22 @@ validate_proteomics_config <- function(cfg) {
 
     # 4. de Settings
     if (!is.null(cfg$de)) {
+        # Removed option. Failing rather than ignoring: a project that asked for
+        # fdrtool expects its p-values, and silently giving BH ones instead would
+        # change the results under the same config. false is accepted, since it
+        # asked for what still happens.
+        if (isTRUE(cfg$de$fdrtool_correction)) {
+            stop(paste0(
+                "de$fdrtool_correction was removed and can no longer be set to true.\n",
+                "  fdrtool re-estimates the null distribution from the t-statistics ",
+                "themselves; when they are narrower than expected (for example an ",
+                "unmodelled pairing) it calls proteins whose p-values are far from ",
+                "significant.\n",
+                "  Delete the key (or set it to false) to use limma p-values with ",
+                "de$p_adjust_method. If the t-statistics look miscalibrated, fix the ",
+                "design (de$block_col, de$paired) rather than the null."
+            ), call. = FALSE)
+        }
         if (!is.null(cfg$de$method)) {
             assert_one_of(cfg$de$method, "de$method", c("limma", "limma_percontrast", "ttest", "welch", "anova"), allow_null = TRUE)
         }
@@ -162,6 +194,11 @@ validate_proteomics_config <- function(cfg) {
                 "Use de$use_adj_for_pass1 to choose the pass-1 p-value."),
                 other_mode[[1]]), call. = FALSE)
         }
+        assert_known_keys(cfg$de, PROTEOMICS_DE_KEYS, "modes$proteomics$de",
+                          hint = paste(
+                              "The pipeline does not read such a key, so the run would",
+                              "not be fitted as configured. Check the spelling, or",
+                              "remove the key."))
         has_canon <- "use_adj_for_pass1" %in% de_keys
         has_alias <- "use_fdr_for_pass1" %in% de_keys
         if (has_canon) assert_scalar_bool(cfg$de[["use_adj_for_pass1"]], "de$use_adj_for_pass1")

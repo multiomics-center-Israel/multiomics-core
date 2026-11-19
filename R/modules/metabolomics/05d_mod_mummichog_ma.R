@@ -52,6 +52,15 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
     .mmc_stop("mod_mummichog_metaboanalyst() called with mummichog.engine '",
               mmc_engine(config), "'.")
   }
+  # Said once per stage run, ahead of the prerequisite checks below: a config
+  # written for the python engine that names no engine lands here, and should
+  # read why before it reads "needs a model".
+  if (identical(mmc_engine_record(config)$engine_source, "default")) {
+    message("mummichog: the config names no engine, so the default applies: ",
+            "engine: metaboanalyst (MetaboAnalyst-compatible). To run the ",
+            "pinned python mummichog instead, or to reproduce an earlier ",
+            "analysis that used it, set engine: python. See docs/mummichog.md.")
+  }
 
   # -- parameters ---------------------------------------------------------------
   mode <- tolower(as.character(mummi_cfg$ionization_mode %||% ""))

@@ -1033,6 +1033,71 @@ test_that("P6 provenance notes cover every column family the mode emits", {
     expect_s3_class(build_provenance_notes("something_else")$glossary, "data.frame")
 })
 
+test_that("P6 a vsn run gets one note on the scale, first, and nothing else changes", {
+    # The glossary calls the values log2 intensities and the fold changes log2;
+    # in a vsn run they are generalized-log2. One paragraph says so, ahead of
+    # the numbered steps that use those words. Everything else on the sheet has
+    # to stay exactly as it is for the other normalization methods.
+    for (mi in c(TRUE, FALSE)) {
+        plain <- build_provenance_notes("proteomics", multi_imputation = mi)
+        label <- paste("multi_imputation =", mi)
+
+        expect_identical(build_provenance_notes("proteomics", multi_imputation = mi,
+                                                vsn = FALSE), plain, info = label)
+
+        with_vsn <- build_provenance_notes("proteomics", multi_imputation = mi, vsn = TRUE)
+        expect_identical(with_vsn$glossary, plain$glossary, info = label)
+        expect_identical(with_vsn$notes[-1], plain$notes, info = label)
+        expect_match(with_vsn$notes[1], "generalized-log2", fixed = TRUE, info = label)
+        expect_match(with_vsn$notes[1], "cutoff is applied to fold changes on this scale",
+                     fixed = TRUE, info = label)
+        expect_match(with_vsn$notes[1], "CV.<group> columns are not written",
+                     fixed = TRUE, info = label)
+
+        # The pipeline's call and the workbook's formula are two comparisons.
+        # Under multi-imputation only the formula uses the value in the row.
+        pooled <- grepl("was not decided on the pooled linearFC.imputs shown here",
+                        with_vsn$notes[1], fixed = TRUE)
+        expect_identical(pooled, mi, info = label)
+        # The Final_results_DE workbook has this sheet but no manual_cutoffs
+        # column, so the note may only say what such a column does where it exists.
+        expect_match(with_vsn$notes[1], "workbook with a manual_cutoffs column",
+                     fixed = TRUE, info = label)
+        expect_false(grepl("the manual_cutoffs formulas", with_vsn$notes[1], fixed = TRUE),
+                     info = label)
+
+        # log2FC.imputs is pooled across runs on the linear scale. Calling every
+        # log2FC column a difference of glog2 values is wrong under
+        # multi-imputation, and log2FC_from_means exists only there.
+        expect_false(grepl("Every log2FC column", with_vsn$notes[1], fixed = TRUE), info = label)
+        expect_identical(grepl("log2FC.imputs is log2 of the mean, over the runs",
+                               with_vsn$notes[1], fixed = TRUE), mi, info = label)
+        expect_identical(grepl("_from_means", with_vsn$notes[1], fixed = TRUE), mi, info = label)
+        expect_match(with_vsn$notes[1], "signed form of its log2FC", fixed = TRUE, info = label)
+
+        # Imported statistics were computed upstream, on a scale this pipeline
+        # does not know. The note must say that: neither that they are on the
+        # vsn scale, nor that they are not.
+        imported <- build_provenance_notes("proteomics", multi_imputation = mi, vsn = TRUE,
+                                           precomputed_de = TRUE)
+        expect_identical(imported$notes[-1], plain$notes, info = label)
+        expect_match(imported$notes[1],
+                     "Their scale was decided upstream and is not known to this pipeline",
+                     fixed = TRUE, info = label)
+        expect_false(grepl("not on the vsn scale", imported$notes[1], fixed = TRUE),
+                     info = label)
+        # ...and no statement about how log2FC.imputs was computed.
+        expect_false(grepl("log2FC.imputs is", imported$notes[1], fixed = TRUE), info = label)
+        expect_identical(grepl("_from_means", imported$notes[1], fixed = TRUE), mi, info = label)
+        # Without vsn the flag changes nothing.
+        expect_identical(build_provenance_notes("proteomics", multi_imputation = mi,
+                                                precomputed_de = TRUE), plain, info = label)
+    }
+
+    # The flag describes a proteomics setting; another mode's sheet ignores it.
+    expect_identical(build_provenance_notes("rna", vsn = TRUE), build_provenance_notes("rna"))
+})
+
 test_that("P6 the proteomics glossary separates measured from model-input values", {
     mean_of <- function(notes, col) notes$glossary$Meaning[notes$glossary$Column == col]
 

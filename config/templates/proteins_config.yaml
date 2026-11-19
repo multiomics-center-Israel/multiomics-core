@@ -169,7 +169,6 @@ modes:
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
       p_adjust_method: "BH"     # "BH" | "bonferroni" | "holm" | "BY"
-      fdrtool_correction: false  # true = empirical null correction on t-stats (DEP-style)
       paired: false           # relevant for t-test
       pairing_col: null          # metadata column for paired test (e.g. "Subject")
 

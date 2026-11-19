@@ -240,6 +240,38 @@ test_that("group_cv flag = FALSE fully suppresses CV columns", {
     expect_true(all(c("CV.A", "CV.B") %in% names(cv_on)))
 })
 
+test_that("vsn normalization suppresses CV columns; none and median are untouched", {
+    # Under vsn expr_filt holds generalized-log2 values, so 2^expr_filt is not
+    # an intensity and a CV of it is not the CV of the measurements. The
+    # function reads the method only to make that one decision: every other
+    # method has to give exactly what a config with no normalization block gives.
+    pre <- list(
+        expr_filt = matrix(log2(c(10, 20, 30, 40)), nrow = 1,
+                           dimnames = list("F1", paste0("S", 1:4))),
+        meta = data.frame(sample_id = paste0("S", 1:4),
+                          grp = c("A", "A", "B", "B"), stringsAsFactors = FALSE)
+    )
+    contrasts_df <- data.frame(
+        Contrast_name = "B - A", Factor = "grp",
+        Numerator = "B", Denominator = "A", stringsAsFactors = FALSE
+    )
+    cfg_with <- function(method = NULL) {
+        prot <- list(effects = list(samples = "sample_id"),
+                     input = list(format = "diann"), scale_in = "linear")
+        if (!is.null(method)) prot$normalization <- list(method = method)
+        list(modes = list(proteomics = prot))
+    }
+
+    baseline <- build_group_cv_proteomics(pre, contrasts_df, cfg_with())
+    expect_true(all(c("CV.A", "CV.B") %in% names(baseline)))
+    expect_identical(build_group_cv_proteomics(pre, contrasts_df, cfg_with("none")), baseline)
+    expect_identical(build_group_cv_proteomics(pre, contrasts_df, cfg_with("median")), baseline)
+
+    expect_message(res <- build_group_cv_proteomics(pre, contrasts_df, cfg_with("vsn")),
+                   "not written under vsn", fixed = TRUE)
+    expect_null(res)
+})
+
 
 # =============================================================================
 # W1 — Happy-path real-config wiring per omics

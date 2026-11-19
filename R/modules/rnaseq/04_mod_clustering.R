@@ -34,7 +34,17 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     message("[rnaseq clustering] skipped: Clustering disabled in config.")
     return(list(plots = plots, files = written, excel_order = NULL, objects = objects))
   }
-  
+
+  # Clear the previous run's hierarchical heatmap before any path that can skip
+  # rewriting it -- the early returns below (too few features, no summary, fewer
+  # than two DE features) and a run where the hierarchical step is off.
+  # Otherwise a rerun into the same output directory leaves the old image, which
+  # the report shows when show_in_report is on. Same guard as in
+  # mod_proteomics_clustering(); the hierarchical step recreates the file
+  # whenever it actually runs.
+  f_hier_hm <- file.path(out_dir, "Clustering", "Hierarchical", "Hierarchical_DE_heatmap.png")
+  if (file.exists(f_hier_hm)) file.remove(f_hier_hm)
+
   if (is.null(cfg$effects$samples)) {
     stop("[rnaseq clustering] effects$samples is missing in config.")
   }

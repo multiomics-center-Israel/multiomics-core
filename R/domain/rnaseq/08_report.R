@@ -274,3 +274,82 @@ find_rmd_chunk_lines <- function(rmd, label) {
     if (is.na(end)) end <- length(src)
     c(start, end)
 }
+
+#' Read the significant terms of the DE-based offline ORA, for the report
+#'
+#' The report's ORA view shows the ORA of differentially expressed genes only:
+#' per contrast its All DE, Up and Down gene sets, and the union of DE genes
+#' across contrasts (`any_contrast`). Cluster- and pattern-based ORA and the
+#' up-vs-down comparison are not read. Each analysis is one manifest row and
+#' its table is the `results.csv` that write_ora_unit_tree() wrote for it, so
+#' the paths here follow that layout: `ORA/<db>/contrasts/<contrast>/{de,up,down}`
+#' and `ORA/<db>/all_DE/any_contrast`. Nothing is recomputed or combined.
+#'
+#' @param ora_root The offline ORA directory (`Enrichment/ORA`).
+#' @param manifest The enrichment manifest (`Enrichment/enrichment_manifest.csv`,
+#'   as read by `read.csv()`).
+#' @param sig_cutoff Adjusted-p cutoff, `resolve_rna_gsea_settings()$ora_cutoff`.
+#'   A term is kept at `p.adjust < sig_cutoff`, the rule ORA ran with and the
+#'   pipeline summary counts by.
+#' @return list(units, terms). `units`: one row per evaluated analysis
+#'   (contrast, database, gene_set), in manifest order; `gene_set` is "All DE",
+#'   "Up" or "Down". `terms`: its significant terms, one row per term and
+#'   analysis, with contrast, database, gene_set, ID, Description, GeneRatio,
+#'   BgRatio, Count, FoldEnrichment (clusterProfiler's, else the pipeline's
+#'   Fold_enrichment), pvalue, p.adjust and geneID ("/"-separated gene IDs).
+#' @examples
+#' read_offline_ora_tables(tempdir(), data.frame(), 0.05)  # no ORA: empty tables
+read_offline_ora_tables <- function(ora_root, manifest, sig_cutoff) {
+    cols <- c("contrast", "database", "gene_set", "ID", "Description", "GeneRatio",
+              "BgRatio", "Count", "FoldEnrichment", "pvalue", "p.adjust", "geneID")
+    terms <- as.data.frame(setNames(replicate(length(cols), character(0), simplify = FALSE),
+                                    cols), stringsAsFactors = FALSE)
+    units <- terms[, 1:3]
+    need <- c("analysis", "database", "group", "item", "subgroup", "evaluated")
+    if (!is.data.frame(manifest) || !all(need %in% names(manifest))) {
+        return(list(units = units, terms = terms))
+    }
+
+    # The DE-based ORA rows, and where write_ora_unit_tree() put each table.
+    m <- manifest[manifest$analysis == "ORA" & as.logical(manifest$evaluated) %in% TRUE, ,
+                  drop = FALSE]
+    sub <- as.character(m$subgroup)
+    per_contrast <- m$group == "contrasts" & sub %in% c("all", "up", "down")
+    union_de <- m$group == "all_DE"
+    m <- m[per_contrast | union_de, , drop = FALSE]
+    if (nrow(m) == 0) return(list(units = units, terms = terms))
+    sub <- ifelse(m$group == "all_DE", "all", as.character(m$subgroup))
+    units <- data.frame(contrast = as.character(m$item), database = as.character(m$database),
+                        gene_set = unname(c(all = "All DE", up = "Up", down = "Down")[sub]),
+                        stringsAsFactors = FALSE)
+    leaf <- unname(c(all = "de", up = "up", down = "down")[sub])
+    files <- vapply(seq_len(nrow(m)), function(i) {
+        if (m$group[i] == "all_DE") {
+            return(file.path(ora_unit_dir(ora_root, m$database[i], "all_DE", m$item[i]),
+                             "results.csv"))
+        }
+        collection <- if (sub[i] == "all") "contrasts_wo_direction" else "contrasts"
+        file.path(ora_unit_dir(ora_root, m$database[i], collection, m$item[i]), leaf[i],
+                  "results.csv")
+    }, character(1))
+
+    # An analysis with nothing significant wrote no table.
+    rows <- lapply(seq_len(nrow(m)), function(i) {
+        if (!file.exists(files[i])) return(NULL)
+        df <- tryCatch(utils::read.csv(files[i], stringsAsFactors = FALSE),
+                       error = function(e) NULL)
+        if (is.null(df) || nrow(df) == 0 || !"p.adjust" %in% names(df)) return(NULL)
+        df <- df[!is.na(df$p.adjust) & df$p.adjust < sig_cutoff, , drop = FALSE]
+        if (nrow(df) == 0) return(NULL)
+        fe <- if ("FoldEnrichment" %in% names(df)) df$FoldEnrichment else df$Fold_enrichment
+        data.frame(contrast = units$contrast[i], database = units$database[i],
+                   gene_set = units$gene_set[i], ID = as.character(df$ID),
+                   Description = as.character(df$Description),
+                   GeneRatio = as.character(df$GeneRatio), BgRatio = as.character(df$BgRatio),
+                   Count = as.integer(df$Count), FoldEnrichment = as.numeric(fe %||% NA),
+                   pvalue = as.numeric(df$pvalue), p.adjust = as.numeric(df$p.adjust),
+                   geneID = as.character(df$geneID), stringsAsFactors = FALSE)
+    })
+    rows <- do.call(rbind, Filter(Negate(is.null), rows))
+    list(units = units, terms = if (is.null(rows)) terms else rows)
+}
