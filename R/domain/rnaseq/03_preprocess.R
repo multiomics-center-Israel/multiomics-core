@@ -87,7 +87,14 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     validate_count_matrix(counts)
     txi <- NULL; abundance <- NULL
   }
-  
+
+  # Record which configured input the branch above took. With several set,
+  # say so in the log: the others were read from disk but not used.
+  input_source <- describe_rna_input_source(inputs$input_keys, source_type, cfg$files)
+  if (isTRUE(input_source$conflict)) {
+    warning("[preprocess_rna] ", input_source$note, call. = FALSE)
+  }
+
   # =========================================================================
   # Optional sample name mapping (applies to both input types)
   # =========================================================================
@@ -264,6 +271,7 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     
     info = list(
       source_type = source_type,
+      input_source = input_source,
       filter_mode = filter_mode_run,
       filter_norm = norm_mode,
       filter_threshold = thr,

@@ -75,6 +75,46 @@ validate_rna_config <- function(cfg) {
         assert_scalar_num(d$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
     }
 
+    # 5b. Batch in the DE model
+    if (!is.null(cfg$batch_in_model)) {
+        if (!is.list(cfg$batch_in_model)) {
+            stop("[config] batch_in_model must be a mapping with 'enabled' and 'batch_cols'.",
+                 call. = FALSE)
+        }
+        assert_scalar_bool(cfg$batch_in_model$enabled, "batch_in_model$enabled",
+                           allow_null = TRUE)
+        bm <- get_rna_batch_model_config(cfg)  # stops on a bad batch_cols when enabled
+        # Same test mod_rnaseq_de() uses to take the precomputed branch, which
+        # returns before any model is fitted.
+        de_files <- cfg$files$de_table
+        precomputed <- !is.null(de_files) && length(de_files) > 0 &&
+                       all(nzchar(unlist(de_files)))
+        if (bm$enabled && precomputed) {
+            stop("[config] batch_in_model$enabled is true but files$de_table supplies ",
+                 "precomputed DE tables, so no DE model is fitted and batch cannot be added ",
+                 "to it. Set batch_in_model$enabled: false, or remove files$de_table.",
+                 call. = FALSE)
+        }
+    }
+
+    # 5c. Batch correction of the display matrices
+    if (!is.null(cfg$batch_correction)) {
+        if (!is.list(cfg$batch_correction)) {
+            stop("[config] batch_correction must be a mapping with 'enabled', 'batch_cols' ",
+                 "and 'method'.", call. = FALSE)
+        }
+        assert_scalar_bool(cfg$batch_correction$enabled, "batch_correction$enabled",
+                           allow_null = TRUE)
+        assert_scalar_bool(cfg$batch_correction$combat_mean_only,
+                           "batch_correction$combat_mean_only", allow_null = TRUE)
+        bc <- get_rna_batch_correction_config(cfg)  # stops on a bad method or batch_cols
+        if (bc$enabled && identical(bc$method, "limma") &&
+            isTRUE(cfg$batch_correction$combat_mean_only)) {
+            warning("batch_correction$combat_mean_only is used by method \"combat\" only; ",
+                    "method \"limma\" always adjusts the batch means only.", call. = FALSE)
+        }
+    }
+
     # 6. Annotation (optional)
     if (!is.null(cfg$annotation)) {
         a <- cfg$annotation

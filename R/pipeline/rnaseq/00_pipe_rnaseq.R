@@ -112,6 +112,45 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           out_dir = rna_out_dir
         )
       ),
+      # Batch-corrected copies of the display matrices (modes.rna.batch_correction).
+      # A target of its own: rna_pre is not modified and stays the DE input, and
+      # with the block absent or disabled this is list(ran = FALSE).
+      tar_target(
+        rna_batch_corrected,
+        compute_rna_batch_correction(rna_pre, config)
+      ),
+      # Corrected matrix + the record of what ran. Also runs when nothing was
+      # corrected, to remove both from a reused output directory; it then
+      # returns character(0), which a file target accepts. format = "file" so
+      # that a deleted export or record is rewritten: the report reads the
+      # record as its evidence that a correction ran.
+      tar_target(
+        rna_batch_corr_files,
+        write_rna_batch_correction(
+          rna_batch_corrected,
+          create_legacy_output_dirs(rna_out_dir)$datasets
+        ),
+        format = "file"
+      ),
+      # Before/after QC: the batch-corrected side. The uncorrected side is the
+      # output of rna_qc_pre_obj / rna_qc_post_obj, which is why this waits for
+      # them: the report shows both sides together. format = "file" so that a
+      # deleted plot is redrawn; with no correction it returns character(0).
+      tar_target(
+        rna_batch_qc_files,
+        {
+          force(rna_qc_pre_obj)
+          force(rna_qc_post_obj)
+          mod_rnaseq_batch_qc(
+            pre             = rna_pre,
+            batch_corrected = rna_batch_corrected,
+            de_res          = rna_de_res,
+            config          = config,
+            out_dir         = rna_out_dir
+          )
+        },
+        format = "file"
+      ),
       # Clustering (run before outputs to provide excel_order)
       tar_target(
         rna_clustering_obj,
@@ -121,6 +160,25 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           config = config,
           out_dir = rna_out_dir
         )
+      ),
+      # The same clustering on the batch-corrected matrix, kept next to the
+      # original for comparison. rna_clustering_obj above stays the one behind
+      # the Excel order, the cluster-based ORA and the Shiny payload, and is not
+      # changed. This target tracks the files it writes (figures, comparison
+      # table, record of what happened), so a deleted one is written again;
+      # nothing downstream reads an R object from it, the report reads the
+      # files. It returns character(0) when nothing was attempted.
+      tar_target(
+        rna_clustering_batch_corr_files,
+        mod_rnaseq_clustering_batch_corr(
+          pre             = rna_pre,
+          batch_corrected = rna_batch_corrected,
+          de_res          = rna_de_res,
+          clustering_res  = rna_clustering_obj,
+          config          = config,
+          out_dir         = rna_out_dir
+        )$files,
+        format = "file"
       ),
       # Pathway / enrichment with clustering available (GSEA + cluster-based ORA)
       tar_target(
@@ -234,6 +292,9 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           force(rna_outputs_legacy)
           force(rna_commentary_file)
           force(rna_exec_summary)
+          force(rna_batch_corr_files)
+          force(rna_batch_qc_files)
+          force(rna_clustering_batch_corr_files)
           render_rnaseq_report(
             run_dir     = rna_out_dir,
             config      = config,

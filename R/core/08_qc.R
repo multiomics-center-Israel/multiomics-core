@@ -175,9 +175,10 @@ write_pca_companions <- function(p, out_dir, pcs = c(1, 2)) {
 #' @param meta     metadata table.
 #' @param cfg      config$modes$proteomics (effects$samples/color/shape).
 #' @param out_file optional HTML path to save widget (if NULL, does not save).
+#' @param title    optional plot title; NULL (default) keeps the default title.
 #'
 #' @return plotly object (interactive 3D PCA).
-qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
+qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL, title = NULL) {
   expr_mat <- as.matrix(expr_mat)
   meta <- as.data.frame(meta)
   
@@ -300,7 +301,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
       yaxis = list(title = pc_labels[2]),
       zaxis = list(title = pc_labels[3])
     ),
-    title = "3D PCA: PC1 vs PC2 vs PC3",
+    title = title %||% "3D PCA: PC1 vs PC2 vs PC3",
     legend = list(title = list(text = legend_title))
   )
   
@@ -584,10 +585,12 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
 #'   IDs), used as is after alignment to the matrix columns; overrides
 #'   \code{annot_cols}. NULL (default) changes nothing.
 #' @param annot_colors Optional pheatmap \code{annotation_colors} list.
+#' @param title Optional plot title; NULL (default) keeps the stage title.
 #' @return The pheatmap object.
 wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
                             cluster_cols = TRUE, cluster_rows = TRUE,
-                            annot_cols = NULL, annot = NULL, annot_colors = NULL) {
+                            annot_cols = NULL, annot = NULL, annot_colors = NULL,
+                            title = NULL) {
   # 1. Prepare Data
   d <- prepare_qc_data(expr_mat, meta, cfg)
 
@@ -611,7 +614,7 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
   ph <- plot_heatmap_core(
     expr_mat = d$expr,
     annotation_col = annot,
-    title = paste0("QC: Sample ", stage, " Expression"),
+    title = title %||% paste0("QC: Sample ", stage, " Expression"),
     max_rows = 2000,
     cluster_rows = cluster_rows,
     cluster_cols = cluster_cols,
@@ -680,7 +683,8 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
                                           cluster_samples = TRUE,
                                           adjust_scale = FALSE,
                                           annot = NULL,
-                                          annot_colors = NULL) {
+                                          annot_colors = NULL,
+                                          title = NULL) {
   d <- prepare_qc_data(expr_mat, meta, cfg)
   
   # Build annotations: a ready-made one (aligned here), else multi-column if
@@ -704,6 +708,7 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
     method = method,
     annotation_col = annot,
     colors = custom_colors,  # Passing the custom colors here
+    main = title,
     fontsize = fontsize,
     show_labels = show_labels,
     cluster_rows = cluster_samples,
@@ -722,12 +727,14 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
 #'   If NULL (default), uses cfg$effects$color only (backward compatible).
 #' @param show_labels Show sample names on axes (default FALSE to prevent overload)
 #' @param cluster_samples Enable hierarchical clustering (default TRUE)
+#' @param title Optional plot title; NULL (default) keeps the default title.
 qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
                                        annot_cols = NULL,
                                        with_na = FALSE,
                                        fontsize = 10,
                                        show_labels = TRUE,
-                                       cluster_samples = TRUE) {
+                                       cluster_samples = TRUE,
+                                       title = NULL) {
   # FIX: Ensure matrix conversion happens BEFORE complete.cases logic
   # This prevents data.frame type coercion issues
   expr_mat <- as.matrix(expr_mat)
@@ -751,6 +758,7 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
   ph <- plot_sample_distance_heatmap(
     expr_mat = d$expr,
     annotation_col = annot,
+    main = title,
     fontsize = fontsize,
     show_labels = show_labels,
     cluster_rows = cluster_samples,

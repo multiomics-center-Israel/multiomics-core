@@ -1,5 +1,13 @@
 # ==============================================================================
-# Metabolomics config (multi-level / processed_wide compatible)
+# Metabolomics config template
+#
+# Copy this file into your project and edit it. Lines tagged "<-- YOUR DATA"
+# name files or columns: they must match your own files exactly (spelling,
+# capitals, spaces). Everything else is a setting with a working default.
+#
+# AS SHIPPED, THIS TEMPLATE RUNS IN NORMALIZATION-REVIEW MODE
+# (preprocessing.chosen_norm: null): it compares the normalization methods and
+# stops. To run the full analysis, choose a method there. See "Normalization".
 # ==============================================================================
 
 project:
@@ -8,22 +16,28 @@ project:
   analysis_round: "A01"              # REQUIRED: analysis iteration / round (e.g., A01, A02...)
 
 paths:
-  raw: "data"
-  out: "outputs"
+  raw: "data"        # input folder, relative to project.dir; files.* below are relative to it
+  out: "outputs"     # output folder, relative to project.dir
 
 # ---- Global parameters ----
 params:
-  seed: 1  # global seed for reproducibility (KNN imputation, clustering, etc.)
+  seed: 1  # project seed for the stochastic steps
 
 modes:
   metabolomics:
 
-    # ---- Input specification ----
+    # Organism, as free text. Optional. Used in report titles, and by the
+    # mummichog python engine, whose built-in model is human only.
+    # organism: "Homo sapiens"
+
+    # ---- Input files ----
     input:
-      # "cd_raw" | "processed_wide" | "multi_level"
+      # "processed_wide" (one table: feature columns + one column per sample),
+      # "cd_raw" (Compound Discoverer export), or
+      # "multi_level" (a folder of tables; set files.data_dir instead of files.data).
       format: "processed_wide"
 
-      # For multi_level only:
+      # For multi_level only: the format of each table, and which files to read.
       level_format: "processed_wide"
       level_pattern: "\\.xlsx$"
 
@@ -31,123 +45,154 @@ modes:
       sheet: null
 
     files:
-      # data OR data_dir (mutually exclusive)
-      data: "metabolics/intesities.tsv"
-      # data_dir: "metabolics/dir_name"
+      # data OR data_dir (mutually exclusive; data_dir is for multi_level).
+      data: "metabolomics/intensities.tsv"       # <-- YOUR DATA: the intensity table
+      # data_dir: "metabolomics/dir_name"
 
-      metadata: "metabolics/metadata.txt"
-      # sample_map: "metabolics/sample_map.txt"
-      contrasts: "metabolics/contrasts.txt"
+      # One row per sample. It must have the column named in effects.samples,
+      # and every sample id listed there should be a column of the data table.
+      # For processed_wide input the run stops if one is not. For cd_raw input
+      # it only WARNS and continues with the samples found in both, so a
+      # misspelled id silently drops that sample: read the warnings.
+      metadata: "metabolomics/metadata.txt"      # <-- YOUR DATA
 
-    # ---- Parsing rules ----
+      # Optional: a table that renames sample ids (see id_columns.map_from / map_to).
+      # sample_map: "metabolomics/sample_map.txt"
+
+      # One row per comparison, with four required columns (the run stops if
+      # one is missing):
+      #   Contrast_name            a label for the comparison
+      #   Factor                   the metadata column that holds the groups
+      #   Numerator, Denominator   the two group labels, exactly as written in
+      #                            the de.condition_column column
+      contrasts: "metabolomics/contrasts.txt"    # <-- YOUR DATA
+
+      # Optional: a differential-abundance table computed elsewhere, used
+      # instead of running the test here.
+      # de_table: "metabolomics/de_table.tsv"
+
+    # ---- Parsing rules (cd_raw only) ----
     parsing:
       cd_area_prefix: "Area:"
       cd_sample_regex: null  # null = use default
 
-    # ---- Feature ID + sample mapping ----
-    # Two ids per feature (row):
+    # ---- Feature ids and sample mapping ----
+    # Each feature (row) gets two ids:
     #   feature_id   built by the pipeline as RT<rt>_MZ<mz> from rt_col and mz_col
-    #                (rounded to 2 decimals; "_dup" suffix if two collide). This is
-    #                the id used internally and in every output. If the data file
-    #                has its own "feature_id" column, it is overwritten.
-    #   original_id  the researcher's own id, copied from name_col. Shown in the
-    #                final Excel right after feature_id. The HTML report labels
-    #                features with a "Name" column if the data has one, and with
-    #                original_id otherwise. Added for processed_wide input
-    #                (and multi_level with level_format processed_wide) only;
-    #                cd_raw builds feature_id the same way but adds no original_id.
+    #                (rounded to 2 decimals; "_dup" suffix if two collide). Used
+    #                internally and in every output. A "feature_id" column in
+    #                the data file is overwritten.
+    #   original_id  your own id, copied from name_col. Shown in the final Excel
+    #                right after feature_id. The HTML report labels features
+    #                with a "Name" column if the data has one, and with
+    #                original_id otherwise. Added for processed_wide input (and
+    #                multi_level with level_format processed_wide); cd_raw adds
+    #                no original_id.
     #
-    # name_col  column in the data file holding the researcher's unique feature
-    #           id: "feature_id" (this template's example table), or e.g.
-    #           "Name", "NameID", "Compound". If the column is missing the run
-    #           does NOT stop: original_id silently becomes feature_1..N.
-    #           Check colnames() of the data file before running.
-    # mz_col, rt_col  columns used to build feature_id. If either is missing,
-    #           feature_id falls back to the name_col value, then to feature_N.
+    # IF name_col IS NOT A COLUMN OF YOUR DATA FILE THE RUN DOES NOT STOP:
+    # original_id silently becomes feature_1..N and your own ids are lost from
+    # the outputs. If mz_col or rt_col is missing, feature_id falls back to the
+    # name_col value, then to feature_N. Check the column names of the data
+    # file before running.
     #
     # The KEGG column is not set here; it is detected by name. KEGG, KEGG_ID,
     # "KEGG ID", kegg and kegg_id are all read as KEGG compound ids. If there is
     # no KEGG column, the first of the others is renamed to KEGG; any further
     # ones fill its empty cells, and a differing value is reported, not used.
     id_columns:
-      name_col: "feature_id"
-      mz_col: "m/z"
-      rt_col: "RT [min]"
+      name_col: "feature_id"   # <-- YOUR DATA: column with your unique feature id (e.g. "Name", "Compound")
+      mz_col: "m/z"            # <-- YOUR DATA
+      rt_col: "RT [min]"       # <-- YOUR DATA
 
-      # Used only if sample_map is provided
+      # Used only if files.sample_map is set: its "from" and "to" columns.
       map_from: "origin_id"
       map_to: "SampleID"
 
     # ==============================================================================
-    # Stage 1: Preprocessing (missingness + imputation + normalization selection)
+    # Stage 1: Preprocessing (missingness filtering + normalization)
     # ==============================================================================
     preprocessing:
 
-      # ---- Missingness filtering (soft defaults) ----
-      # feat_missing_threshold:   drop a metabolite if it is missing in more
-      #                           than this fraction of samples (0.50 = drop
-      #                           only metabolites missing in >50% of samples).
-      # sample_missing_threshold: drop a sample if it is missing more than
-      #                           this fraction of metabolites. Set to 1.0 to
-      #                           disable sample filtering entirely.
+      # ---- Missingness filtering (there is no imputation) ----
+      # feat_missing_threshold:   drop a metabolite missing in more than this
+      #                           fraction of samples (0.50 = missing in >50%).
+      # sample_missing_threshold: drop a sample missing more than this fraction
+      #                           of metabolites. 1.0 disables sample filtering.
       feat_missing_threshold: 0.50
       sample_missing_threshold: 1.0
 
-      # ---- Normalization selection workflow ----
-      # null  → QC review mode (compute all methods, stop after report)
-      # "none" | "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" |
-      #   "bio_factor"  → full pipeline
+      # ---- Normalization: chosen_norm is the setting that decides ----
       #
-      # "none": skip sample normalization — use when the input table is already
-      # normalized upstream. transform/scaling below still apply, so log2 is
-      # still taken; if the table also arrives log-scaled, set transform: "none".
+      #   chosen_norm: null    REVIEW MODE (this template's default).
+      #       Every method is computed and compared in the QC report, and the
+      #       run STOPS THERE: no differential abundance, no clustering, no
+      #       enrichment, no final results, and no metabolomics layer for
+      #       multi-omics integration. It is a step for choosing a method, not
+      #       an analysis.
+      #
+      #   chosen_norm: "<method>"    FULL ANALYSIS on that method. Read the QC
+      #       report, pick one, set it here and rerun:
+      #         "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" |
+      #         "bio_factor" | "none"
+      #       ("bio_factor" is not part of the review-mode comparison.)
+      #
+      #   "none" skips sample normalization, for tables already normalized
+      #   upstream. transform and scaling below still apply, so log2 is still
+      #   taken; if the table also arrives log-scaled, set transform: "none".
       chosen_norm: null
 
-      # ---- Biological-factor normalization (chosen_norm: "bio_factor") ----
-      # Divide each sample by a measured per-sample covariate (e.g. total
-      # protein) before log2. Names the metadata column holding that value;
-      # required only when chosen_norm = "bio_factor".
-      #
-      # When to prefer it: use when a measured input amount (total protein,
-      # cell count, tissue mass) is the correct scaling variable and you trust
-      # the assay. Unlike tss/median/pqn, bio_factor corrects ONLY for this one
-      # covariate — it does not account for compositional or dilution effects
-      # beyond it, so it assumes the covariate captures the dominant source of
-      # between-sample loading differences. Note also that the normalization is
-      # only as good as the measurement: a noisy covariate propagates directly
-      # into the normalized intensities.
+      # Only for chosen_norm: "bio_factor". The metadata column holding a
+      # measured per-sample amount (total protein, cell count, tissue mass);
+      # each sample is divided by it before log2. It corrects ONLY for that
+      # covariate, not for compositional or dilution effects beyond it, and a
+      # noisy measurement propagates directly into the normalized intensities.
       biological_factor_col: null
 
-      # ---- Sample normalization (legacy / reference only) ----
-      # All methods (tss, median, pqn, eigenms) run in parallel; the ACTIVE
-      # choice is controlled by chosen_norm above, not by this field.
+      # LEGACY / REFERENCE ONLY. It does not select the normalization;
+      # chosen_norm does. It is read only as a label when chosen_norm is null.
+      # Accepted values: "none" | "sum" | "median" | "pqn" | "is".
       sample_norm: "pqn"
 
-      # ---- Transformation (applied inside the normalization branches) ----
+      # PQN reference spectrum: "all_samples" (default) or "pooled_qc" (the
+      # samples flagged in drift_correction.qc_flag_col; at least 2, otherwise
+      # the run stops).
+      # pqn_reference: "all_samples"
+
+      # ---- Transformation: "log2" | "log10" | "glog10" | "none" ----
+      # Applies only to chosen_norm "median" and "none". tss, pqn, eigenms,
+      # eigenms_forced and bio_factor always use log2(x + pseudocount).
       transform: "log2"
 
-      # ---- Feature scaling ----
-      # IMPORTANT: scaling must NOT be applied before differential analysis for
-      # metabolomics. Clustering and PCA use a built-in z-score that does NOT
-      # read this key, so leave "none" unless you specifically want the chosen
-      # matrix scaled for feature-selection workflows.
-      # Options: "none" | "center" | "auto" | "pareto" | "range"
+      # ---- Feature scaling: "none" | "center" | "auto" | "pareto" | "range" ----
+      # Leave "none" unless you specifically want the chosen matrix scaled for
+      # the multivariate / feature-selection views. Differential abundance and
+      # QEA always test the unscaled normalized matrix, and clustering and PCA
+      # use their own z-score that does not read this key. Scaling also
+      # invalidates the per-group CV columns (excel.group_cv) and cannot be
+      # combined with drift correction (below).
       scaling: "none"
 
       # ---- Log pseudocount ----
       pseudocount: 1
 
-      # ---- Drift correction (LOESS) ----
+      # ---- Drift correction (LOESS on pooled QC samples). Off unless enabled: true ----
+      # Needs, in the metadata, the injection-order column and a TRUE/FALSE
+      # QC column named below, with at least 4 QC samples. It cannot be
+      # combined with feature scaling: with scaling other than "none" the run
+      # stops, because the correction is not valid on centered or scaled
+      # features.
       drift_correction:
         enabled: false
-        injection_order_col: "injection_order"
-        qc_flag_col: "is_QC"
+        injection_order_col: "injection_order"   # <-- YOUR DATA (only if enabled)
+        qc_flag_col: "is_QC"                     # <-- YOUR DATA (only if enabled): TRUE/FALSE column. A separate key from qc.qc_flag_column
         loess_span: 0.75
         epsilon: 1.0e-8
 
     # ==============================================================================
-    # Sample filtering (applied early, in mod_met_raw)
+    # Sample filtering (applied early, when the data is loaded)
     # ==============================================================================
+    # exclude_blanks / exclude_qc act on TRUE/FALSE metadata columns named
+    # is_blank / is_QC; exclude_samples is a list of sample ids.
     sample_filter:
       enabled: false
       rules:
@@ -156,30 +201,37 @@ modes:
         exclude_samples: null
 
     # ==============================================================================
-    # QC / visualization settings
+    # Experimental design: metadata columns
     # ==============================================================================
+    # Four settings name metadata columns, and they are separate on purpose:
+    #   effects.samples       the sample id column. Its values must match the
+    #                         sample ids of the data table (see files.metadata).
+    #   effects.color/shape   how samples are drawn in the QC plots.
+    #   de.condition_column   the groups that are compared (further down). If
+    #                         it is left out, effects.color is used instead.
+    #   clustering.group_col  the groups used for clustering (further down).
+    #                         Required when clustering is enabled; no fallback.
+    # In a simple design, de.condition_column and clustering.group_col name the
+    # same column.
     effects:
-      samples: "SampleID"
-      color: "treatment"
-      shape: "time"
-      # Metadata column(s) drawn as annotation bars on the QC heatmaps. Accepts a
-      # single column or a YAML list (e.g. [group, time]) for multiple bars; values
-      # not found in the metadata are skipped, and if unset it falls back to the
-      # primary color variable (effects.color). "group" here is the single-column option.
-      heatmap_annotations: "group"  # [group, time]
+      samples: "SampleID"     # <-- YOUR DATA
+      color: "treatment"      # <-- YOUR DATA
+      shape: "time"           # <-- YOUR DATA
+      # Metadata column(s) drawn as annotation bars on the QC heatmaps: one
+      # column or a list (e.g. [group, time]). Columns not in the metadata are
+      # skipped; if unset, effects.color is used.
+      heatmap_annotations: "group"   # <-- YOUR DATA
 
-    # --------------------------------------------------------
-    # Excel export configuration
-    # --------------------------------------------------------
+    # ---- Excel export ----
     excel:
-      # Metadata columns to display as annotation rows above the data table.
-      # Set to null to use all metadata columns, or specify a list:
+      # Metadata columns shown as annotation rows above the data table.
+      # null = all metadata columns, or give a list.
       annotation_rows: null
-      # Metadata columns to concatenate for informative sample column headers.
-      # Set to null to keep original sample IDs:
+      # Metadata columns concatenated into the sample column headers.
+      # null = keep the original sample ids.
       sample_label_cols: null
       # Add per-group CV% columns (CV.<group>) to Final_results_{ALL,DE} for the
-      # groups appearing in any contrast. Metabolomics CV is computed on the
+      # groups appearing in any contrast. CV is computed on the
       # post-normalization linear matrix (2^expr_work - pseudocount), keeping it
       # comparable to the RNA-seq/proteomics CV. NOTE: if feature scaling is
       # enabled (preprocessing.scaling != "none"), this back-transform is invalid
@@ -190,31 +242,67 @@ modes:
     qc:
       enabled: true
 
-      # Used for QC-specific plots (e.g., drift, QC clustering), (refer to the pooled or qc samples)
-      qc_flag_column: "treatment"
+      # Metadata column that flags QC (pooled) samples.
+      # THIS SETTING AFFECTS WHICH SAMPLES ARE ANALYSED, not only plots.
+      #
+      # Recommended, and what this template uses: a metadata column named
+      # is_QC, holding TRUE for QC samples and FALSE for biological samples.
+      # That one column is read the same way by the QC plots, by differential
+      # abundance and QEA (QC samples are excluded from the test), by
+      # sample_filter.exclude_qc and by drift correction's default.
+      #   * If the metadata has no is_QC column, or it flags no sample, the QC
+      #     plots "without QC samples" are skipped; the others are still made.
+      #   * Blanks are separate: flag them in their own TRUE/FALSE metadata
+      #     column named is_blank. is_QC does not cover them.
+      #
+      # Any other column can be named here, but its two readers then differ:
+      #   * QC plots "without QC samples": a sample is dropped when the value
+      #     is TRUE (or "TRUE"/"1"), or equals qc_flag_value below ("qc",
+      #     ignoring case). "blank" or "pooled_QC" is NOT dropped here.
+      #   * Differential abundance and QEA: a sample is EXCLUDED FROM THE TEST
+      #     when the value starts with qc or pool, or has qc, blank, blanks,
+      #     pool or pooled as a whole or underscore-separated part (ignoring
+      #     case): "QC", "Blank", "pooled_QC", "pool_1". A TRUE/FALSE value in
+      #     a column not named is_QC or is_blank is not read here.
+      # EXISTING PROJECTS that name a text column here (e.g. "treatment"): do
+      # not switch to is_QC without checking which samples are excluded
+      # before and after. The run prints how many it excluded from the test.
+      #
+      # Whatever this key says, differential abundance and QEA also exclude
+      # samples whose de.condition_column value matches the rule above, or
+      # whose sample id starts with qc or pool. So never give a biological
+      # group a name that matches (e.g. "pool_A"): it would be dropped from
+      # the test. Using is_QC does not change that.
+      qc_flag_column: "is_QC"       # <-- YOUR DATA: needs an is_QC column (TRUE/FALSE) in the metadata
+      # qc_flag_value: "qc"         # QC plots only, for a text column: the value that marks a QC sample
 
       thresholds:
         max_samples_for_heatmaps: 120
 
     # ==============================================================================
-    # Stage 2: Downstream analysis
+    # Stage 2: Downstream analysis (runs only when chosen_norm is set)
     # ==============================================================================
 
-    # ---- Differential expression ----
+    # ---- Differential abundance (the key is "de" for historical reasons) ----
     de:
-      method: "limma"
-      condition_column: "group"
+      method: "limma"               # "limma" | "t_test" | "t_test_equal" | "wilcoxon"
+      condition_column: "group"     # <-- YOUR DATA: the column whose groups the contrasts compare
 
+      # A feature is called significant when its p-value is below p_cutoff AND
+      # its fold change is at least linear_fc_cutoff (1.5 = 1.5-fold either way).
       p_cutoff: 0.05
-      # true (default) = gate significance on BH-adjusted p (padj);
-      # false = raw p-value
-      use_adjusted_pval: true
       linear_fc_cutoff: 1.5
+      # WHICH p-value is compared with p_cutoff in the differential-abundance
+      # results, the report and the Excel:
+      #   true (default) = BH-adjusted p (padj);  false = raw p-value.
+      # This does not affect enrichment: ORA has its own choice,
+      # enrichment.pvalue_column, which defaults to the RAW p-value.
+      use_adjusted_pval: true
 
     # ---- Clustering ----
     clustering:
       enabled: true
-      group_col: "group"
+      group_col: "group"            # <-- YOUR DATA (required when enabled)
       min_groups: 2
 
       steps:
@@ -227,21 +315,16 @@ modes:
           enabled: true
           algorithm: "hclust"
           distance: "euclidean"
-          # k is chosen by the gap statistic (k_method defaults to "gap" in code).
-          # Gap-statistic runtime is roughly gap_B * k_max * O(n_features^2).
-          k_max: 20                # Max K tested. Cost is LINEAR in k_max — set to
-                                   # the biologically expected max number of clusters.
-          gap_B: 50                # Gap-statistic bootstraps (code default: 100).
-                                   # 50 is stable enough for firstSEmax at ~half cost.
-          min_variance: 0          # Drop features with variance <= this before the
-                                   # gap statistic (variance units; code default 0 =
-                                   # only constant rows). Raising it feeds fewer
-                                   # features in, cutting runtime QUADRATICALLY
-                                   # (smaller O(n_features^2)) — the biggest speed lever.
+          # k is chosen by the gap statistic. Its runtime is roughly
+          # gap_B * k_max * O(n_features^2), so these three are the speed levers.
+          k_max: 20                # Max k tested; set to the largest number of clusters you expect.
+          gap_B: 50                # Bootstraps (code default 100; 50 is stable at about half the cost).
+          min_variance: 0          # Drop features with variance <= this first (0 = only constant
+                                   # rows). Raising it is the biggest saving: cost is quadratic in features.
           nstart: 25
-          # Only relevant in partition clustering to generate profile plots
-          profile_x_axis_col: null   # Partition cluster PROFILE plot: X-axis metadata column (defaults to group_col); not used for heatmaps
-          profile_color_col: null    # Partition cluster PROFILE plot: optional color/linetype grouping column; not used for heatmaps
+          # Profile plots only (not heatmaps):
+          profile_x_axis_col: null   # X-axis metadata column (defaults to group_col)
+          profile_color_col: null    # optional color/linetype grouping column
 
         binary_patterns:
           enabled: true
@@ -252,24 +335,36 @@ modes:
         cluster_cols: true
 
     # ---- Enrichment ----
+    # Two separate analyses with separate switches:
+    #   run_enrichment      identified-metabolite enrichment (ORA, GSEA, QEA,
+    #                       ssGSEA) on features that have compound ids.
+    #   mummichog.enabled   m/z-based pathway analysis on all features (below).
+    # Shiny: the ORA and GSEA results of a run are added to the Shiny payload
+    # automatically when they exist. There is no separate switch for that.
     enrichment:
       run_enrichment: false
-      # Build the DE-metabolite KEGG network step (writes the report "Network/"
-      # HTML). Off by default; set true to build it.
+      # Build the significant-metabolite KEGG network (the report's "Network/"
+      # HTML). Off by default.
       run_network: false
       libraries: []
-      gmt_file: null
-      mapping_file: null
-      # Which p-value column to use when filtering significant features for ORA:
-      #   "P.Value"   - raw p-value (default; MetaboAnalyst convention)
+      gmt_file: null         # pathway library: one .gmt path or a list
+      mapping_file: null     # HMDB -> KEGG id table
+
+      # WHICH p-value picks the significant features for ORA. The thresholds
+      # are de.p_cutoff and de.linear_fc_cutoff; this key only picks the column:
+      #   "P.Value"   - raw p-value (DEFAULT; MetaboAnalyst convention)
       #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
+      # Independent of de.use_adjusted_pval. With both defaults, the
+      # differential-abundance results count features by ADJUSTED p while ORA
+      # selects them by RAW p, so ORA can use more features than the results
+      # table calls significant.
       pvalue_column: "P.Value"
 
       # QEA (globaltest) options. QEA and ssGSEA run on the matrix the
       # differential-abundance step tests on (log-normalized, biological samples
-      # only) instead of raw intensities. With a pre-computed DE table
-      # (files.de_table) no local DE runs, so this is the matrix the pipeline's
-      # own DE would use, not necessarily the one behind the loaded table.
+      # only) instead of raw intensities. With a pre-computed table
+      # (files.de_table) no local test runs, so this is the matrix the pipeline's
+      # own test would use, not necessarily the one behind the loaded table.
       qea:
         # Rescale globaltest predictors before pathway testing (globaltest::gt
         # standardize=). This changes the relative weighting of metabolites and
@@ -278,106 +373,75 @@ modes:
         # current default; evaluate TRUE vs FALSE on your data before relying on it.
         standardize: false
 
-      # Mummichog m/z-based pathway analysis (ORA + GSEA). Opt-in. When enabled,
-      # `engine` is REQUIRED (it is never defaulted or guessed). New configs:
-      # engine: metaboanalyst — a native R reimplementation of MetaboAnalyst's
-      # MS Peaks-to-Pathways mummichog; needs a custom model (model_ref /
-      # model_json below). The legacy python engine (engine: python, pinned
-      # mummichog==2.7.0 via processx, built-in human_mfn model available)
-      # needs the pinned venv: `make mummichog-venv` then
-      # `export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"`.
+      # ---- Mummichog: m/z-based pathway analysis (ORA + GSEA) ----
+      # Off unless enabled: true, whatever run_enrichment says. Full details,
+      # outputs and the differences between the two engines: docs/mummichog.md.
       mummichog:
         enabled: false
-        engine: metaboanalyst          # metaboanalyst | python (legacy; reproduces configs written before this key)
+
+        # Engine. Leave this out for the default, the MetaboAnalyst-compatible
+        # engine. Set it only to use the legacy pinned python mummichog, or to
+        # reproduce an older analysis with the engine that analysis used.
+        # engine: python
+
         p_cutoff: 0.05
         n_permutations: 100
         tolerance_ppm: 10
-        ionization_mode: positive      # positive | negative | mixed; python also pos_default
+        ionization_mode: positive      # positive | negative | mixed (python engine also: pos_default)
 
-        # Python engine only — mixed-polarity data (ionization_mode: mixed). mummichog runs one
-        # ionization mode per run, so each contrast is run once per polarity:
-        # positive-ion features in positive_mode, negative-ion features in
-        # "negative", each against only its own polarity's features. Both keys
-        # are REQUIRED in mixed mode; nothing is assumed.
-        #   polarity_column: annotation column giving each feature's polarity,
-        #     as an ion label ending in its charge sign ([M+H]+1, [M-2H]2-) or
-        #     the word positive/negative. A missing or unreadable value stops
-        #     the stage.
-        #   positive_mode: pos_default (8 ion forms) | positive (25 ion forms)
-        # polarity_column: "Reference Ion"
-        # positive_mode: positive
+        # REQUIREMENTS OF THE DEFAULT (MetaboAnalyst-compatible) ENGINE. If one
+        # is missing the stage stops; it never falls back to python.
+        #   * a metabolic model: model_ref or model_json (at the end of this block);
+        #   * ionization_mode positive, negative or mixed (not pos_default);
+        #   * for mixed: polarity_column (below);
+        #   * m/z and retention-time columns in the data;
+        #   * the fitdistrplus package (in renv.lock).
+        #
+        # MIXED-POLARITY DATA (ionization_mode: mixed)
+        #   polarity_column: the feature-annotation column giving each
+        #     feature's polarity, as an ion label ending in its charge sign
+        #     ([M+H]+1, [M-2H]2-) or the word positive/negative. Required by
+        #     both engines; a missing or unreadable value stops the stage.
+        #   Default engine: ONE joint analysis of both polarities.
+        #   Python engine:  one run per polarity, and it also needs
+        #     positive_mode: pos_default (8 ion forms) | positive (25 ion forms).
+        # polarity_column: "Reference Ion"   # <-- YOUR DATA
+        # positive_mode: positive            # python engine only
 
-        # Engine. metaboanalyst is a native R reimplementation of MetaboAnalyst's
-        # MS Peaks-to-Pathways mummichog (MetaboAnalystR @ 398476ae), validated
-        # against that version's output; python (legacy) is the pinned
-        # mummichog 2.7.0 engine, described by the comments that do not say
-        # otherwise. Configs written before the `engine` key ran python: an
-        # enabled config without `engine` stops and asks for it — add
-        # engine: python to reproduce its earlier results. Under
-        # engine: metaboanalyst:
-        #   * ionization_mode: positive | negative | mixed. mixed is ONE joint
-        #     analysis of both polarities (one EC grouping, one background, one
-        #     permutation null), as in MetaboAnalyst, NOT one run per polarity.
-        #     polarity_column is required for mixed; positive_mode is unused
-        #     (MetaboAnalyst's lists: 25 positive, 16 negative ion forms), and
-        #     pos_default is refused.
-        #   * p_cutoff is inclusive (p <= p_cutoff), as MetaboAnalyst applies it.
-        #   * permutation i is seeded 123 + i (MetaboAnalyst's seeds); the project
-        #     seed is not used.
-        #   * the headline pathway p-value is FET; EASE, Gamma, empirical and
-        #     HOLM-adjusted (not BH/FDR) values are reported beside it.
-        #   * a readable model (model_ref / model_json below) is required.
-        #   * GSEA runs on the same joint-polarity ECs and pathway sets as the ORA
-        #     (MetaboAnalyst's peaks GSEA; gsea_enabled and the gsea_* keys below
-        #     apply); the Pathway Evidence section is not produced.
-        #   * needs the fitdistrplus package (in renv.lock).
-        # Optional, engine: metaboanalyst only (MetaboAnalyst defaults shown):
+        # PYTHON ENGINE (engine: python) needs the pinned venv instead:
+        # `make mummichog-venv`, then
+        # `export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"`.
+        # It can run without a model on its built-in HUMAN model.
+
+        # Optional, default engine only (MetaboAnalyst defaults shown):
         # rt_frac: 0.02          # RT tolerance = max(RT) * rt_frac; rank tolerance = n * rt_frac
         # min_pathway_size: 3    # pathways with fewer model compounds are not tested
 
-        # Force primary ion (mummichog's -z). mummichog 2.7.0 REQUIRES a primary
-        # ion (M+H[+] / M-H[-]) to be present before accepting a metabolite
-        # prediction, which reduces noise from irrelevant adducts — this is the
-        # engine's default. Set false to allow non-primary adducts (emits
-        # `-z False`). Omit to keep the default. Maps to MetaboAnalyst's
-        # force_primary_ion option.
+        # Require a primary ion (M+H[+] / M-H[-]) before accepting a metabolite
+        # prediction, which reduces noise from irrelevant adducts. true is both
+        # engines' default; false allows non-primary adducts.
         force_primary_ion: true
 
-        # --- Complementary GSEA (MetaboAnalyst-style peaks-to-pathways) ------
-        # Runs on the same mapped EmpiricalCompound / pathway universe as the
-        # ORA above, IN ADDITION to it — the pinned mummichog engine and its
-        # statistics are untouched. It uses the FULL ranked EC list (no p-value
-        # cutoff), ranked by the moderated t statistic for DE methods that
-        # produce one and by logFC otherwise, with each EC scored as the signed
-        # max of its member features.
-        #
-        # Needs `fgsea` and a READABLE model (model_ref / model_json below):
-        # the built-in human_mfn model ships inside the Python package, so its
-        # pathway membership cannot be read and both GSEA and the pathway
-        # supporting-evidence section are skipped with a message.
-        #
-        # On by default wherever mummichog is enabled; set false to run the ORA
-        # alone. Configs written before GSEA existed keep working unchanged.
+        # GSEA on the same compounds and pathways as the mummichog ORA, in
+        # addition to it. It uses the full ranked list (no p-value cutoff).
+        # Needs fgsea and a readable model (model_ref / model_json); with the
+        # python engine's built-in human model it is skipped with a message.
+        # On by default when mummichog is enabled; false runs the ORA alone.
         gsea_enabled: true
 
-        # The values below are the MetaboAnalystR Peaks-to-Pathways defaults
-        # (xia-lab/MetaboAnalystR @ 398476ae2a0c996e390925fa62adc46b5ecde334):
-        # PerformPSEA(permNum = 100) and .run_fgsea_inner(minSize = 1,
-        # maxSize = Inf, set.seed(123)). ALL FOUR ARE OPTIONAL and commented out
-        # on purpose — overriding any of them is a methodological deviation from
-        # the reference implementation, and the result records it as one.
-        #
-        # gsea_seed is NOT the global `seed:` above: 123 is upstream's own
-        # value, and inheriting the project seed would silently make every run
-        # a documented deviation.
+        # GSEA settings. All four are optional and commented out on purpose:
+        # the values shown are the MetaboAnalystR defaults, and overriding any
+        # of them is a methodological deviation that the result records.
+        # gsea_seed is NOT the project seed above.
         # gsea_permutations: 100
         # gsea_seed: 123
         # gsea_min_size: 1
         # gsea_max_size: .inf
 
         # Metabolic model (precedence: model_ref > model_json > built-in human).
-        # The built-in model is HUMAN ONLY: a non-human `organism` (above) with
-        # no custom model is refused, not silently run against human pathways.
+        # Required by the default engine. The built-in model belongs to the
+        # python engine and is HUMAN ONLY: a non-human `organism` with no
+        # custom model is refused, not run against human pathways.
         #
         #   model_ref  a published model fetched by URL and verified against its
         #              sha256, then cached under envs/mummichog-models/<sha256>.json.

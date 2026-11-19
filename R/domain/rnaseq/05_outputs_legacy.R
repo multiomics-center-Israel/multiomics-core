@@ -18,6 +18,26 @@ write_rnaseq_datasets_legacy <- function(pre, config, dirs ) {
     unique(files)
 }
 
+#' Write the fitted DE design record for the current run
+#'
+#' Writes `de_res$design` ([rna_de_design_record()]) to `de_design.tsv`. When
+#' no model was fitted (precomputed DE, `de_res$design` is `NULL`), removes a
+#' `de_design.tsv` left in the reused output directory by an earlier run: the
+#' report reads the file whenever it exists, and would otherwise describe that
+#' run's model in this run's Methods.
+#'
+#' @param de_res DE result list from `mod_rnaseq_de()`.
+#' @param datasets_dir The run's `Datasets` directory.
+#' @return The written path, or `character(0)` when nothing was written.
+write_rna_de_design <- function(de_res, datasets_dir) {
+    if (!is.null(de_res$design)) {
+        return(save_tsv(de_res$design, datasets_dir, "de_design.tsv"))
+    }
+    stale <- file.path(datasets_dir, "de_design.tsv")
+    if (file.exists(stale)) file.remove(stale)
+    character(0)
+}
+
 write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, clustering_res = NULL) {
     files <- character(0)
     dirs <- create_legacy_output_dirs(out_dir)
@@ -51,6 +71,9 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
     }
 
     files <- c(files, save_tsv(summary_df, dirs$datasets, sprintf("deseq2_summary_p%s.tsv", p_tag_generic(config, "rna"))))
+
+    # 2a) The DE design that was fitted -- the evidence the Methods text reads.
+    files <- c(files, write_rna_de_design(de_res, dirs$datasets))
 
     # 2b) DE summary counts table (up/down/any per contrast)
     if (!is.null(inputs$contrasts)) {

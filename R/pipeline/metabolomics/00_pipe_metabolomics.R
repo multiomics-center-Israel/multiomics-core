@@ -22,9 +22,25 @@
 #                    │    │
 #                    └────┴──── [chosen_norm] ──→ met_corrected
 #                                                      └─ metab_pre (adapter)
+#
+# ── Reference files ──────────────────────────────────────────────────────────
+#
+# `reference_files` carries the fingerprints (md5 by path) of the GMT libraries
+# and the HMDB -> KEGG table, taken while the plan is defined
+# (metab_reference_fingerprints(), called from _targets.R). They become two
+# targets, so that a changed or newly present file reruns what reads it:
+#   metab_kegg_mapping_ref    -> met_raw, metab_enrichment_res,
+#                                metab_mummichog_sections
+#   metab_enrichment_gmt_ref  -> metab_enrichment_res, metab_mummichog_sections
+# The mummichog report sections are listed because they read both files
+# themselves, to compare mummichog pathways with the identified-metabolite
+# enrichment. Mummichog's own model files are not tracked here.
+# See R/domain/metabolomics/06q_enrichment_reference_files.R.
 pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
                               mummichog_enabled = FALSE,
-                              mummichog_engine = "metaboanalyst") {
+                              mummichog_engine = "metaboanalyst",
+                              reference_files = list(gmt = character(0),
+                                                     mapping = character(0))) {
   # -- Validate chosen_norm at plan-definition time --------------------------
   # "none" = analysis mode on the transform-only matrix (met_log), for tables
   # that arrive already normalized; NULL stays QC-review mode.
@@ -83,9 +99,15 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         load_metabolomics_inputs(config)
       }
     ),
+    # The HMDB -> KEGG table fills row_data$KEGG in met_raw and is read again by
+    # the enrichment stage, so both depend on its fingerprint.
+    metab_reference_target("metab_kegg_mapping_ref", reference_files$mapping),
     tar_target(
       met_raw,
-      mod_met_raw(metab_inputs, config)
+      {
+        metab_kegg_mapping_ref
+        mod_met_raw(metab_inputs, config)
+      }
     ),
     tar_target(
       met_dedup_log,
@@ -338,15 +360,22 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         out_dir = metab_out_dir
       )
     ),
+    # The GMT libraries are not read by met_raw, so a changed library reruns
+    # enrichment (and the mummichog sections, below) and leaves met_raw alone.
+    metab_reference_target("metab_enrichment_gmt_ref", reference_files$gmt),
     tar_target(
       metab_enrichment_res,
-      mod_metabolomics_enrichment(
-        pre     = metab_pre,
-        de_res  = metab_de_res,
-        config  = config,
-        out_dir = metab_out_dir,
-        inputs  = metab_inputs
-      )
+      {
+        metab_kegg_mapping_ref
+        metab_enrichment_gmt_ref
+        mod_metabolomics_enrichment(
+          pre     = metab_pre,
+          de_res  = metab_de_res,
+          config  = config,
+          out_dir = metab_out_dir,
+          inputs  = metab_inputs
+        )
+      }
     )
   )
   
@@ -374,32 +403,53 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       #
       # The engine is chosen at plan-definition time (mmc_engine() on
       # modes.metabolomics.enrichment.mummichog.engine): metaboanalyst (05d,
-      # the MetaboAnalyst-compatible engine) or python (legacy, this
-      # command unchanged). Both fill this one target and write under mummichog_pinned/, so
-      # every downstream target reads either the same way.
+      # the MetaboAnalyst-compatible engine, also the default when the key
+      # is absent) or python (the same call as before). Both fill this one
+      # target and write under mummichog_pinned/, so every downstream target
+      # reads either the same way.
+      #
+      # Both commands name metab_mummichog_engine_info first. Neither stage
+      # reads it: the dependency only orders the two, so the selection is on
+      # disk before any engine work that can stop the pipeline. Without it a
+      # stage that failed first would leave no record, or the previous run's
+      # record naming another engine.
       if (identical(mummichog_engine, "metaboanalyst")) {
         tar_target(
           metab_mummichog_pinned_files,
-          mod_mummichog_metaboanalyst(
-            pre     = metab_pre,
-            de_res  = metab_de_res,
-            config  = config,
-            out_dir = metab_out_dir
-          ),
+          {
+            .engine_info <- metab_mummichog_engine_info
+            mod_mummichog_metaboanalyst(
+              pre     = metab_pre,
+              de_res  = metab_de_res,
+              config  = config,
+              out_dir = metab_out_dir
+            )
+          },
           format = "file"
         )
       } else {
         tar_target(
           metab_mummichog_pinned_files,
-          mod_mummichog_pinned(
-            pre     = metab_pre,
-            de_res  = metab_de_res,
-            config  = config,
-            out_dir = metab_out_dir
-          ),
+          {
+            .engine_info <- metab_mummichog_engine_info
+            mod_mummichog_pinned(
+              pre     = metab_pre,
+              de_res  = metab_de_res,
+              config  = config,
+              out_dir = metab_out_dir
+            )
+          },
           format = "file"
         )
       },
+      # Which engine the config selected and whether it named it or took the
+      # default (06n). The config snapshot holds the config as written, so a
+      # defaulted engine is recorded only here. Built before the stage above.
+      tar_target(
+        metab_mummichog_engine_info,
+        write_mummichog_engine_info(config = config, out_dir = metab_out_dir),
+        format = "file"
+      ),
       # Report-facing pathways: read each contrast's pathway table back from the
       # tracked files (grouped by contrast dir). Always-defined so the report
       # target depends on one stable symbol (NULL in the disabled branch below).
@@ -429,16 +479,26 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       # rebuilding them -- which also keeps the embedded plot and the exported
       # PNG from drifting apart. Writes nothing. Holds ggplot objects, so it is
       # transient in memory; the store keeps them as RDS.
+      #
+      # The two reference targets are named here, not left to arrive through
+      # metab_enrichment_res or metab_pre: the sections read the GMT libraries
+      # (which pathways are comparable) and the HMDB -> KEGG table (the evidence
+      # layer) themselves, and neither upstream value has to change when a file
+      # does -- enrichment switched off stays NULL whatever the GMT says.
       tar_target(
         metab_mummichog_sections,
-        mod_mummichog_sections(
-          pathways = metab_mummichog_report_pathways,
-          files    = metab_mummichog_report_files,
-          pre      = metab_pre,
-          de_res   = metab_de_res,
-          config   = config,
-          enrichment_res = metab_enrichment_res
-        ),
+        {
+          metab_kegg_mapping_ref
+          metab_enrichment_gmt_ref
+          mod_mummichog_sections(
+            pathways = metab_mummichog_report_pathways,
+            files    = metab_mummichog_report_files,
+            pre      = metab_pre,
+            de_res   = metab_de_res,
+            config   = config,
+            enrichment_res = metab_enrichment_res
+          )
+        },
         memory = "transient"
       ),
       # The sections' standalone exports. In the CORE targets beside the stage
@@ -534,7 +594,9 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         enrichment_res = metab_enrichment_res,
         include_legacy = TRUE,
         xlsx_files     = metab_final_results,
-        mummichog_pathways = metab_mummichog_report_pathways,
+        # The sections the HTML report renders, so the app gets the same
+        # ORA and GSEA objects without anything being computed again.
+        mummichog_sections = metab_mummichog_sections,
         out_file       = file.path(metab_out_dir,
                                    sprintf("shiny_payload_metabolomics_%s.rds",
                                            get_run_name(config)))
@@ -598,4 +660,30 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
   )
 
   c(base_targets, analysis_core, analysis_outputs)
+}
+
+
+#' A target whose command is a fingerprint
+#'
+#' The fingerprint is written into the command as a literal, so a different
+#' fingerprint is a different command and {targets} reruns the target. Its value
+#' is the fingerprint itself, which downstream targets depend on.
+#'
+#' @param name Target name.
+#' @param fingerprint Named character vector from
+#'   \code{fingerprint_reference_files()} (may be empty).
+#' @return A target object.
+metab_reference_target <- function(name, fingerprint) {
+    fingerprint <- fingerprint %||% character(0)
+    if (!is.character(fingerprint) ||
+        (length(fingerprint) > 0 && is.null(names(fingerprint)))) {
+        stop("metab_reference_target(): 'fingerprint' must be a named character ",
+             "vector (md5 by path) or empty; got ", class(fingerprint)[1], ".")
+    }
+    command <- if (length(fingerprint) == 0) {
+        quote(character(0))
+    } else {
+        as.call(c(as.name("c"), as.list(fingerprint)))
+    }
+    targets::tar_target_raw(name, command)
 }
