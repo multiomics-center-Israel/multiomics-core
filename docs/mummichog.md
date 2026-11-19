@@ -99,7 +99,7 @@ This per-polarity behaviour is the **python engine's**. For one joint analysis o
 
 This engine is the default: it runs when `engine` is `metaboanalyst` or absent. The python engine is untouched and selectable with `engine: python`.
 
-What only the python engine provides (lost if it is ever removed): the Pathway Evidence section (supporting features and annotation agreement), mummichog's modular/network analysis outputs and `result.html`, the `pos_default` ion list, the built-in `human_mfn` model, and its own GSEA variant on python mummichog's m/z-merged ECs.
+What only the python engine provides (lost if it is ever removed): mummichog's modular/network analysis outputs and `result.html`, the `pos_default` ion list, the built-in `human_mfn` model, and its own GSEA variant on python mummichog's m/z-merged ECs. Both engines produce the Pathway Evidence section; see [Pathway Evidence with this engine](#pathway-evidence-with-this-engine).
 
 ``` yaml
         engine: metaboanalyst
@@ -122,7 +122,7 @@ What differs from the python engine:
 | permutation seeds | `params.seed` | `123 + i` for permutation `i` (MetaboAnalyst's own) |
 | model | built-in `human_mfn` or a custom JSON | a custom JSON (`model_ref` / `model_json`) is required |
 | GSEA | on python mummichog's ECs (m/z-merged scores) | MetaboAnalyst's peaks GSEA on the **same joint-polarity ECs and pathway sets as the ORA**; EC score = max of its features' signed DE statistic; `padj` is **BH** |
-| Pathway Evidence | yes | not produced (it reads the python engine's EC tables) |
+| Pathway Evidence | from python mummichog's EC tables; each feature's annotation compared with all of its EC's pathway candidates | from the engine's matched-feature table; each feature's annotation compared only with the pathway candidates it matched itself ([below](#pathway-evidence-with-this-engine)) |
 
 Reproduced on purpose, because MetaboAnalyst does it:
 
@@ -154,6 +154,23 @@ Limits:
 - Pathway names must be unique in the model, because MetaboAnalyst identifies pathways by name. A model that repeats a name stops the stage.
 - MetaboAnalyst's custom-adduct and currency-customisation options are not offered. The default currency list is applied.
 
+### Pathway Evidence with this engine
+
+The report's Pathway Evidence tab, the Summary's *Supporting evidence* and *Annotation agreement* columns, and the `mummichog_evidence_{pathways,empirical_compounds,features}_<contrast>` exports are built from this engine's own results (`build_mummichog_ma_pathway_evidence()`, `R/domain/metabolomics/06s_mummichog_ma_evidence.R`). Nothing is recomputed:
+
+- a pathway's supporting ECs are its significant ECs from `ma_pathway_results.tsv` (`ec_hits`), so `Supporting ECs` equals `Sig.EC`; the evidence is refused if they ever disagree;
+- each EC's compounds, features, ion forms and polarities come from `ma_matched_features.tsv`; a feature's p-value and input statistic from `ma_input.tsv`; its `Feature log2FC (DE)` from the DE results; candidate names and pathway membership from the metabolic model;
+- a **pathway-matching candidate** is a compound matched in the EC that belongs to the pathway in the model.
+
+What differs from the python evidence:
+
+- **Agreement** compares a feature's annotation only with the pathway candidates **that feature itself matched**. MetaboAnalyst merges the ECs of features that match several compounds, so an EC can hold a feature matched only to compounds outside the pathway; that feature reads `Not assessed`, and `Matched via pathway candidate` is `FALSE`. EC membership and the support counts are unchanged.
+- The feature table adds `Polarity`, `Matched compound(s)`, `Pathway candidate(s) matched by feature`, `Matched via pathway candidate`, `Feature statistic (MetaboAnalyst input)` (the signed statistic the engine was given: the t statistic when the DE method reports one, else the log2FC) and `Feature log2FC (DE)`. It has no `Feature log2FC (mummichog input)` column. `Feature log2FC (DE)` is joined from the DE results by feature id; when no DE table can be matched to the contrast, the table lacks `feature_id` / `logFC`, or some evidence features have no logFC, its cells are empty, the run warns, and the Pathway Evidence tab (and the feature-level table under Advanced) says which of these happened. The EC table adds `Polarities`.
+
+Feature ids come from the engine's own m/z-key join, written into `ma_matched_features.tsv`. The evidence refuses a contrast whose matches cannot be traced to exactly one input feature (a missing id, an id absent from `ma_input.tsv`, a repeated input id, an m/z mapped to several ids or the reverse, or a polarity that differs between the two files).
+
+Limits: a feature dropped as a duplicate m/z, one outside the m/z range, one matched to no library compound and one whose only matches were removed (currency compounds, the primary-ion rule) were never part of an EC, so they appear in no evidence row; for the first two the engine records how many, not which. Evidence re-reads the model, so it is built only when the configured model's sha256 equals the one in the contrast's `ma_run_info.json`. Otherwise, or when anything above is refused, the stage's ORA and GSEA are untouched, the run warns, and the contrast's Pathway Evidence tab shows the reason instead of disappearing.
+
 ## Backward compatibility: configs without `engine`
 
 What an enabled config with no `engine` key does has changed more than once, so **the absence of the key does not tell you which engine an older analysis used**:
@@ -171,7 +188,7 @@ So an older analysis whose config has no `engine` may have used either engine. *
 
 To find out which engine an older run used, read the run, not the config:
 
-- **Its report.** The mummichog methodology text names the MetaboAnalyst-compatible engine (joint-polarity ORA and GSEA, FET and Holm columns) when that engine produced the results; a python run has the Pathway Evidence section and, for mixed data, one tab per polarity.
+- **Its report.** The mummichog methodology text names the MetaboAnalyst-compatible engine (joint-polarity ORA and GSEA, FET and Holm columns) when that engine produced the results; a python run, for mixed data, has one tab per polarity. A Pathway Evidence section does not tell them apart: python reports can have one, MetaboAnalyst-compatible reports built before this change have none, and later ones can have one too.
 - **Its output tree.** `mummichog_pinned/<contrast>/metaboanalyst/ma_run_info.json` exists only for the MetaboAnalyst-compatible engine; `mummichog_pinned/<contrast>/v2/` (with `mummichog_manifest.tsv`) only for python.
 - **Its code version.** `execution_info/git_commit.txt` gives the commit the run was made from.
 
@@ -219,7 +236,7 @@ Under `<metab_out_dir>/mummichog_pinned/`, one subdirectory per contrast (`<cont
 
 Directly under `mummichog_pinned/`, `mummichog_engine.json` records the engine selected for the last enabled run (see [Backward compatibility](#backward-compatibility-configs-without-engine)).
 
-Plus, directly under `mummichog_pinned/`, the presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), the GSEA exports described below, the `mummichog_evidence_*_<contrast>.{tsv,csv}` supporting-evidence tables, `mummichog_summary_<contrast>.{tsv,csv}` (the Summary table, described below), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
+Plus, directly under `mummichog_pinned/`, the presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), the GSEA exports described below, the `mummichog_evidence_*_<contrast>.{tsv,csv}` supporting-evidence tables, `mummichog_summary_<contrast>.{tsv,csv}` (the Summary table, described below), `mummichog_results_all_contrasts.xlsx` (every contrast in one workbook, described below), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
 
 These exports are written by their own target (`metab_mummichog_exports`), not by the report. They are produced wherever the stage runs — **single-omics and multiomics alike** — and they do not need `rmarkdown`: a run without it loses the HTML report and nothing else. Before this was split out (issue #306) the supporting evidence and the GSEA were computed inside the report module, so both vanished in multiomics mode and whenever `rmarkdown` was missing.
 
@@ -227,13 +244,23 @@ To map pathways back to your feature ids, `join_features_to_results()` uses the 
 
 ## The report section
 
-Per contrast, the tabs are:
+The section opens with **Methodology**: a short description, the caveats a reader must not miss (what enters the engine, raw versus adjusted p-values, counts are not additive), a per-contrast table of what entered the engine (from each contrast's run record), and blue **ⓘ** panels — native `<details>` elements, no JavaScript — for the secondary detail: input and feature selection, ORA and significance, GSEA, empirical compounds and annotation agreement, parameters. With more than one contrast, an **Across contrasts** tab follows (see below). Then, per contrast, the tabs are:
 
-1.  **Summary** — the top 20 pathways (all of them if fewer), ranked by the smaller of the raw Mummichog ORA and GSEA p-values (a missing value counts as `Inf`). Rows need not be significant: a pathway is *nominal* when ORA or GSEA is below `p_cutoff`, and when none is, the tab says so above the table. Columns: Pathway, Identified-metabolite support, Mummichog ORA (`p = …`; empirical raw p, no adjusted value exists), Mummichog GSEA (`p = …; FDR = …`), Mummichog contribution, Supporting evidence (`n ECs / m features`, distinct measured features, shown only for pathways nominal in ORA; `Not available — GSEA-only signal` for a GSEA-only pathway; `—` for a pathway nominal in neither), Annotation agreement (EC counts, zeros omitted). The `mummichog_summary_<contrast>` export holds the same rows; the complete ORA and GSEA results are under Advanced / Downloads.
+1.  **Summary** — the top 20 pathways (all of them if fewer), ranked by the smaller of the raw ORA and GSEA p-values (a missing value counts as `Inf`), with a one-line count of what entered the engine. Rows need not be significant; when none is nominal, the tab says so. Columns: Pathway; **ORA** (status, raw p — FET for the MetaboAnalyst-compatible engine — and its Holm-adjusted p; a pathway with no significant EC reads *No significant EC overlap*, never *Not tested*); **GSEA** (status, raw p and BH FDR); **ORA overlap ECs** (`Sig.EC`) and **Features in overlap ECs** (distinct features, including non-significant ones and ones without their own pathway-candidate match), both only for pathways nominal in ORA — never for a GSEA-only pathway; **Annotation agreement (ECs)**; **Identified-metabolite enrichment**; **Interpretation** (*Also supported by identified-metabolite enrichment*, *Mummichog-only hypothesis*, *Not comparable*, *No nominal Mummichog signal*). It is the first rows of the contrast's overview (`build_mummichog_overview()`, `06t_mummichog_presentation.R`), which is built on `build_mummichog_summary()` and relabels it.
 2.  **ORA plot** — the bubble plot with a one-line count of nominal pathways.
 3.  **GSEA plot** — the scatter with a one-line count of nominal pathways and how many survive BH correction.
-4.  **Pathway Evidence** — Pathway → EmpiricalCompound → measured features for the Summary pathways that are nominal in ORA and have evidence (a GSEA-only pathway's ORA evidence row stays under Advanced, so it is never read as ORA support). A Mixed EC also shows each feature's annotation and agreement.
-5.  **Advanced / Downloads** — the full ORA and GSEA tables (ES, NES, leading edge, ES-fallback flags, deviations), the full evidence tables at every grain, and a preview of the feature-level table (the exported file is complete).
+4.  **Pathway Evidence** — Pathway → EmpiricalCompound → measured features for the Summary pathways that are nominal in ORA and have evidence (a GSEA-only pathway's ORA evidence row stays under Advanced, so it is never read as ORA support). Every EC's feature table, whatever the EC's agreement (Match, Conflict, Mixed or Not assessed), shows each feature's original annotation, its annotation confidence (when the dataset declares any) and its agreement.
+5.  **Advanced / Downloads** — every pathway (the overview, with numeric p-values), the full ORA table with every engine column named for what it holds (including `Hits.*`, putative compound matches), the full GSEA table, the full evidence tables at every grain, and a preview of the feature-level table (the exported file is complete).
+
+**Shiny contract.** The report's Summary and full ORA table are presentation versions. The section objects the Shiny payload carries — `summary` (the top 20, with the column names and labels documented in `docs/SHINY_PAYLOAD_HANDOFF.md`), `table` and `gsea` — and the `mummichog_summary_<contrast>` and `mummichog_pathway_table_<contrast>` exports are unchanged, so their wording (*Not tested*, *Confirms identified signal*, `n ECs / m features`) differs from the report's until the app adopts the new presentation.
+
+### Across contrasts
+
+A tab before the contrast tabs, and the first data sheet of the workbook (`build_mummichog_across_contrasts()`, `06u_mummichog_across.R`). It is a lookup of each contrast's existing results, aligned on the model's pathway id (the name only where a pathway has no id). Per contrast, a cell reads *ORA Holm* or *GSEA FDR* (adjusted p below 0.05: Holm for ORA, BH for GSEA), *ORA nominal* or *GSEA nominal* (raw p below `p_cutoff` only), *—* (a result without nominal evidence) or *No result*. The report lists pathways with nominal evidence in at least two contrasts or adjusted significance in at least one (`mmc_across_report_rows()`); the workbook lists every pathway, with each contrast's four p-values. No p-value is combined across contrasts and no NES direction is shown: a pathway that recurs is not shown to change in the same direction, nor to be supported by the same ECs or features — compare them in the evidence tables.
+
+### The mummichog workbook
+
+`mummichog_pinned/mummichog_results_all_contrasts.xlsx` (`06v_mummichog_workbook.R`), written by the exports target beside the CSV/TSV files, which are all still written. Sheets: **README** (guide, definitions, caveats, and per contrast what entered the engine and whether its evidence was built), **Across Contrasts**, **Pathway Overview** (every pathway of every contrast, not only the report's top 20), **ORA Results** (including the Holm columns and `Hits.*`), **GSEA Results** (raw p and BH FDR), **EC Evidence** and **Feature Evidence**. In Feature Evidence, each feature's own pathway candidates (`Pathway-matched metabolite candidate ID(s)`, the evidence's `Pathway candidate(s) matched by feature`) and their model names in the same order (`Candidate metabolite name(s) (putative)`; `(no name in model)` where the model has none) sit just before `Original annotation`, `Annotation ID`, `Annotation confidence` and `Agreement` — names of putative matches, not identifications. Every data sheet has a `Contrast` column, a frozen header and a filter; p-values are numbers and identifiers are text. Every sheet is built from the same section objects as the report. It never reads or writes the differential-abundance workbook (`Final_results_*.xlsx`). It follows the same retention rule as every other output under `mummichog_pinned/`: a later run with mummichog disabled neither rewrites nor removes it (see [Backward compatibility](#backward-compatibility-configs-without-engine)). The HTML report names the workbook only when the file is present beside it, and says it comes from the exports step: the report does not depend on that step, so a file on disk does not show that the current run wrote it.
 
 The Summary compares a Mummichog pathway with enrichment on identified metabolites (ORA, QEA and GSEA; not ssGSEA) through the **exact pathway id** both sides share — the model's pathway `id` and the GMT id, e.g. `mng00010`. Never by name. Three questions are kept apart:
 

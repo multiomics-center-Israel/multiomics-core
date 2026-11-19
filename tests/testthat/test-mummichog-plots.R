@@ -532,7 +532,11 @@ test_that("mod_mummichog_exports writes exactly what save_mummichog_exports writ
                                      summary   = s$summary)
 
   # Same file set, same names -- the move must not rename or drop an export.
-  expect_setequal(basename(written), basename(expected))
+  # The one addition is the all-contrast mummichog workbook (06v).
+  expect_setequal(setdiff(basename(written), .MMC_WORKBOOK_FILE), basename(expected))
+  if (requireNamespace("openxlsx", quietly = TRUE)) {
+    expect_true(.MMC_WORKBOOK_FILE %in% basename(written))
+  }
   expect_true(length(written) > 0)
   expect_true(all(file.exists(written)))
   expect_true(all(dirname(written) == file.path(via_wrapper, "mummichog_pinned")))

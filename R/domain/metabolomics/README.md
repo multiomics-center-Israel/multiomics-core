@@ -89,8 +89,8 @@ There is no separate `normalization:` block.
 | `metab_feature_sel_res` | `mod_metabolomics_feature_selection()` | `04_feature_selection.R` (random forest, PLS-DA) |
 | `metab_enrichment_res` | `mod_metabolomics_enrichment()` | `06_enrichment.R`: QEA, ssGSEA, ORA, GSEA |
 | `metab_mummichog_pinned_files` | `mod_mummichog_pinned()` (only when mummichog is enabled), or `mod_mummichog_metaboanalyst()` with `mummichog.engine: metaboanalyst` | `06c`–`06e_mummichog_*.R`; MetaboAnalyst-compatible engine `06j`–`06n_mummichog_ma_*.R` |
-| `metab_mummichog_sections` | `mod_mummichog_sections()` | `06e_mummichog_plots.R`: `build_mummichog_report_sections()` (ORA plot + table, GSEA, evidence, Summary) |
-| `metab_mummichog_exports` | `mod_mummichog_exports()` | `06e_mummichog_plots.R`: `save_mummichog_exports()`, `clear_orphan_mummichog_gsea_exports()` |
+| `metab_mummichog_sections` | `mod_mummichog_sections()` | `06e_mummichog_plots.R`: `build_mummichog_report_sections()` (ORA plot + table, GSEA, evidence, Summary); evidence from `06f_mummichog_evidence.R` (python engine) or `06s_mummichog_ma_evidence.R` (MetaboAnalyst-compatible engine); report-facing overview, detailed ORA table and input counts from `06t_mummichog_presentation.R` (beside the Shiny-facing Summary, never instead of it) |
+| `metab_mummichog_exports` | `mod_mummichog_exports()` | `06e_mummichog_plots.R`: `save_mummichog_exports()`, `clear_orphan_mummichog_gsea_exports()`; the all-contrast workbook from `06v_mummichog_workbook.R`, with the across-contrast view from `06u_mummichog_across.R` |
 | `metab_final_results` | `write_metabolomics_final_results()` | `05_outputs_legacy.R`: `build_final_results_metabolomics()`, `build_group_cv_metabolomics()` |
 | `metab_shiny_payload` | `save_shiny_payload_metabolomics()` → `build_shiny_payload_metabolomics()` | `07_shiny_export.R` |
 | `metab_report` | `mod_metabolomics_report()` | `R/pipeline/metabolomics/templates/report_metabolomics.Rmd` |

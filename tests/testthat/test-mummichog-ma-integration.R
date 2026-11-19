@@ -445,7 +445,7 @@ test_that("when every contrast fails, earlier exports are cleared before the sto
 
 # ---- report sections and the Shiny contract --------------------------------------
 
-test_that("MA sections show FET with Holm columns, the MA GSEA, and no evidence", {
+test_that("MA sections show FET with Holm columns, the MA GSEA, and their evidence", {
   ref <- ma_int_ref()
   st <- ma_run_stage(ref, "mixed")
   pw <- read_mummichog_pathways_by_contrast(st$files)
@@ -461,7 +461,31 @@ test_that("MA sections show FET with Holm columns, the MA GSEA, and no evidence"
                     names(s$gsea$table)))
   expect_false(is.null(s$gsea_plot))
   expect_true(all(s$summary$Pathway %in% c(s$table$Pathway, s$gsea$table$Pathway)))
-  expect_null(s$evidence)
+  # Pathway Evidence, from the engine's own run on the shared fixture.
+  expect_null(s$evidence_note)
+  expect_false(is.null(s$evidence))
+  tbl <- pw[["HL_vs_LL"]]
+  ps <- s$evidence$pathway_summary
+  expect_setequal(ps$Pathway, tbl$pathway)
+  expect_equal(ps[["Supporting ECs"]], tbl$Sig.EC[match(ps$Pathway, tbl$pathway)])
+  ft <- s$evidence$feature_table
+  expect_true(all(ft$Feature %in% st$si$pre$row_data$feature_id))
+  expect_equal(ps[["Supporting features"]],
+               as.numeric(tapply(ft$Feature, ft$Pathway,
+                                 function(x) length(unique(x)))[ps$Pathway]))
+  # Joint mixed polarity: each supporting EC lists exactly the polarities the
+  # engine's matched-feature table gives it.
+  mf <- readr::read_tsv(st$files[basename(st$files) == "ma_matched_features.tsv"],
+                        col_types = readr::cols(.default = "c"))
+  pols <- tapply(mf$polarity, mf$Empirical.Compound, function(p)
+    paste(sort(unique(p), method = "radix"), collapse = "; "))
+  et <- s$evidence$ec_table
+  # as.vector(): tapply() gives a 1-d array, and indexing keeps its dim.
+  expect_identical(et$Polarities, as.vector(pols[et$EmpiricalCompound]))
+  expect_true(all(ft$Agreement[!ft[["Matched via pathway candidate"]]] == "Not assessed"))
+  # The Summary's evidence cells are filled wherever ORA is nominal.
+  nom <- !is.na(s$summary[["ORA p.value"]]) & s$summary[["ORA p.value"]] < 0.05
+  expect_false(any(s$summary[["Supporting evidence"]][nom] == "Not available"))
   expect_true(is.na(s$polarity))
   expect_false(is.null(s$ma_info))
   expect_true(all(c("p.value", "p.value EASE", "p.value Gamma",
