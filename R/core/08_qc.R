@@ -585,10 +585,12 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
 #'   IDs), used as is after alignment to the matrix columns; overrides
 #'   \code{annot_cols}. NULL (default) changes nothing.
 #' @param annot_colors Optional pheatmap \code{annotation_colors} list.
+#' @param title Optional plot title; NULL (default) keeps the stage title.
 #' @return The pheatmap object.
 wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
                             cluster_cols = TRUE, cluster_rows = TRUE,
-                            annot_cols = NULL, annot = NULL, annot_colors = NULL) {
+                            annot_cols = NULL, annot = NULL, annot_colors = NULL,
+                            title = NULL) {
   # 1. Prepare Data
   d <- prepare_qc_data(expr_mat, meta, cfg)
 
@@ -681,7 +683,8 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
                                           cluster_samples = TRUE,
                                           adjust_scale = FALSE,
                                           annot = NULL,
-                                          annot_colors = NULL) {
+                                          annot_colors = NULL,
+                                          title = NULL) {
   d <- prepare_qc_data(expr_mat, meta, cfg)
   
   # Build annotations: a ready-made one (aligned here), else multi-column if
