@@ -593,6 +593,34 @@ test_that("two MA contrasts render the Across contrasts tab first, with caveats"
   expect_false(grepl("\"Not tested\"", hl_rows, fixed = TRUE))
 })
 
+test_that("the report names the workbook only when the file is beside it", {
+  skip_unless_renderable()
+
+  # Where the exports target writes it, relative to the report's directory.
+  wb_rel <- file.path("metabolomics", "mummichog_pinned", .MMC_WORKBOOK_FILE)
+  count <- function(html, x) lengths(regmatches(html, gregexpr(x, html, fixed = TRUE)))
+
+  # Absent (e.g. only the report target was built): no reference at all.
+  absent <- render_mummichog_section(ma_two_contrast_sections()$sections,
+                                     withr::local_tempdir(), MA_RENDER_CFG)
+  expect_identical(count(absent, .MMC_WORKBOOK_FILE), 0L)
+
+  # Present: every reference appears -- Methodology, Across contrasts, each
+  # contrast's Summary panel and Advanced tab -- and each says the file comes
+  # from the exports step, never that this run produced it.
+  dir <- withr::local_tempdir()
+  dir.create(file.path(dir, dirname(wb_rel)), recursive = TRUE)
+  file.create(file.path(dir, wb_rel))
+  present <- render_mummichog_section(ma_two_contrast_sections()$sections, dir,
+                                      MA_RENDER_CFG)
+  n_refs <- count(present, wb_rel)
+  expect_identical(n_refs, 6L)
+  expect_identical(count(present, "exports step, not by this report"), n_refs)
+  expect_match(tab_body(present, "across-contrasts", "hl-vs-ll"), wb_rel, fixed = TRUE)
+  expect_match(tab_body(present, "methodology", "across-contrasts"), wb_rel, fixed = TRUE)
+  expect_false(grepl("is also in one workbook", present, fixed = TRUE))
+})
+
 test_that("an MA section with no matched DE table explains its empty log2FC", {
   skip_unless_renderable()
 

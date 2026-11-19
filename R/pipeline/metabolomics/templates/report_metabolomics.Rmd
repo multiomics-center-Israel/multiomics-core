@@ -252,9 +252,16 @@ make_mm_dt <- function(df, ...) {
   make_dt(df, ..., pval_cols = f$pval, int_cols = f$int)
 }
 
-# The exports target writes the mummichog workbook only when openxlsx is
-# available (05c); the report names it only then.
-mm_has_workbook <- requireNamespace("openxlsx", quietly = TRUE)
+# The mummichog workbook, where the exports target writes it: under this
+# report's own directory (the report renders from the run directory, beside
+# metabolomics/). The report does not depend on the exports target (it is a
+# leaf), so the workbook is named only when the file is actually there. A file
+# on disk does not show which run wrote it, so the report only points to it,
+# saying it comes from the exports step, and never says this run produced it.
+mm_workbook_rel  <- file.path("metabolomics", "mummichog_pinned", .MMC_WORKBOOK_FILE)
+mm_workbook_path <- file.path(dirname(knitr::current_input(dir = TRUE)), mm_workbook_rel)
+mm_has_workbook  <- file.exists(mm_workbook_path)
+mm_workbook_note <- "written by the pipeline's exports step, not by this report"
 
 # Styles for info_panel(), written once at the top of the mummichog section.
 INFO_PANEL_CSS <- paste0(
@@ -2724,7 +2731,7 @@ if (identical(mummi_engine, "metaboanalyst")) {
     sprintf("- fitdistrplus %s\n", ma1$fitdistrplus_version %||% "?"),
     "- Row order and rounding are MetaboAnalyst's: rows ordered by Gamma (by FET when Gamma is unavailable), values rounded to 5 significant digits.\n",
     "- The full MetaboAnalyst-format table, the matched features and the run record are written per contrast under `mummichog_pinned/<contrast>/metaboanalyst/`",
-    if (mm_has_workbook) "; all contrasts together are in `mummichog_pinned/mummichog_results_all_contrasts.xlsx`.\n" else ".\n"))
+    if (mm_has_workbook) sprintf("; a workbook with all contrasts is at `%s` (%s).\n", mm_workbook_rel, mm_workbook_note) else ".\n"))
   cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123. Pang Z, Chong J, Zhou G, et al. MetaboAnalyst 5.0. Nucleic Acids Res. 2021;49(W1):W388-W396.*\n\n")
 } else {
 cat("**Mummichog pathway analysis.** [Mummichog](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) complements pathway enrichment based on identified metabolites by using LC–MS features **without requiring a confident metabolite identity for every feature**.\n\n")
@@ -2861,7 +2868,7 @@ if (!is.null(mummi_across) && length(mummi_across$de_contrasts) > 1L) {
     "*Contrasts with adjusted evidence* counts contrasts where ORA Holm or GSEA FDR is below the threshold; *contrasts with nominal evidence* also counts those with only a raw p below the cutoff. ",
     "ORA (Holm, family-wise) and GSEA (BH, false discovery rate) control different error rates, so their adjusted values are not interchangeable. ",
     "No p-value is combined across contrasts, and NES sign is not shown because it is not a biological direction here.",
-    if (mm_has_workbook) " Every pathway, with each contrast's four p-values, is in the **Across Contrasts** sheet of `mummichog_results_all_contrasts.xlsx`.",
+    if (mm_has_workbook) sprintf(" For every pathway with each contrast's four p-values, see the **Across Contrasts** sheet of the workbook `%s` (%s).", mm_workbook_rel, mm_workbook_note),
     "\n\n"))
 }
 
@@ -2938,7 +2945,7 @@ for (contrast in names(mummi_sections)) {
           "The features include ones that are not significant."))
       info_panel("How to read the Summary", c(
         sprintf("Pathways are ranked by the smaller raw p-value of ORA and GSEA; the top %d are listed here. Every pathway is under **Advanced / Downloads**%s.\n\n", .MMC_SUMMARY_TOP_N,
-                if (mm_has_workbook) " and in the **Pathway Overview** sheet of `mummichog_results_all_contrasts.xlsx`" else ""),
+                if (mm_has_workbook) sprintf("; see also the **Pathway Overview** sheet of the workbook `%s` (%s)", mm_workbook_rel, mm_workbook_note) else ""),
         sprintf("**Identified-metabolite enrichment** looks up the same pathway ID in this contrast's enrichment on identified metabolites (ORA, QEA, GSEA) and lists the methods with FDR < %g. *Not comparable*: no shared pathway ID. *Not in this contrast's identified-metabolite results*: in the shared library but not tested there.\n\n", .MMC_SUMMARY_FDR),
         "**Interpretation** reads those columns, never decides them: *Also supported by identified-metabolite enrichment* means a nominal Mummichog pathway is also below the FDR threshold there — consistent results from two analyses, not a confirmation of each other; *Mummichog-only hypothesis* means a nominal Mummichog pathway without that support; *No nominal Mummichog signal* means ranked here only.\n\n",
         "**Annotation agreement (ECs)** counts the pathway's overlap ECs by how their features' dataset annotations compare with the candidate identities; see **Pathway Evidence**.\n\n"))
@@ -3060,7 +3067,8 @@ for (contrast in names(mummi_sections)) {
               s$slug %||% contrast,
               paste0("`", export_stems, "`", collapse = ", ")))
   if (mm_has_workbook && is.data.frame(s$overview)) {
-    cat("Every contrast, with every pathway, EC and feature, is also in one workbook: `metabolomics/mummichog_pinned/mummichog_results_all_contrasts.xlsx`.\n\n")
+    cat(sprintf("A workbook with every contrast, pathway, EC and feature is at `%s` (%s).\n\n",
+                mm_workbook_rel, mm_workbook_note))
   }
 
   if (is.data.frame(s$overview)) {
@@ -3232,8 +3240,8 @@ if (any(vapply(mummi_sections, function(s) !is.null(s$summary), logical(1)))) {
 }
 if (mm_has_workbook && any(vapply(mummi_sections, function(s) is.data.frame(s$overview), logical(1)))) {
   files_tbl <- rbind(files_tbl, data.frame(
-    File = "metabolomics/mummichog_pinned/mummichog_results_all_contrasts.xlsx",
-    Description = "Mummichog workbook, every contrast: README, Across Contrasts, Pathway Overview (all pathways), ORA and GSEA results, EC and feature evidence",
+    File = mm_workbook_rel,
+    Description = paste0("Mummichog workbook, every contrast: README, Across Contrasts, Pathway Overview (all pathways), ORA and GSEA results, EC and feature evidence (", mm_workbook_note, ")"),
     stringsAsFactors = FALSE))
 }
 if (has_gsea) {
