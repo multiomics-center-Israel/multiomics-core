@@ -230,8 +230,10 @@ test_that("the Shiny entry, Summary and ORA table are unchanged by the presentat
   expect_identical(s$summary, base)
   expect_identical(s$table, build_mummichog_pathway_table(fx$pathways))
   entry <- metab_shiny_mummichog_entry(s)
-  expect_named(entry, c(.METAB_SHINY_MUMMICHOG_KEYS, .METAB_SHINY_MUMMICHOG_ADDED_KEYS))
+  # The presentation objects are appended after the ten original fields.
+  expect_named(entry, c(.METAB_SHINY_MUMMICHOG_KEYS, .METAB_SHINY_MUMMICHOG_ADDED_KEYS,
+                        .METAB_SHINY_MUMMICHOG_REPORT_KEYS))
   expect_identical(entry$summary_table, flatten_list_columns(base))
   expect_identical(entry$ora_table, flatten_list_columns(s$table))
-  expect_false(any(c("overview", "ora_detail", "input_counts") %in% names(entry)))
+  expect_identical(entry$overview_table, s$overview)
 })

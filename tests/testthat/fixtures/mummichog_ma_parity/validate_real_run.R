@@ -189,7 +189,8 @@ check("Shiny payload has a mummichog entry per contrast",
 check("Shiny mummichog keys unchanged",
       all(vapply(payload$mummichog, function(s)
         identical(names(s), c(.METAB_SHINY_MUMMICHOG_KEYS,
-                              .METAB_SHINY_MUMMICHOG_ADDED_KEYS)), logical(1))))
+                              .METAB_SHINY_MUMMICHOG_ADDED_KEYS,
+                              .METAB_SHINY_MUMMICHOG_REPORT_KEYS)), logical(1))))
 if (do_report) check("HTML report rendered", !is.null(report_file) &&
                        all(file.exists(report_file)))
 check("DE results unchanged by the run", identical(digest::digest(de_res), de_digest))
