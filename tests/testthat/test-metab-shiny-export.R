@@ -187,7 +187,11 @@ test_that("mummichog sections match build_mummichog_report_sections() output", {
 
     expect_named(sec, c("title", "subtitle", "plot", "table", "slug",
                         "summary_table", "ora_plot", "ora_table",
-                        "gsea_plot", "gsea_table"))
+                        "gsea_plot", "gsea_table",
+                        "overview_table", "ora_detail_table", "input_counts",
+                        "evidence_pathway_table", "evidence_ec_table",
+                        "evidence_feature_table", "evidence_note",
+                        "evidence_log2fc_note", "p_cutoff"))
     expect_identical(sec$title, dir$title)
     expect_identical(sec$subtitle, dir$subtitle)
     expect_identical(sec$slug, dir$slug)
@@ -321,6 +325,12 @@ test_that("the final-results table written to TSV and Excel names features from 
 MUMMICHOG_LEGACY_KEYS <- c("title", "subtitle", "plot", "table", "slug")
 MUMMICHOG_ADDED_KEYS  <- c("summary_table", "ora_plot", "ora_table",
                            "gsea_plot", "gsea_table")
+MUMMICHOG_REPORT_KEYS <- c("overview_table", "ora_detail_table", "input_counts",
+                           "evidence_pathway_table", "evidence_ec_table",
+                           "evidence_feature_table", "evidence_note",
+                           "evidence_log2fc_note", "p_cutoff")
+MUMMICHOG_ALL_KEYS    <- c(MUMMICHOG_LEGACY_KEYS, MUMMICHOG_ADDED_KEYS,
+                           MUMMICHOG_REPORT_KEYS)
 
 # More pathways than the Summary keeps, so a truncated table would show.
 make_many_mummichog_pathways <- function(n = 30) {
@@ -362,21 +372,21 @@ make_mummichog_sections <- function(fx) {
     # through, whatever it is.
     sections$A_vs_B$gsea_plot <- ggplot2::ggplot(
         gsea_tbl, ggplot2::aes(x = NES, y = -log10(P.Value))) + ggplot2::geom_point()
-    # What a real section also carries, and the payload must leave behind.
+    # A stand-in for the evidence a real section carries.
     sections$A_vs_B$evidence <- list(pathway_summary = data.frame(Pathway = "Pathway 01"))
     sections
 }
 
-test_that("every mummichog entry has the five original fields, then the five named ones", {
+test_that("every mummichog entry keeps its ten fields first, then the report objects", {
     fx <- make_metab_export_fixture()
     p  <- build_metab_payload(fx, mummichog_sections = make_mummichog_sections(fx))
 
     expect_named(p$mummichog, c("A_vs_B", "C_vs_B"))
     for (contrast in names(p$mummichog)) {
-        expect_named(p$mummichog[[contrast]],
-                     c(MUMMICHOG_LEGACY_KEYS, MUMMICHOG_ADDED_KEYS), info = contrast)
+        expect_named(p$mummichog[[contrast]], MUMMICHOG_ALL_KEYS, info = contrast)
     }
     expect_identical(.METAB_SHINY_MUMMICHOG_ADDED_KEYS, MUMMICHOG_ADDED_KEYS)
+    expect_identical(.METAB_SHINY_MUMMICHOG_REPORT_KEYS, MUMMICHOG_REPORT_KEYS)
 })
 
 test_that("the original mummichog fields are the section's own, unchanged", {
@@ -548,10 +558,108 @@ test_that("sections take precedence over pathway tables; pathway tables alone st
 
     only_pathways <- build_metab_payload(
         fx, mummichog_pathways = list(A_vs_B = make_mummichog_pathways()))$mummichog$A_vs_B
-    expect_named(only_pathways, c(MUMMICHOG_LEGACY_KEYS, MUMMICHOG_ADDED_KEYS))
+    expect_named(only_pathways, MUMMICHOG_ALL_KEYS)
     expect_identical(only_pathways$ora_table, only_pathways$table)
     expect_null(only_pathways$gsea_plot)
     expect_null(only_pathways$gsea_table)
+    expect_s3_class(only_pathways$overview_table, "data.frame")
+    expect_null(only_pathways$evidence_feature_table)
+})
+
+# --- mummichog: the report objects, on the MetaboAnalyst-compatible fixture ------
+# ma_two_contrast_sections() (helper-mummichog-ma.R), SYNTHETIC:
+#   HL_vs_LL  Glycolysis  ORA adjusted;  Pyruvate metabolism  in the ORA table,
+#             nominal in neither ORA nor GSEA;  TCA cycle  GSEA only, no
+#             significant EC, so not in the ORA table
+#   LL_vs_DD  Glycolysis  in the ORA table, not nominal in ORA; GSEA adjusted
+
+test_that("the report objects are the section's own, after the unchanged ten fields", {
+    secs <- ma_two_contrast_sections()$sections
+    for (contrast in names(secs)) {
+        s <- secs[[contrast]]
+        e <- metab_shiny_mummichog_entry(s)
+        expect_named(e, MUMMICHOG_ALL_KEYS)
+        expect_identical(e$summary_table, flatten_list_columns(s$summary), info = contrast)
+        expect_identical(e$ora_table, flatten_list_columns(s$table), info = contrast)
+        expect_identical(e$gsea_table, flatten_list_columns(s$gsea$table), info = contrast)
+        expect_identical(e$overview_table, s$overview, info = contrast)
+        expect_identical(e$ora_detail_table, s$ora_detail, info = contrast)
+        expect_identical(e$input_counts, s$input_counts, info = contrast)
+        expect_identical(e$evidence_pathway_table, s$evidence$pathway_summary,
+                         info = contrast)
+        expect_identical(e$evidence_ec_table, s$evidence$ec_table, info = contrast)
+        expect_identical(e$p_cutoff, s$p_cutoff, info = contrast)
+        expect_null(e$evidence_note)
+        expect_null(e$evidence_log2fc_note)
+        # Complete ORA results: every pathway of the engine's table.
+        expect_identical(nrow(e$ora_detail_table), nrow(s$table), info = contrast)
+    }
+})
+
+test_that("evidence keeps every pathway that has it, whatever its p-value", {
+    secs <- ma_two_contrast_sections()$sections
+    hl <- metab_shiny_mummichog_entry(secs$HL_vs_LL)
+    ll <- metab_shiny_mummichog_entry(secs$LL_vs_DD)
+    ov <- hl$overview_table
+    expect_gte(ov[["ORA raw p"]][ov$Pathway == "Pyruvate metabolism"], 0.05)
+    expect_true("Pyruvate metabolism" %in% hl$evidence_ec_table$Pathway)
+    expect_true("Glycolysis" %in% ll$evidence_ec_table$Pathway)
+    # GSEA only, with no ORA overlap: in the overview, with no evidence rows.
+    expect_true("TCA cycle" %in% ov$Pathway)
+    expect_false("TCA cycle" %in% hl$evidence_ec_table$Pathway)
+    # The evidence tables name pathways exactly as the overview does.
+    for (e in list(hl, ll)) {
+        expect_false(anyDuplicated(e$overview_table$Pathway) > 0)
+        expect_setequal(e$evidence_pathway_table$Pathway,
+                        unique(e$evidence_ec_table$Pathway))
+        expect_true(all(e$evidence_ec_table$Pathway %in% e$overview_table$Pathway))
+        expect_true(all(e$evidence_feature_table$Pathway %in%
+                          e$evidence_pathway_table$Pathway))
+    }
+})
+
+test_that("the feature evidence gains only the workbook's candidate names", {
+    s  <- ma_two_contrast_sections()$sections$HL_vs_LL
+    ft <- metab_shiny_mummichog_entry(s)$evidence_feature_table
+    orig <- s$evidence$feature_table
+    # Every original column, row and value as the section holds it.
+    expect_identical(as.list(ft[names(orig)]), as.list(orig))
+    expect_identical(setdiff(names(ft), names(orig)), .MMC_FEATURE_CAND_NAME_COL)
+    expect_identical(match(.MMC_FEATURE_CAND_NAME_COL, names(ft)),
+                     match(.MMC_FEATURE_CAND_COL, names(ft)) + 1L)
+    # The k-th name belongs to the k-th candidate id, from the section's map.
+    ids <- lapply(ft[[.MMC_FEATURE_CAND_COL]], .mmc_split_cell, sep = ";")
+    nms <- lapply(ft[[.MMC_FEATURE_CAND_NAME_COL]], .mmc_split_cell, sep = ";")
+    expect_identical(lengths(nms), lengths(ids))
+    expected <- unname(s$candidate_names[unlist(ids)])
+    expected[is.na(expected)] <- .MMC_NO_MODEL_NAME
+    expect_identical(unlist(nms), expected)
+    # A feature in a supporting EC that matched no pathway candidate itself.
+    f04 <- ft[ft$Feature == "F04", , drop = FALSE]
+    expect_true(nrow(f04) > 0)
+    expect_true(all(is.na(f04[[.MMC_FEATURE_CAND_NAME_COL]])))
+    expect_false(any(f04[["Matched via pathway candidate"]]))
+    expect_true(all(f04$Agreement == "Not assessed"))
+    # Identifiers stay text.
+    expect_true("0012" %in% ft$Feature)
+})
+
+test_that("a contrast without evidence has NULL evidence tables and says why", {
+    fx  <- ma_evidence_fixture()
+    bad <- fx$model
+    attr(bad, "sha256") <- strrep("a", 64)
+    s <- suppressWarnings(suppressMessages(build_mummichog_report_sections(
+        list(HL_vs_LL = fx$pathways), fx$config, files = fx$files,
+        row_data = fx$row_data, de_res = fx$de_res, model = bad)))$HL_vs_LL
+    e <- metab_shiny_mummichog_entry(s)
+    expect_named(e, MUMMICHOG_ALL_KEYS)
+    for (key in c("evidence_pathway_table", "evidence_ec_table",
+                  "evidence_feature_table")) {
+        expect_null(e[[key]])
+    }
+    expect_identical(e$evidence_note, s$evidence_note)
+    expect_match(e$evidence_note, "not the model this contrast was analysed with")
+    expect_identical(e$overview_table, s$overview)
 })
 
 test_that("the pipeline hands the payload the report's own mummichog sections", {

@@ -20,6 +20,13 @@
 .METAB_SHINY_MUMMICHOG_ADDED_KEYS <- c("summary_table", "ora_plot", "ora_table",
                                        "gsea_plot", "gsea_table")
 
+# The report's presentation and evidence objects (06t, 06f/06s), appended
+# after the ten fields above so those stay exactly as the app knows them.
+.METAB_SHINY_MUMMICHOG_REPORT_KEYS <- c(
+  "overview_table", "ora_detail_table", "input_counts",
+  "evidence_pathway_table", "evidence_ec_table", "evidence_feature_table",
+  "evidence_note", "evidence_log2fc_note", "p_cutoff")
+
 
 #' Make a table safe to write as CSV or Excel
 #'
@@ -60,9 +67,14 @@ flatten_list_columns <- function(tbl, sep = "; ") {
 #'   section has, followed by every field of
 #'   \code{.METAB_SHINY_MUMMICHOG_ADDED_KEYS}: \code{summary_table} (the
 #'   report's Summary, all its columns), \code{ora_plot}, \code{ora_table} (every
-#'   ORA row), \code{gsea_plot} and \code{gsea_table} (every GSEA row). The added
-#'   fields are always present; \code{gsea_plot} and \code{gsea_table} are NULL
-#'   when GSEA did not run for the contrast.
+#'   ORA row), \code{gsea_plot} and \code{gsea_table} (every GSEA row), then by
+#'   every field of \code{.METAB_SHINY_MUMMICHOG_REPORT_KEYS}: the section's
+#'   \code{overview}, \code{ora_detail}, \code{input_counts}, its three evidence
+#'   tables (every row, whatever a pathway's p-value; the feature table with
+#'   the workbook's candidate-name column added), \code{evidence_note},
+#'   \code{evidence_log2fc_note} and \code{p_cutoff}. The added fields are
+#'   always present; a field the section does not have (no GSEA, no evidence)
+#'   is NULL.
 metab_shiny_mummichog_entry <- function(section) {
     entry <- section[intersect(.METAB_SHINY_MUMMICHOG_KEYS, names(section))]
     # List-style assignment: `entry$gsea_plot <- NULL` would drop the key, and
@@ -72,6 +84,26 @@ metab_shiny_mummichog_entry <- function(section) {
     entry["ora_table"]     <- list(flatten_list_columns(section$table))
     entry["gsea_plot"]     <- list(section$gsea_plot)
     entry["gsea_table"]    <- list(flatten_list_columns(section$gsea$table))
+
+    ev <- section$evidence
+    features <- ev$feature_table
+    if (is.data.frame(features)) {
+        # Each feature's candidate names, by the workbook's own helper (06v)
+        # and the section's own name map; the helper keys sections by a
+        # Contrast column, so one is lent to it and dropped again.
+        features$Contrast <- rep("section", nrow(features))
+        features <- .mmc_add_candidate_names(features, list(section = section))
+        features$Contrast <- NULL
+    }
+    entry["overview_table"]         <- list(flatten_list_columns(section$overview))
+    entry["ora_detail_table"]       <- list(flatten_list_columns(section$ora_detail))
+    entry["input_counts"]           <- list(flatten_list_columns(section$input_counts))
+    entry["evidence_pathway_table"] <- list(flatten_list_columns(ev$pathway_summary))
+    entry["evidence_ec_table"]      <- list(flatten_list_columns(ev$ec_table))
+    entry["evidence_feature_table"] <- list(flatten_list_columns(features))
+    entry["evidence_note"]          <- list(section$evidence_note)
+    entry["evidence_log2fc_note"]   <- list(section$evidence_log2fc_note)
+    entry["p_cutoff"]               <- list(section$p_cutoff)
     entry
 }
 
