@@ -367,12 +367,17 @@ resolve_metab_de_matrix <- function(pre) {
 #'   \code{method = "limma"}, \code{de_model} is the single fit every table was
 #'   read from, with one coefficient per contrast, named as \code{de_tables}
 #'   is (see \code{fit_metab_limma_contrasts()}); NULL for the other methods.
+#'   For \code{method = "limma_percontrast"} the list also carries
+#'   \code{percontrast_norm}: the normalization settings and, per contrast, the
+#'   matrix that contrast was tested on (see
+#'   \code{fit_metab_limma_percontrast()}).
 run_metabolomics_de <- function(pre, config, contrast_table) {
     cfg <- config$modes$metabolomics
     de_cfg <- cfg$de %||% list()
 
     method <- tolower(de_cfg$method %||% "limma")
-    assert_one_of(method, "de$method", c("limma", "t_test", "t_test_equal", "wilcoxon"))
+    assert_one_of(method, "de$method",
+                  c("limma", "limma_percontrast", "t_test", "t_test_equal", "wilcoxon"))
 
     condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
@@ -453,7 +458,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     # matrix). Warn so the mismatch is not silent; the full scale-aware fix is
     # tracked separately.
     chosen_norm_de <- tolower(cfg$preprocessing$chosen_norm %||% "")
-    if (method != "limma" && identical(chosen_norm_de, "none")) {
+    if (!method %in% c("limma", "limma_percontrast") && identical(chosen_norm_de, "none")) {
         warning(sprintf(
             "metabolomics DE: method '%s' with chosen_norm = 'none' computes fold changes as linear-scale ratios log2(mean_B/mean_A) from the raw filtered matrix. If the upstream table is ALREADY log-scaled, these fold changes and their significance flags will be incorrect. Use method 'limma', or supply the table on a linear scale.",
             method
@@ -502,6 +507,31 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
                                                contrasts, contrast_labels)
         de_tables <- limma_res$de_tables
         de_model  <- limma_res$fit
+    } else if (method == "limma_percontrast") {
+        message("metabolomics DE [limma_percontrast]: ", paste(contrasts, collapse = "; "))
+        # The whole-run normalization is replaced, so it has to be redone from
+        # the same linear matrix it started from, with the same settings.
+        if (is.null(mat_raw)) {
+            stop("metabolomics DE: de.method = \"limma_percontrast\" normalizes ",
+                 "each contrast from the filtered linear matrix (pre$expr_filt), ",
+                 "and this preprocessing object does not have it for every ",
+                 "biological sample. Rebuild metab_pre, or use de.method: \"limma\".")
+        }
+        if (isTRUE(pre$info$drift$drift_applied)) {
+            stop("metabolomics DE: de.method = \"limma_percontrast\" cannot be ",
+                 "combined with LOESS drift correction, which is fitted on the ",
+                 "whole run and is not redone per contrast. Set ",
+                 "preprocessing.drift_correction.enabled: false, or use ",
+                 "de.method: \"limma\".")
+        }
+        norm_info <- pre$info$normalization %||% list()
+        pc_res <- fit_metab_limma_percontrast(
+            mat_raw, condition, contrasts, contrast_labels,
+            norm_method = norm_info$chosen_norm %||% cfg$preprocessing$chosen_norm %||% "",
+            transform   = norm_info$transform %||% cfg$preprocessing$transform %||% "log2",
+            pseudocount = cfg$preprocessing$pseudocount %||% 1
+        )
+        de_tables <- pc_res$de_tables
     } else {
         de_tables <- list()
         for (i in seq_along(contrasts)) {
@@ -531,7 +561,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     message("metabolomics DE complete: ", nrow(summary_df), " features, ",
             sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
 
-    list(
+    out <- list(
         summary_df = summary_df,
         method     = method,
         de_tables  = de_tables,
@@ -543,6 +573,11 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
                                      padj_column = rep(NA_character_, length(de_tables)),
                                      stringsAsFactors = FALSE)
     )
+    if (method == "limma_percontrast") {
+        out$percontrast_norm <- pc_res[c("norm_method", "transform", "pseudocount",
+                                         "matrices")]
+    }
+    out
 }
 
 
@@ -622,6 +657,104 @@ fit_metab_limma_contrasts <- function(mat, condition, contrasts, labels) {
     names(de_tables) <- labels
 
     list(de_tables = de_tables, fit = fit2)
+}
+
+
+#' Normalize and fit limma separately for each metabolomics contrast
+#'
+#' For every contrast, only the samples of its two groups are kept; they are
+#' normalized together, transformed, and fitted with
+#' \code{fit_metab_limma_contrasts()} on their own. Samples of other groups
+#' therefore affect neither the normalization nor the variance moderation of a
+#' contrast, and the Benjamini-Hochberg adjustment is taken within each
+#' contrast. This mirrors running the pipeline once per contrast on a
+#' two-group subset, gathered into one result.
+#'
+#' The normalization follows the whole-run linear path
+#' (\code{mod_met_normalize_linear()}): sample normalization on the linear
+#' scale, then \code{transform_metab()}. PQN takes the median of the contrast's
+#' own samples as its reference. Methods that are fitted another way (median as
+#' a log shift, EigenMS, biological factor) are refused rather than
+#' approximated.
+#'
+#' @param mat_linear Numeric matrix (features x samples), linear scale,
+#'   filtered and not yet normalized; biological samples only.
+#' @param condition Factor or character of conditions, one per column of
+#'   \code{mat_linear}, in column order.
+#' @param contrasts Character vector of contrast formulas, e.g. \code{"B - A"}.
+#' @param labels Character vector of contrast names, one per formula, unique.
+#' @param norm_method Sample normalization: \code{"pqn"}, \code{"tss"} or
+#'   \code{"none"}.
+#' @param transform Transform passed to \code{transform_metab()}.
+#' @param pseudocount Pseudocount passed to \code{transform_metab()}.
+#' @return list(\code{de_tables}, \code{matrices}, \code{norm_method},
+#'   \code{transform}, \code{pseudocount}): \code{de_tables} as in
+#'   \code{fit_metab_limma_contrasts()}, and \code{matrices} the normalized,
+#'   transformed matrix each contrast was tested on, both named by
+#'   \code{labels}.
+#' @examples
+#' mat <- matrix(c(10, 20, 30, 50, 60, 70, 20, 10, 30, 20, 40, 10),
+#'               nrow = 2, byrow = TRUE,
+#'               dimnames = list(c("f1", "f2"), paste0("s", 1:6)))
+#' res <- fit_metab_limma_percontrast(mat, rep(c("A", "B", "C"), each = 2),
+#'                                    "B - A", "B_vs_A")
+#' colnames(res$matrices$B_vs_A)
+fit_metab_limma_percontrast <- function(mat_linear, condition, contrasts, labels,
+                                        norm_method = "pqn", transform = "log2",
+                                        pseudocount = 1) {
+    if (length(contrasts) == 0 || length(contrasts) != length(labels)) {
+        stop("limma_percontrast DE: expected one name per contrast, got ",
+             length(contrasts), " contrast(s) and ", length(labels), " name(s).")
+    }
+    if (anyNA(labels) || anyDuplicated(labels) > 0) {
+        stop("limma_percontrast DE: contrast names must be unique and non-missing.")
+    }
+    condition <- as.character(condition)
+    if (length(condition) != ncol(mat_linear) || anyNA(condition)) {
+        stop("limma_percontrast DE: every sample (matrix column) needs a ",
+             "non-missing condition; got ", ncol(mat_linear), " column(s) and ",
+             sum(!is.na(condition)), " condition value(s).")
+    }
+
+    norm_method <- tolower(norm_method %||% "")
+    if (!norm_method %in% c("pqn", "tss", "none")) {
+        stop("limma_percontrast DE: preprocessing.chosen_norm is '", norm_method,
+             "', but per-contrast normalization supports only \"pqn\", \"tss\" ",
+             "and \"none\". Choose one of those, or use de.method: \"limma\" ",
+             "to keep the whole-run normalization.")
+    }
+    normalize <- switch(norm_method,
+        pqn  = function(m) norm_pqn(m),
+        tss  = norm_total_sum,
+        none = function(m) m
+    )
+
+    de_tables <- list()
+    matrices  <- list()
+    for (i in seq_along(contrasts)) {
+        grp <- parse_metab_contrast(contrasts[i])
+        n_num <- sum(condition == grp$numerator)
+        n_den <- sum(condition == grp$denominator)
+        if (n_num < 2 || n_den < 2) {
+            stop("limma_percontrast DE: contrast '", labels[i], "' needs at least ",
+                 "2 samples in each group, but '", grp$numerator, "' has ", n_num,
+                 " and '", grp$denominator, "' has ", n_den, ". Check the ",
+                 "contrasts file's Numerator/Denominator against the metadata ",
+                 "condition column.")
+        }
+        keep <- condition %in% c(grp$numerator, grp$denominator)
+        sub <- transform_metab(normalize(mat_linear[, keep, drop = FALSE]),
+                               method = transform, pseudocount = pseudocount)
+        cond_sub <- factor(condition[keep], levels = c(grp$denominator, grp$numerator))
+        message(sprintf("  %s: %d + %d samples, normalized and fitted on their own",
+                        labels[i], n_num, n_den))
+        fit <- fit_metab_limma_contrasts(sub, cond_sub, contrasts[i], labels[i])
+        de_tables[[labels[i]]] <- fit$de_tables[[1]]
+        matrices[[labels[i]]]  <- sub
+    }
+
+    list(de_tables = de_tables, matrices = matrices, norm_method = norm_method,
+         transform = transform, pseudocount = pseudocount)
 }
 
 

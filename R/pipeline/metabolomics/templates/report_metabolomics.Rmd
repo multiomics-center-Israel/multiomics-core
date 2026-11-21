@@ -1595,9 +1595,18 @@ if (!is.null(de_contrasts)) {
     # methods test it, but take logFC and AveExpr from group means of the
     # filtered pre-normalization intensities when run_metabolomics_de() has them.
     .de_all_from_matrix <- identical(tolower(de_method), "limma")
+    .de_percontrast <- identical(tolower(de_method), "limma_percontrast")
     cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>",
         if (is.null(de_tbl_expr)) {
           "Full DE results. Expression values are not shown for this run. "
+        } else if (.de_percontrast) {
+          paste0("Full DE results with this pipeline's whole-run expression ",
+                 "values: ", .de_expr_desc, ". The DE statistics were not ",
+                 "calculated from these values: each contrast was normalized ",
+                 "and tested on the samples of its two groups only, so logFC ",
+                 "can differ from the difference of group means shown here. ",
+                 "The per-contrast matrices are in ",
+                 "Datasets/percontrast_normalized/. ")
         } else if (.de_precomputed) {
           paste0("Full DE results with this pipeline's expression values: ",
                  .de_expr_desc, ". The DE statistics were loaded from ",
@@ -3354,6 +3363,20 @@ test_desc <- switch(tolower(de_method_s),
   "t_test_equal" = "Student's t-tests (equal variance assumed, MetaboAnalyst convention) were performed for each metabolite.",
   "wilcoxon"     = "Wilcoxon rank-sum tests were used as a non-parametric alternative for differential expression testing.",
   "limma"        = "Moderated t-tests were performed using the *limma* R/Bioconductor package, which applies empirical Bayes shrinkage of variance estimates to improve statistical power.",
+  "limma_percontrast" = {
+    .pc <- de_res$percontrast_norm %||% list()
+    sprintf(paste0(
+      "Each contrast was analysed separately on the samples of its two groups ",
+      "only: those samples were normalized together (%s, then %s with ",
+      "pseudocount %s; for PQN the reference is the median of those samples) ",
+      "and tested with moderated t-tests from the *limma* R/Bioconductor ",
+      "package, with variance moderation and Benjamini-Hochberg adjustment ",
+      "within the contrast. Samples of other groups do not enter a contrast. ",
+      "QC plots, clustering and the expression values shown in this report ",
+      "use the whole-run normalization instead."),
+      toupper(.pc$norm_method %||% "NA"), .pc$transform %||% "NA",
+      .pc$pseudocount %||% "NA")
+  },
   sprintf("Differential expression was assessed using the *%s* method.", de_method_s)
 )
 
