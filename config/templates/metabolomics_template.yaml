@@ -121,6 +121,16 @@ modes:
       feat_missing_threshold: 0.50
       sample_missing_threshold: 1.0
 
+      # min_detected_per_group (optional, off when absent): keep a metabolite
+      # only if, in at least one group, at least n samples are detected
+      # (non-NA and non-zero). Runs after the missingness filter, on the
+      # samples left by sample_filter. ignore_groups leaves e.g. pooled QC out
+      # of the check, since pools would otherwise pass almost every feature.
+      # min_detected_per_group:
+      #   n: 3
+      #   group_col: "group"
+      #   ignore_groups: ["Pool"]
+
       # ---- Normalization: chosen_norm is the setting that decides ----
       #
       #   chosen_norm: null    REVIEW MODE (this template's default).

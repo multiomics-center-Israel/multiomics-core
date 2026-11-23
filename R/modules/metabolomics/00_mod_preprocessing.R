@@ -254,6 +254,69 @@ filter_by_missingness <- function(mat, meta, sample_col,
 }
 
 
+#' Keep features detected in enough samples of at least one group
+#'
+#' A feature is kept when, in at least one group, at least \code{min_n} samples
+#' carry a detected value. Detected means non-NA and non-zero: zeros in
+#' processed exports usually stand for "below detection", so they are not
+#' counted as measurements here, even though \code{filter_by_missingness()}
+#' (which looks at NA only) lets them through.
+#'
+#' @param mat Numeric matrix (features x samples), linear scale.
+#' @param meta data.frame with one row per sample.
+#' @param sample_col Column in \code{meta} matching \code{colnames(mat)}.
+#' @param group_col Column in \code{meta} holding the group of each sample.
+#' @param min_n Integer, detections needed within one group.
+#' @param ignore_groups Character vector of group labels left out of the check
+#'   (e.g. pooled QC, whose samples would otherwise pass almost every feature).
+#' @return list with \code{mat} (kept rows) and \code{dropped_features}.
+#' @examples
+#' m <- matrix(c(1, 2, 3, 0,  0, 0, 0, 0), nrow = 2, byrow = TRUE,
+#'             dimnames = list(c("F1", "F2"), paste0("S", 1:4)))
+#' meta <- data.frame(sample = paste0("S", 1:4), group = rep(c("A", "B"), 2))
+#' filter_by_group_detection(m, meta, "sample", "group", min_n = 2)$mat
+filter_by_group_detection <- function(mat, meta, sample_col, group_col, min_n,
+                                      ignore_groups = character(0)) {
+  mat  <- as.matrix(mat)
+  meta <- as.data.frame(meta)
+
+  if (!group_col %in% colnames(meta)) {
+    stop("preprocessing$min_detected_per_group$group_col is '", group_col,
+         "', but the metabolomics metadata has no such column. Columns: ",
+         paste(colnames(meta), collapse = ", "), ".", call. = FALSE)
+  }
+
+  groups <- as.character(meta[[group_col]][match(colnames(mat), meta[[sample_col]])])
+  use    <- !is.na(groups) & !groups %in% ignore_groups
+  if (!any(use)) {
+    stop("filter_by_group_detection: no samples left to check after ignoring ",
+         "groups ", paste(ignore_groups, collapse = ", "),
+         " (and samples without a ", group_col, " value).", call. = FALSE)
+  }
+
+  detected <- !is.na(mat[, use, drop = FALSE]) & mat[, use, drop = FALSE] != 0
+  per_group <- vapply(split(seq_along(groups[use]), groups[use]),
+                      function(idx) rowSums(detected[, idx, drop = FALSE]),
+                      numeric(nrow(mat)))
+  per_group <- matrix(per_group, nrow = nrow(mat))
+
+  small <- names(which(table(groups[use]) < min_n))
+  if (length(small) > 0) {
+    message(sprintf(
+      "filter_by_group_detection: group(s) %s have fewer than %d samples and cannot pass on their own.",
+      paste(small, collapse = ", "), min_n))
+  }
+
+  keep    <- rowSums(per_group >= min_n) > 0
+  dropped <- rownames(mat)[!keep]
+  message(sprintf(
+    "filter_by_group_detection: dropping %d feature(s) not detected (non-zero, non-NA) in >= %d samples of any group; retained %d.",
+    length(dropped), min_n, sum(keep)))
+
+  list(mat = mat[keep, , drop = FALSE], dropped_features = dropped)
+}
+
+
 # ==============================================================================
 # mod_met_filtered — apply missingness thresholds
 # ==============================================================================
@@ -275,7 +338,21 @@ mod_met_filtered <- function(raw, config) {
     feat_threshold   = pre_cfg$feat_missing_threshold   %||% 0.50,
     sample_threshold = pre_cfg$sample_missing_threshold %||% 1.0
   )
-  
+
+  gd <- resolve_group_detection_cfg(pre_cfg)
+  if (!is.null(gd)) {
+    det <- filter_by_group_detection(
+      mat           = filt$mat,
+      meta          = filt$meta,
+      sample_col    = raw$sample_col,
+      group_col     = gd$group_col,
+      min_n         = gd$n,
+      ignore_groups = gd$ignore_groups
+    )
+    filt$mat              <- det$mat
+    filt$dropped_features <- c(filt$dropped_features, det$dropped_features)
+  }
+
   row_data <- raw$row_data
   if (!is.null(row_data)) {
     keep     <- intersect(rownames(filt$mat), rownames(row_data))
