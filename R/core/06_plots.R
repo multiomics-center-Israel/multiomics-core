@@ -568,9 +568,9 @@ save_per_cluster_heatmaps <- function(expr_mat, clusters, annotation_col, out_di
 #' Volcano plot for a single DE table (one contrast)
 #'
 #' Consistent logic:
-#' Y-axis: -log10(adj.P.Val)  [Adjusted p-value / FDR]
-#' Color:  Up (red), Down (blue), NS (grey) based on padj and logFC thresholds
-#' H-line: padj_cutoff (matches the Y-axis and coloring threshold)
+#' Y-axis: -log10 of the p-value chosen by pvalue_type (adj.P.Val by default)
+#' Color:  Up (red), Down (blue), NS (grey) from that p-value and logFC thresholds
+#' H-line: p_cutoff (matches the Y-axis and coloring threshold)
 #'
 #' @param de_tbl Data frame with logFC, P.Value, adj.P.Val
 #' @param cfg Config list (sections de$p_cutoff, de$linear_fc_cutoff)
@@ -579,7 +579,7 @@ save_per_cluster_heatmaps <- function(expr_mat, clusters, annotation_col, out_di
 #'   When "padj" is requested but adj.P.Val is absent, falls back to raw P.Value.
 #' @param ... Ignored
 #' @return ggplot object
-plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
+plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = "padj", ...) {
   # 1. Flexible Column Mapping
   # Try to find the logFC column
   lfc_col <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
@@ -605,7 +605,10 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   # We create a local 'plot_df' so we don't mess with the original de_tbl
   plot_df <- as.data.frame(de_tbl)
   plot_df$.logFC <- as.numeric(plot_df[[lfc_col]])
-  plot_df$.padj <- as.numeric(plot_df[[padj_col]])
+  # pvalue_type was documented but swallowed by `...`, so the "raw P-value"
+  # volcano silently plotted and coloured by adj.P.Val like the padj one.
+  use_col <- if (identical(pvalue_type, "pval") && !is.na(pval_col)) pval_col else padj_col
+  plot_df$.padj <- as.numeric(plot_df[[use_col]])
   
   # Handle NAs (important for DESeq2)
   plot_df$.padj_plot <- ifelse(is.na(plot_df$.padj), 1, plot_df$.padj)
@@ -634,9 +637,9 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     ggplot2::geom_hline(yintercept = -log10(p_cut), linetype = "dashed", color = "grey50") +
     ggplot2::labs(
       title = title %||% "Volcano Plot",
-      subtitle = paste("Using:", padj_col, "and", lfc_col),
+      subtitle = paste("Using:", use_col, "and", lfc_col),
       x = "log2 Fold Change",
-      y = paste0("-log10(", padj_col, ")")
+      y = paste0("-log10(", use_col, ")")
     ) +
     ggplot2::theme_minimal()
 }
