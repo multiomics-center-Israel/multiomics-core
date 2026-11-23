@@ -451,7 +451,7 @@ test_that("#1 missing annotation dir raises a clear offline-enrichment error", {
                     error = function(e) conditionMessage(e))
     expect_match(err, "Local/offline enrichment was requested")
     expect_match(err, "does not exist")
-    expect_match(err, 'annotation_dir: ""', fixed = TRUE)
+    expect_match(err, 'annotation_dir: null', fixed = TRUE)
     expect_match(err, "annot")  # the raw path is echoed
 })
 

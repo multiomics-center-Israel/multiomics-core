@@ -91,7 +91,7 @@ in the lowest layer that fits its meaning; don't move omics-specific logic into
 | `05_export_excel.R` | Final-results tables and Excel export, shared by the omics modes (`build_final_results_generic()`, `get_contrast_cols()`) |
 | `06_plots.R`, `08_qc.R`, `17_cutoff_panel.R` | Generic plots (volcano, MA, heatmaps), QC (PCA, distances, outliers) |
 | `07_shiny_contract.R` | The Shiny payload contract (see §7) |
-| `09_clustering.R`, `09_enrichment.R`, `13_gmt_utils.R` | Clustering, generic enrichment (fGSEA/ORA), GMT files |
+| `09_clustering.R`, `09_enrichment.R`, `09b_go_simplify.R`, `13_gmt_utils.R` | Clustering, generic enrichment (fGSEA/ORA), optional GO term simplification, GMT files |
 | `10_organism_detection.R`, `11_annotation.R` | Organism detection and gene annotation |
 | `15_user_summary.R`, `16_pptx_helpers.R`, `de_summary_counts.R`, `de_shrinkage_check.R`, `results_fact_sheet.R` | Reporting helpers and result sanity checks |
 | `18_targets_store.R` | The per-project `{targets}` store that `run.R` uses |

@@ -375,6 +375,7 @@ validate_proteomics_config <- function(cfg) {
                                    allow_null = TRUE)
             }
         }
+        validate_go_simplify_config(cfg$pathway, "pathway")
     }
 
 
