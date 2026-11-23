@@ -164,10 +164,13 @@ write_omics_bundle <- function(parts, info, root, provenance) {
         stop("Cannot create the bundle directory '", omics_dir, "'.", call. = FALSE)
     }
     stamp <- gsub("[-:]", "", created)
-    partial <- file.path(omics_dir, paste0(".partial_", stamp, "_", Sys.getpid()))
-    if (file.exists(partial)) {
-        stop("'", partial, "' already exists from an earlier attempt. Remove it, then ",
-             "write the bundle again.", call. = FALSE)
+    # A staging name unique to this call (time, process, and tempfile()'s own
+    # suffix), so neither a concurrent writer nor a folder an earlier write
+    # left behind can block this one. Claimed with a non-recursive dir.create(),
+    # which fails rather than share an existing folder.
+    partial <- tempfile(paste0(".partial_", stamp, "_", Sys.getpid(), "_"), tmpdir = omics_dir)
+    if (!dir.create(partial, showWarnings = FALSE)) {
+        stop("Cannot create the staging folder '", partial, "'.", call. = FALSE)
     }
 
     # Everything up to the rename happens inside the hidden directory; a failure
@@ -179,7 +182,7 @@ write_omics_bundle <- function(parts, info, root, provenance) {
              "ignore it. Remove it once you have looked at it.", call. = FALSE)
     }
     manifest <- tryCatch({
-        dir.create(file.path(partial, "parts"), recursive = TRUE)
+        dir.create(file.path(partial, "parts"))
         part_entries <- list()
         for (nm in names(parts)) {
             rel <- file.path("parts", paste0(nm, ".rds"))
@@ -243,9 +246,12 @@ write_omics_bundle <- function(parts, info, root, provenance) {
                  partial, "' before writing this bundle again.", call. = FALSE)
         }
     }
-    # The staging folder is empty now. file.remove() deletes an empty folder on
-    # Unix; on Windows it leaves it, and readers ignore hidden folders anyway.
-    suppressWarnings(file.remove(partial))
+    # The staging folder should be empty now; it is removed only if it is.
+    # unlink() deletes a folder only with recursive = TRUE, on Windows as on
+    # Unix, and the emptiness check keeps that from ever deleting a file.
+    if (length(list.files(partial, all.files = TRUE, no.. = TRUE)) == 0) {
+        unlink(partial, recursive = TRUE)
+    }
 
     # Best effort: a read-only bundle is harder to change by accident. Checksums
     # catch the changes this does not prevent.
@@ -298,12 +304,15 @@ validate_omics_bundle <- function(path, parts = NULL) {
         stop("Bundle '", path, "' has no checksums.sha256: it is incomplete (an ",
              "interrupted write) or its manifest cannot be verified.", call. = FALSE)
     }
-    expected <- sub("^([0-9a-f]{64})  manifest\\.json$", "\\1", readLines(sums, warn = FALSE))
-    if (length(expected) != 1 || !grepl("^[0-9a-f]{64}$", expected)) {
+    line <- readLines(sums, warn = FALSE)
+    # The whole line is checked: a bare hash would pass a hash-only test but
+    # break `sha256sum -c`.
+    if (length(line) != 1 || !grepl("^[0-9a-f]{64}  manifest\\.json$", line)) {
         stop("Bundle '", path, "': checksums.sha256 is not one '<sha256>  manifest.json' ",
              "line.", call. = FALSE)
     }
-    if (!identical(.bundle_sha256_file(file.path(path, "manifest.json")), expected)) {
+    if (!identical(.bundle_sha256_file(file.path(path, "manifest.json")),
+                   substr(line, 1L, 64L))) {
         stop("Bundle '", path, "': manifest.json does not match checksums.sha256; the ",
              "manifest was changed after the bundle was written.", call. = FALSE)
     }
@@ -373,10 +382,11 @@ read_omics_bundle <- function(path, parts = NULL) {
 #'
 #' Reads manifests only, so it is cheap; checksums are verified when a bundle
 #' is read. Hidden \code{.partial_*} directories, directories without
-#' \code{checksums.sha256} (checked before any manifest is parsed) and
-#' directories without a complete manifest are left out. Rows are ordered by omics, then creation
-#' time, then ID; the order is for display, and integration still names the
-#' bundles it uses.
+#' \code{checksums.sha256} (checked before any manifest is parsed),
+#' directories without a complete manifest, and directories renamed away from
+#' their bundle ID (which could never be read) are left out. Rows are ordered
+#' by omics, then creation time, then ID; the order is for display, and
+#' integration still names the bundles it uses.
 #'
 #' @param root Output root, as passed to \code{write_omics_bundle()}.
 #' @param omics Optional omics name to restrict the listing to.
@@ -402,7 +412,9 @@ list_omics_bundles <- function(root, omics = NULL) {
         # written is never parsed.
         if (!file.exists(file.path(d, "checksums.sha256"))) return(NULL)
         m <- .read_bundle_manifest(d)
-        if (is.null(m) || !identical(m$status, "complete")) return(NULL)
+        # A renamed folder would always fail validation, so it is not offered.
+        if (is.null(m) || !identical(m$status, "complete") ||
+            !identical(m$bundle_id, basename(d))) return(NULL)
         data.frame(bundle_id = m$bundle_id, omics = m$omics, project = m$project,
                    analysis_round = m$analysis_round, created_at_utc = m$created_at_utc,
                    path = d, stringsAsFactors = FALSE)

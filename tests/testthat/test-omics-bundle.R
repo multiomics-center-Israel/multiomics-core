@@ -122,12 +122,27 @@ test_that("of two concurrent writers of one bundle, exactly one succeeds", {
 })
 
 test_that("a successful write leaves no staging folder behind", {
-    skip_on_os("windows")  # Windows keeps the emptied staging folder; readers ignore it
     root <- withr::local_tempdir()
     path <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())
 
     expect_identical(list.files(dirname(path), all.files = TRUE, no.. = TRUE),
                      basename(path))
+})
+
+test_that("consecutive writes with one recorded time both succeed", {
+    # Same process, same second, different content: each write stages under
+    # its own folder, so the first cannot block the second.
+    root <- withr::local_tempdir()
+    changed <- example_parts()
+    changed$expr[1, 1] <- 9
+
+    a <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())
+    b <- write_omics_bundle(changed, example_info(), root, fixed_provenance())
+
+    expect_false(identical(a, b))
+    expect_identical(read_omics_bundle(b)$parts, changed)
+    expect_setequal(list.files(dirname(a), all.files = TRUE, no.. = TRUE),
+                    basename(c(a, b)))
 })
 
 test_that("new content or a new time gives a new bundle beside the old one", {
@@ -206,6 +221,10 @@ test_that("a missing or corrupted checksums.sha256 fails validation", {
     # Well-formed, but the hash of something else.
     writeLines(paste0(strrep("0", 64), "  manifest.json"), sums)
     expect_error(validate_omics_bundle(p2), "manifest.json does not match checksums.sha256")
+
+    # The right hash without the file name breaks `sha256sum -c`, so it is refused.
+    writeLines(.bundle_sha256_file(file.path(p2, "manifest.json")), sums)
+    expect_error(validate_omics_bundle(p2), "is not one '<sha256>  manifest.json' line")
 })
 
 test_that("a missing part file is reported by name", {
@@ -247,6 +266,8 @@ test_that("a bundle that is not complete, renamed, or of another contract is ref
     moved <- file.path(dirname(p3), "renamed")
     expect_true(file.rename(p3, moved))
     expect_error(validate_omics_bundle(moved), "does not match its manifest ID")
+    # A renamed bundle cannot be read, so it is not offered either.
+    expect_false(moved %in% list_omics_bundles(root)$path)
 })
 
 test_that("half-written directories are invisible to readers", {
