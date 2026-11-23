@@ -81,7 +81,8 @@ make_pathway_labels <- function(ids, desc_map) {
 #' @param row_data     data.frame with feature annotations.
 #' @param expr_mat     Expression matrix (features x samples).
 #' @param mapping_file Optional path to HMDB-to-KEGG mapping TSV.
-#' @return list(expr_mapped, compound_names) with remapped rownames.
+#' @return list(expr_mapped, compound_names, feature_map) — feature_map maps every
+#'   expr_mat row (feature_id) to its compound id, NA when unmapped.
 map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL) {
     # Extract compound names from row_data
     if ("Name" %in% colnames(row_data)) {
@@ -120,6 +121,24 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
         }
     }
 
+    # KEGG column: pathway GMTs list KEGG compound IDs (C#####), so when the
+    # table carries a KEGG column, enrich on those IDs and leave out features
+    # without one (their names cannot match a KEGG set and would only inflate
+    # the ORA background). Matches the AO1 media run (bg = KEGG-annotated only).
+    if ("KEGG" %in% colnames(row_data)) {
+        kegg_ids <- trimws(as.character(row_data$KEGG))
+        is_kegg  <- !is.na(kegg_ids) & grepl("^C[0-9]{5}$", kegg_ids)
+        if (any(is_kegg)) {
+            compound_names <- ifelse(is_kegg, kegg_ids, NA_character_)
+            message("enrichment: using KEGG column for ", sum(is_kegg),
+                    " of ", length(is_kegg), " features")
+        }
+    }
+
+    # feature_id -> compound id, aligned to expr_mat rows before any filtering;
+    # callers look features up by id rather than by position.
+    feature_map <- stats::setNames(compound_names, rownames(expr_mat))
+
     # Filter valid compound names
     valid <- !is.na(compound_names) & nzchar(compound_names) & compound_names != "NA"
     mat_use   <- expr_mat[valid, , drop = FALSE]
@@ -132,7 +151,8 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
 
     list(
         expr_mapped    = mat_use,
-        compound_names = names_use[!dup]
+        compound_names = names_use[!dup],
+        feature_map    = feature_map
     )
 }
 
@@ -615,8 +635,7 @@ run_metabolomics_ora <- function(pre, de_res, config) {
     }
 
     # Map significant feature IDs to the same compound namespace as bg_ids.
-    orig_names <- rownames(pre$expr_raw)
-    name_map   <- stats::setNames(bg_ids, orig_names[seq_along(bg_ids)])
+    name_map   <- mapped$feature_map
     fg_ids     <- unique(na.omit(name_map[sig_features]))
     fg_ids     <- fg_ids[fg_ids %in% bg_ids]
 
@@ -763,9 +782,7 @@ run_metabolomics_gsea <- function(pre, de_res, config) {
     # Map feature IDs to compound namespace
     mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
                                             mapping_file)
-    orig_names <- rownames(pre$expr_raw)
-    name_map   <- stats::setNames(mapped$compound_names,
-                                   orig_names[seq_along(mapped$compound_names)])
+    name_map   <- mapped$feature_map
 
     de_tbl$compound_id <- name_map[de_tbl$feature_id]
     de_tbl <- de_tbl[!is.na(de_tbl$compound_id) & nzchar(de_tbl$compound_id), ]

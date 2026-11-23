@@ -67,17 +67,39 @@ make_contrast_label <- function(contrast_str) {
   paste(trimws(parts), collapse = "_vs_")
 }
 
+# The DE summary names its p-value columns pvalue.<contrast> / padj.<contrast>;
+# older tables used P.Value. / adj.P.Val. Resolve from the columns that exist,
+# and fail loudly rather than return NULL columns (which silently dropped the
+# whole DE section).
 extract_contrast_table <- function(summary_df, contrast) {
-  linear_fc <- summary_df[[paste0("linearFC.", contrast)]]
+  pick <- function(prefixes) {
+    hit <- paste0(prefixes, contrast)
+    hit <- hit[hit %in% names(summary_df)]
+    if (length(hit) == 0) {
+      stop("DE summary has none of: ", paste0(prefixes, contrast, collapse = ", "))
+    }
+    summary_df[[hit[1]]]
+  }
+  linear_fc <- pick("linearFC.")
   logfc <- ifelse(linear_fc >= 0, log2(linear_fc), -log2(abs(linear_fc)))
+  pass_col <- paste0("pass.", contrast)
   data.frame(
     feature_id = summary_df$feature_id,
     logFC      = logfc,
-    AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
-    P.Value    = summary_df[[paste0("P.Value.", contrast)]],
-    adj.P.Val  = summary_df[[paste0("adj.P.Val.", contrast)]],
+    AveExpr    = pick("AveExpr."),
+    P.Value    = pick(c("P.Value.", "pvalue.")),
+    adj.P.Val  = pick(c("adj.P.Val.", "padj.")),
+    pass       = if (pass_col %in% names(summary_df)) as.numeric(summary_df[[pass_col]]) else NA_real_,
     stringsAsFactors = FALSE
   )
+}
+
+# Significance as the pipeline called it: the pass.<contrast> flag when present,
+# otherwise adjusted p and |log2FC| against the configured cutoffs.
+de_sig_flag <- function(ctr_tbl, p_cut, lfc_cut) {
+  if (!all(is.na(ctr_tbl$pass))) return(!is.na(ctr_tbl$pass) & ctr_tbl$pass == 1)
+  !is.na(ctr_tbl$adj.P.Val) & ctr_tbl$adj.P.Val <= p_cut &
+    !is.na(ctr_tbl$logFC) & abs(ctr_tbl$logFC) >= lfc_cut
 }
 
 # ---------------------------------------------------------------------------
@@ -102,13 +124,14 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     rownames = FALSE,
     class    = "compact stripe hover"
   )
-  # Format numeric columns: scientific notation for p-values, 2 decimals for the rest
+  # Format numeric columns: scientific notation for p-values, 3 significant
+  # digits for the rest (2 decimals showed RF importances of ~0.005 as 0.01/0.00)
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   pval_pattern <- "^(p[._]?val|p[._]?adj|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
   pval_cols <- grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE)
   other_cols <- setdiff(num_cols, pval_cols)
   if (length(other_cols) > 0) {
-    tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+    tbl <- DT::formatSignif(tbl, columns = other_cols, digits = 3)
   }
   if (length(pval_cols) > 0) {
     pval_idx <- which(names(df) %in% pval_cols) - 1L
@@ -423,8 +446,7 @@ if (!is.null(de_contrasts) && length(de_contrasts) > 0 && !is.null(de_res$summar
     ctr_tbl   <- tryCatch(extract_contrast_table(de_res$summary_df, ctr_label),
                            error = function(e) NULL)
     if (!is.null(ctr_tbl)) {
-      sig   <- !is.na(ctr_tbl$P.Value) & ctr_tbl$P.Value <= padj_cut &
-               !is.na(ctr_tbl$logFC) & abs(ctr_tbl$logFC) >= log2_lfc
+      sig   <- de_sig_flag(ctr_tbl, padj_cut, log2_lfc)
       n_up   <- sum(sig & ctr_tbl$logFC > 0, na.rm = TRUE)
       n_down <- sum(sig & ctr_tbl$logFC < 0, na.rm = TRUE)
       if (exists("cutoff_summary_span")) {
@@ -913,7 +935,7 @@ if (exists("cutoff_panel_html")) {
         log2(metab_cfg$de$linear_fc_cutoff %||% 1.5)
     }
     .p_default <- metab_cfg$de$p_cutoff %||% 0.05
-    cat(cutoff_panel_html(.lfc_default, .p_default, default_ptype = "pval"))
+    cat(cutoff_panel_html(.lfc_default, .p_default, default_ptype = "padj"))
 }
 ```
 
@@ -999,10 +1021,9 @@ if (!is.null(de_contrasts)) {
     # Add Name column
     ctr_tbl$Name <- vapply(ctr_tbl$feature_id, resolve_name, character(1), USE.NAMES = FALSE)
 
-    # Direction column for coloring (uses raw P.Value)
+    # Direction column for coloring: same call as the pipeline (pass flag)
     ctr_tbl$Direction <- ifelse(
-      !is.na(ctr_tbl$P.Value) & ctr_tbl$P.Value <= padj_cut_de &
-        !is.na(ctr_tbl$logFC) & abs(ctr_tbl$logFC) >= log2_lfc_de,
+      de_sig_flag(ctr_tbl, padj_cut_de, log2_lfc_de),
       ifelse(ctr_tbl$logFC > 0, "Up", "Down"), "NS"
     )
     ctr_tbl$Direction <- factor(ctr_tbl$Direction, levels = c("NS", "Down", "Up"))
@@ -1018,7 +1039,7 @@ if (!is.null(de_contrasts)) {
 
     # -- Static Volcano (sub-tabbed by p-value type) --
     # Default sub-tab matches the cutoff-panel default (`default_ptype = "pval"`)
-    default_ptype_metab <- "pval"
+    default_ptype_metab <- "padj"
     vol_padj_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_padj\\.png$"),
                                        basename(de_res$files))]
     vol_pval_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_pval\\.png$"),
@@ -1408,7 +1429,7 @@ if (!is.null(de_contrasts)) {
     full_tbl <- ctr_tbl[order(ctr_tbl$P.Value), ,drop=FALSE]
     full_display <- full_tbl[, c("feature_id", "Name", "logFC", "AveExpr", "P.Value", "adj.P.Val", "Direction")]
 
-    # Merge transformed expression (glog10, before scaling) for meaningful values
+    # Merge transformed expression (after the configured transform, before scaling) for meaningful values
     de_tbl_expr <- pre$expr_log %||% pre$expr_work
     if (!is.null(de_tbl_expr)) {
       expr_df2 <- as.data.frame(de_tbl_expr, check.names = FALSE)
@@ -1493,7 +1514,7 @@ if (!is.null(explorer_expr) && !is.null(pre$meta)) {
 
 ## Metabolite Explorer
 
-Search for metabolites and visualize their transformed expression (glog10, before scaling) across groups.
+Search for metabolites and visualize their transformed expression (after the configured transform, before scaling) across groups.
 
 ```{r metabolite-explorer, results='asis'}
 if (explorer_ready) {
@@ -1677,23 +1698,20 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
   if (is.null(hm_out_dir)) hm_out_dir <- file.path(dirname(knitr::current_input(dir = TRUE)), "metabolomics", "Diagnostic_plots")
   dir.create(hm_out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  # Identify DE features for heatmaps using raw P.Value (ignoring FC cutoff).
-  # Heatmaps benefit from showing all significant metabolites; the clustering
-  # pattern reveals biology even for features with modest fold changes.
+  # DE features for heatmaps: the features the pipeline called DE in any
+  # contrast (pass_any_contrast), so the heatmap shows the same set as the DE
+  # tables. The old "^P\\.Value" pattern matched nothing in tables whose
+  # columns are pvalue.<contrast>, which left these heatmaps empty.
   sum_df <- de_res$summary_df
-  pval_cols <- grep("^P\\.Value", colnames(sum_df), value = TRUE)
-  if (length(pval_cols) > 0) {
+  pval_cols <- grep("^(P\\.Value|pvalue)\\.", colnames(sum_df), value = TRUE)
+  if (length(pval_cols) > 0 && "pass_any_contrast" %in% colnames(sum_df)) {
     pval_mat <- sum_df[, pval_cols, drop = FALSE]
     min_pval_per_feat <- apply(pval_mat, 1, function(x) min(x, na.rm = TRUE))
-    de_feats <- sum_df$feature_id[min_pval_per_feat <= padj_cut_de]
+    is_de <- !is.na(sum_df$pass_any_contrast) & sum_df$pass_any_contrast == 1
+    de_feats <- sum_df$feature_id[is_de]
+    de_feats <- de_feats[order(min_pval_per_feat[is_de])]
   } else {
     de_feats <- character(0)
-  }
-
-  # Sort by minimum raw p-value
-  if (length(de_feats) > 0) {
-    feat_pval <- min_pval_per_feat[sum_df$feature_id %in% de_feats]
-    de_feats <- de_feats[order(feat_pval)]
   }
 
   # Use expr_log (transform-only) for heatmaps — z-scoring removes scale anyway,
