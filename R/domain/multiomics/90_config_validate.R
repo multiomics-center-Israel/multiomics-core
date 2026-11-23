@@ -212,6 +212,55 @@ validate_multiomics_config <- function(multiomics_cfg) {
         multiomics_cfg$enrichment$pathview$top_n <- 5
     }
 
+    # Validate the GO hierarchy figure: the GO sub-graph above each gene-based
+    # layer's significant GO fgsea terms. Off by default. A key it does not know
+    # would otherwise be ignored and its default used.
+    gh_cfg <- multiomics_cfg$go_hierarchy %||% list()
+    gh_defaults <- list(enabled = FALSE, ontologies = list("GO_BP"), fdr = 0.05,
+                        max_seed_terms = 30L, max_nodes = 120L,
+                        ancestors = "shortest_path")
+    gh_unknown <- setdiff(names(gh_cfg), names(gh_defaults))
+    if (length(gh_unknown) > 0) {
+        stop("Unknown key(s) in modes.multiomics.go_hierarchy: ",
+             paste(gh_unknown, collapse = ", "), ". Known keys: ",
+             paste(names(gh_defaults), collapse = ", "), ".", call. = FALSE)
+    }
+    for (key in names(gh_defaults)) {
+        if (is.null(gh_cfg[[key]])) {
+            multiomics_cfg$go_hierarchy[[key]] <- gh_defaults[[key]]
+        }
+    }
+    gh_cfg <- multiomics_cfg$go_hierarchy
+    if (!(is.logical(gh_cfg$enabled) && length(gh_cfg$enabled) == 1 &&
+          !is.na(gh_cfg$enabled))) {
+        stop("modes.multiomics.go_hierarchy.enabled must be true or false, not ",
+             paste(format(unlist(gh_cfg$enabled)), collapse = ", "), ".", call. = FALSE)
+    }
+    gh_onts <- as.character(unlist(gh_cfg$ontologies, use.names = FALSE))
+    if (length(gh_onts) == 0 || !all(gh_onts %in% c("GO_BP", "GO_MF", "GO_CC"))) {
+        stop("modes.multiomics.go_hierarchy.ontologies must list one or more of ",
+             "GO_BP, GO_MF, GO_CC, got: ", paste(gh_onts, collapse = ", "), ".",
+             call. = FALSE)
+    }
+    gh_fdr <- gh_cfg$fdr
+    if (!(is.numeric(gh_fdr) && length(gh_fdr) == 1 && is.finite(gh_fdr) &&
+          gh_fdr > 0 && gh_fdr <= 1)) {
+        stop("modes.multiomics.go_hierarchy.fdr must be a number in (0, 1], got ",
+             format(gh_fdr), ".", call. = FALSE)
+    }
+    for (key in c("max_seed_terms", "max_nodes")) {
+        if (!is_size(gh_cfg[[key]])) {
+            stop("modes.multiomics.go_hierarchy.", key, " must be a positive whole ",
+                 "number, got ", format(gh_cfg[[key]]), ".", call. = FALSE)
+        }
+    }
+    if (!(is.character(gh_cfg$ancestors) && length(gh_cfg$ancestors) == 1 &&
+          gh_cfg$ancestors %in% c("shortest_path", "all"))) {
+        stop("modes.multiomics.go_hierarchy.ancestors must be \"shortest_path\" or ",
+             "\"all\", got ", paste(format(unlist(gh_cfg$ancestors)), collapse = ", "),
+             ".", call. = FALSE)
+    }
+
     # Validate feature selection config
     feat_cfg <- multiomics_cfg$feature_selection %||% list()
     if (is.null(feat_cfg$method)) {
