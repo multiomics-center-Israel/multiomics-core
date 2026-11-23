@@ -1659,10 +1659,22 @@ if (!is.null(de_contrasts)) {
 explorer_ready <- FALSE
 explorer_json_str <- "{}"
 
-# Use expr_log (transform-only, e.g. glog10) for the explorer so that means
+# Use expr_log (transform-only, e.g. log2) for the explorer so that means
 # reflect actual intensity levels rather than z-scored zeros.
 # Fall back to expr_work if expr_log is not available.
 explorer_expr <- pre$expr_log %||% pre$expr_work
+
+# Describe the explorer's values for the text above it. expr_log is the
+# filtered table after preprocessing.transform only (mod_met_log(): same key,
+# same "log2" default), with no sample normalization or scaling; the text
+# used to say "glog10" whatever the configured transform was.
+explorer_value_desc <- if (is.null(pre$expr_log)) {
+  "values as used for differential testing"
+} else {
+  .tf_ex <- tolower(metab_cfg$preprocessing$transform %||% "log2")
+  paste0(if (.tf_ex == "none") "untransformed intensities" else paste0(.tf_ex, "-transformed intensities"),
+         " (before sample normalization and scaling)")
+}
 
 if (!is.null(explorer_expr) && !is.null(pre$meta)) {
   # Build metabolite display names
@@ -1704,7 +1716,7 @@ if (!is.null(explorer_expr) && !is.null(pre$meta)) {
 
 ## Metabolite Explorer
 
-Search for metabolites and visualize their transformed expression (glog10, before scaling) across groups.
+Search for metabolites and visualize their `r explorer_value_desc` across groups.
 
 ```{r metabolite-explorer, results='asis'}
 if (explorer_ready) {
