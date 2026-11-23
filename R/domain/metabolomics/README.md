@@ -85,7 +85,7 @@ There is no separate `normalization:` block.
 
 | Target | Built by | Domain code |
 |---|---|---|
-| `metab_de_res` | `mod_metabolomics_de()` | `03_differential.R`: `run_metabolomics_de()` (`de.method`: `limma`, `t_test` (Welch), `t_test_equal`, `wilcoxon`), `load_precomputed_metabolomics_de()`, `build_de_summary()` |
+| `metab_de_res` | `mod_metabolomics_de()` | `03_differential.R`: `run_metabolomics_de()` (`de.method`: `limma`, `limma_percontrast` (normalized and fitted per contrast, `fit_metab_limma_percontrast()`), `t_test` (Welch), `t_test_equal`, `wilcoxon`), `load_precomputed_metabolomics_de()`, `build_de_summary()` |
 | `metab_feature_sel_res` | `mod_metabolomics_feature_selection()` | `04_feature_selection.R` (random forest, PLS-DA) |
 | `metab_enrichment_res` | `mod_metabolomics_enrichment()` | `06_enrichment.R`: QEA, ssGSEA, ORA, GSEA |
 | `metab_mummichog_pinned_files` | `mod_mummichog_pinned()` (only when mummichog is enabled), or `mod_mummichog_metaboanalyst()` with `mummichog.engine: metaboanalyst` | `06c`–`06e_mummichog_*.R`; MetaboAnalyst-compatible engine `06j`–`06n_mummichog_ma_*.R` |

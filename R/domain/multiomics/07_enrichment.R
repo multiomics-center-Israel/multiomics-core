@@ -373,7 +373,7 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
         # `precomputed`, a missing method and anything unrecognised are treated
         # the same way, because none of them tells us what the column holds.
         signed_statistic <- tolower(as.character(de_data$method %||% "")) %in%
-            c("limma", "t_test", "t_test_equal")
+            c("limma", "limma_percontrast", "t_test", "t_test_equal")
 
         # Metabolomics: de_tables named list
         if (!is.null(de_data$de_tables)) {

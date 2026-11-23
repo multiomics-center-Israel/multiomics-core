@@ -68,6 +68,18 @@ mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
     f_summary <- save_tsv(summary_out, out_ds, "de_summary.tsv")
     files <- c(files, f_summary)
 
+    # limma_percontrast tests each contrast on its own normalization, which no
+    # other export holds; write them so every statistic can be checked by hand.
+    for (ctr_label in names(de_res$percontrast_norm$matrices)) {
+        m <- de_res$percontrast_norm$matrices[[ctr_label]]
+        f_norm <- save_tsv(
+            data.frame(feature_id = rownames(m), m, check.names = FALSE),
+            file.path(out_ds, "percontrast_normalized"),
+            paste0("normalized_", ctr_label, ".tsv")
+        )
+        files <- c(files, f_norm)
+    }
+
     # ---- Per-contrast outputs ----
     # Labels come from de_tables names (set by run_metabolomics_de or precomputed loader)
     contrast_labels <- names(de_res$de_tables)
