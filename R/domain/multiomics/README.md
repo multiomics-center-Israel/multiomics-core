@@ -24,6 +24,7 @@ R/pipeline/multiomics/ → {targets} orchestration
 | `05_integration_snf.R` | SNF (Similarity Network Fusion) unsupervised clustering |
 | `06_concordance.R` | RNA-protein concordance analysis |
 | `07_enrichment.R` | Cross-omics pathway enrichment (Fisher's method) |
+| `07h_pathway_coverage.R` | KEGG pathway coverage per layer: why a cell in a KEGG figure is empty |
 | `08_report.R` | Multi-omics HTML report generation |
 | `90_config_validate.R` | Config validation for multi-omics mode |
 

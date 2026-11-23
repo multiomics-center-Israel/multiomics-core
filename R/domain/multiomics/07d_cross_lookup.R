@@ -153,12 +153,21 @@
 #' @param to Name of the layer to read the ranked pathways in.
 #' @param top_n Number of pathways per ranking.
 #' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @param pathway_coverage Per-layer KEGG pathway coverage, or NULL. Used when
+#'   it covers the target layer: a pathway with no target result is then
+#'   reported as "not testable: <class>" (no KEGG members, no measured members,
+#'   below min measured, ...) or, when it was testable and the target has
+#'   results in that contrast, "tested, not reported" -- see
+#'   \code{.coverage_lookup_status()}. The table then also carries
+#'   target_n_in_pathway, target_n_measured_features and target_coverage
+#'   (target_n_measured is the GSEA set size, as before).
 #' @return Data frame, one row per (ranking, pathway), or NULL when the source
 #'   layer has no usable rows. Columns: ranking, rank, norm_id, pathway,
 #'   source_layer, source_method, source_contrast, source_NES, source_p,
 #'   source_padj, source_n_measured, target_layer, target_status,
 #'   target_method, target_contrast, target_NES, target_p, target_padj,
-#'   target_n_measured, target_ora_p, target_ora_padj.
+#'   target_n_measured, target_ora_p, target_ora_padj (and the coverage
+#'   columns above, with coverage for the target layer).
 #' @examples
 #' tabs <- list(
 #'   proteomics   = data.frame(ID = c("map00010", "map00020"), pval = c(0.01, 0.2),
@@ -168,7 +177,7 @@
 #'                             padj = 0.6, method = "fgsea"))
 #' build_cross_omics_lookup(tabs, "proteomics", "metabolomics", top_n = 2)
 build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
-                                     kegg_org = NULL) {
+                                     kegg_org = NULL, pathway_coverage = NULL) {
     src_df <- pathway_tables[[from]]
     if (!is.data.frame(src_df) || nrow(src_df) == 0) return(NULL)
     # Both layers must carry a raw p-value: this view ranks and stars raw
@@ -219,6 +228,22 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
     if (length(out) == 0) return(NULL)
     out <- do.call(rbind, out)
     rownames(out) <- NULL
+
+    tgt_cov <- pathway_coverage$layers[[to]]
+    if (!is.null(tgt_cov)) {
+        ann <- layer_coverage_for_keys(out$norm_id, tgt_cov, kegg_org)
+        tgt_contrasts <- unique(c(if (!is.null(tgt)) tgt$contrast_key,
+                                  if (!is.null(tgt_ora)) tgt_ora$contrast_key))
+        src_key <- normalize_contrast_key(out$source_contrast)
+        has_contrast <- (is.na(src_key) & any(is.na(tgt_contrasts))) |
+            (!is.na(src_key) & src_key %in% tgt_contrasts)
+        out$target_status <- .coverage_lookup_status(out$target_status,
+                                                     ann$coverage,
+                                                     has_contrast)
+        out$target_n_in_pathway <- ann$n_in_pathway
+        out$target_n_measured_features <- ann$n_measured
+        out$target_coverage <- ann$coverage
+    }
     out
 }
 
@@ -297,6 +322,9 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
 #'
 #' A cell with no NES is left unfilled, outlined only: "ORA" where the layer has
 #' only an ORA result, a dash where it has no result for the pathway at all.
+#' Where the table carries coverage statuses, a looked-up cell without a
+#' result follows \code{pathway_cell_state()}: white when the layer could test
+#' the pathway, grey with a cross when it could not.
 #' The two greys used to be confusable -- a NES near zero sat at a near-white
 #' midpoint that read as the missing-value grey, and only its number told them
 #' apart.
@@ -328,13 +356,39 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
                                      blk$target_status != "not in target results"),
                    stringsAsFactors = FALSE)
     )
+    # Coverage statuses, where the table has them, replace the dash with the
+    # cell states every KEGG figure uses.
+    state <- .lookup_cell_state(blk$target_status)
+    tgt_rows <- nrow(blk) + seq_len(nrow(blk))
+    long$label[tgt_rows][!is.na(state)] <- ifelse(
+        state[!is.na(state)] == "not_testable", "\u00d7", "")
+    long$state_fill <- NA_character_
+    long$state_fill[tgt_rows] <- unname(c(neutral = "white",
+                                          not_testable = "grey85")[state])
     long$layer <- factor(long$layer, levels = c(src_col, tgt_col))
     long$pathway <- factor(long$pathway, levels = rev(labels))
     lim <- max(1, abs(long$NES), na.rm = TRUE)
     method <- unique(stats::na.omit(blk$source_method))
+    state_cells <- long[!is.na(long$state_fill), , drop = FALSE]
+    caption <- paste0("Colour and number: NES, grey at zero; ",
+                      "* raw p < 0.05. Both layers read in the same contrast.\n",
+                      "An unfilled cell has no NES: ORA only, or a dash ",
+                      "for no result in that layer and contrast.")
+    if (nrow(state_cells) > 0) {
+        caption <- paste0(caption, "\nNo result, by coverage: white, testable but ",
+                          "not reported; grey with \u00d7, not testable (no KEGG ",
+                          "members, none or too few measured).")
+    }
 
-    ggplot2::ggplot(long, ggplot2::aes(x = layer, y = pathway, fill = NES)) +
-        ggplot2::geom_tile(colour = "grey70") +
+    g <- ggplot2::ggplot(long, ggplot2::aes(x = layer, y = pathway, fill = NES)) +
+        ggplot2::geom_tile(colour = "grey70")
+    if (nrow(state_cells) > 0) {
+        g <- g + ggplot2::geom_tile(data = state_cells,
+                                    ggplot2::aes(x = layer, y = pathway),
+                                    fill = state_cells$state_fill, colour = "grey70",
+                                    inherit.aes = FALSE)
+    }
+    g +
         ggplot2::geom_text(ggplot2::aes(label = label), size = 2.6,
                            colour = "grey15") +
         ggplot2::scale_fill_gradient2(
@@ -347,10 +401,7 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
                                from, paste(method, collapse = "/")),
             # Wrapped by hand: one line of this length is cut off at this
             # figure's width.
-            caption = paste0("Colour and number: NES, grey at zero; ",
-                             "* raw p < 0.05. Both layers read in the same contrast.\n",
-                             "An unfilled cell has no NES: ORA only, or a dash ",
-                             "for no result in that layer and contrast."),
+            caption = caption,
             x = NULL, y = NULL) +
         ggplot2::theme_minimal() +
         ggplot2::theme(
@@ -360,6 +411,24 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
             plot.title = ggplot2::element_text(hjust = 0.5),
             plot.subtitle = ggplot2::element_text(hjust = 0.5, size = 9),
             plot.caption = ggplot2::element_text(size = 8, colour = "grey30"))
+}
+
+
+#' Cell state of a lookup row, from its target status
+#'
+#' The lookup's statuses map onto the same states
+#' \code{pathway_cell_state()} returns, so the lookup draws its cells the way
+#' the KEGG heatmaps do.
+#'
+#' @param status Character vector of \code{target_status} values.
+#' @return Character vector of states; NA for a status that is not a coverage
+#'   status (a result, ORA only, or no coverage).
+#' @keywords internal
+.lookup_cell_state <- function(status) {
+    out <- rep(NA_character_, length(status))
+    out[status %in% "tested, not reported"] <- "neutral"
+    out[!is.na(status) & startsWith(status, "not testable:")] <- "not_testable"
+    out
 }
 
 
@@ -393,6 +462,8 @@ plot_cross_omics_lookup <- function(lookup, ranking = "all", out_path) {
 #' @param out_dir Directory to write into.
 #' @param top_n Number of pathways per ranking.
 #' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @param pathway_coverage Per-layer KEGG pathway coverage, or NULL; passed to
+#'   \code{build_cross_omics_lookup()}.
 #' A layer with no raw p-value column is skipped, with a message; a layer from
 #' the KEGG-from-DE enrichment is logged as ranking only among the pathways
 #' past that step's cutoff (\code{.lookup_cutoff_filtered()}).
@@ -400,7 +471,8 @@ plot_cross_omics_lookup <- function(lookup, ranking = "all", out_path) {
 #' @return Named list, one element per direction written, each a named
 #'   character vector of the paths written (tsv, all, tested_in_target).
 write_cross_omics_lookups <- function(pathway_tables, omics, out_dir,
-                                      top_n = 15, kegg_org = NULL) {
+                                      top_n = 15, kegg_org = NULL,
+                                      pathway_coverage = NULL) {
     no_raw_p <- omics[!vapply(omics, function(om) {
         df <- pathway_tables[[om]]
         !is.data.frame(df) || nrow(df) == 0 || .lookup_has_raw_p(df)
@@ -424,7 +496,8 @@ write_cross_omics_lookups <- function(pathway_tables, omics, out_dir,
     written <- list()
     for (from in omics) {
         for (to in setdiff(omics, from)) {
-            lk <- build_cross_omics_lookup(pathway_tables, from, to, top_n, kegg_org)
+            lk <- build_cross_omics_lookup(pathway_tables, from, to, top_n, kegg_org,
+                                           pathway_coverage = pathway_coverage)
             if (is.null(lk) || nrow(lk) == 0) next
 
             stem <- file.path(out_dir, paste0("cross_lookup_", .collection_slug(from),

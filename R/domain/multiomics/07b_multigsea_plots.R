@@ -68,6 +68,8 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
     # config again -- and the pairwise panels, the combined panel and the
     # per-contrast plots all key pathways the same way as a result.
     kegg_org <- resolve_kegg_org_code(config$global$organism)
+    # Why a layer has no result for a term; labels the points, changes no score.
+    coverage <- enrichment_results$pathway_coverage
 
     # Create output directory
     if (!is.null(out_dir)) {
@@ -246,6 +248,9 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
             t
         }
         plot_df$label <- vapply(plot_df$term, resolve_term, character(1))
+        plot_df <- cbind(plot_df, .multigsea_coverage_columns(
+            plot_df$term, !is.na(df1$term), !is.na(df2$term), omic1, omic2,
+            coverage, kegg_org))
 
         # Calculate correlation
         cor_res <- cor.test(plot_df$x, plot_df$y, method = corr_method)
@@ -281,6 +286,8 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         } else {
             p <- p + ggplot2::geom_point(color = "steelblue", size = 3, alpha = 0.7)
         }
+
+        p <- .multigsea_add_coverage_marks(p, plot_df)
 
         p <- p +
             ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
@@ -389,7 +396,8 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
                         corr_method = corr_method,
                         p_thresh = p_thresh,
                         out_dir = contrast_out,
-                        kegg_org = kegg_org
+                        kegg_org = kegg_org,
+                        pathway_coverage = coverage
                     )
                 }, error = function(e) {
                     message("    MultiGSEA plot failed for ", omic1, " vs ", omic2,
@@ -419,11 +427,13 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 #' @param out_dir Output directory for saved files
 #' @param kegg_org Active KEGG organism code for the run, or NULL. Passed in
 #'   rather than read from config so this function has no hidden dependency.
+#' @param pathway_coverage Per-layer KEGG pathway coverage, or NULL; marks the
+#'   points where a layer could not test the term.
 #' @return Invisible NULL
 .save_multigsea_pair_plot <- function(res1, res2, omic1, omic2,
                                       corr_method = "pearson",
                                       p_thresh = 0.05, out_dir,
-                                      kegg_org = NULL) {
+                                      kegg_org = NULL, pathway_coverage = NULL) {
 
     term1 <- .multigsea_term_ids(res1, kegg_org)
     term2 <- .multigsea_term_ids(res2, kegg_org)
@@ -491,6 +501,9 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         stringsAsFactors = FALSE
     )
     plot_df$label <- vapply(plot_df$term, resolve_term, character(1))
+    plot_df <- cbind(plot_df, .multigsea_coverage_columns(
+        plot_df$term, !is.na(df1$term), !is.na(df2$term), omic1, omic2,
+        pathway_coverage, kegg_org))
 
     cor_res <- cor.test(plot_df$x, plot_df$y, method = corr_method)
     cor_val <- round(cor_res$estimate, 3)
@@ -500,7 +513,9 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
     omic2_label <- gsub("_", " ", tools::toTitleCase(omic2))
 
     p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = x, y = y)) +
-        ggplot2::geom_point(color = "steelblue", size = 3, alpha = 0.7) +
+        ggplot2::geom_point(color = "steelblue", size = 3, alpha = 0.7)
+    p <- .multigsea_add_coverage_marks(p, plot_df)
+    p <- p +
         ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
         ggplot2::labs(
             title = paste0(omic1_label, " vs ", omic2_label),
@@ -537,6 +552,58 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
               row.names = FALSE)
 
     invisible(NULL)
+}
+
+
+#' Coverage of each layer for the terms of a MultiGSEA pair
+#'
+#' @param terms Normalized term keys.
+#' @param has1,has2 Logical: does layer 1 / layer 2 carry a result for the term.
+#' @param omic1,omic2 Layer names.
+#' @param coverage Per-layer KEGG pathway coverage, or NULL.
+#' @param kegg_org Active KEGG organism code, or NULL.
+#' @return Data frame with \code{coverage_x}, \code{coverage_y},
+#'   \code{state_x}, \code{state_y} (see \code{pathway_cell_state()}); all NA
+#'   for a layer without coverage.
+#' @keywords internal
+.multigsea_coverage_columns <- function(terms, has1, has2, omic1, omic2,
+                                        coverage = NULL, kegg_org = NULL) {
+    cls <- function(om) {
+        tab <- coverage$layers[[om]]
+        if (is.null(tab)) rep(NA_character_, length(terms))
+        else layer_coverage_for_keys(terms, tab, kegg_org)$coverage
+    }
+    cx <- cls(omic1)
+    cy <- cls(omic2)
+    data.frame(coverage_x = cx, coverage_y = cy,
+               state_x = pathway_cell_state(ifelse(has1, 1, NA_real_), cx),
+               state_y = pathway_cell_state(ifelse(has2, 1, NA_real_), cy),
+               stringsAsFactors = FALSE)
+}
+
+
+#' Mark MultiGSEA points where a layer could not test the term
+#'
+#' A grey cross over the point: for at least one of the two layers the term
+#' is not testable (\code{pathway_cell_state()}), so its value sits at zero for
+#' want of a result, not because one was found to be null.
+#'
+#' @param p The ggplot being built.
+#' @param plot_df Its data, with \code{state_x} and \code{state_y}.
+#' @return \code{p}, with the marks and a caption when there are any.
+#' @keywords internal
+.multigsea_add_coverage_marks <- function(p, plot_df) {
+    flag <- (!is.na(plot_df$state_x) & plot_df$state_x == "not_testable") |
+        (!is.na(plot_df$state_y) & plot_df$state_y == "not_testable")
+    if (!any(flag)) return(p)
+    p +
+        ggplot2::geom_point(data = plot_df[flag, , drop = FALSE],
+                            ggplot2::aes(x = x, y = y), shape = 4, size = 3,
+                            colour = "grey35", inherit.aes = FALSE) +
+        ggplot2::labs(caption = paste(
+            "Grey cross: at least one layer could not test the term (no KEGG",
+            "members of that omics type, or none or too few measured); its value",
+            "is plotted at zero."))
 }
 
 
@@ -1168,9 +1235,14 @@ run_multigsea_pathview <- function(enrichment_results, mae_data, config, out_dir
 #' @param enzyme_pairs Enzyme-metabolite pair table
 #'   (`multiomics_enzyme_metabolite$pairs`), or NULL; the pathways of its
 #'   changed enzymes get a map.
+#' @param pathway_coverage This run's per-layer KEGG pathway coverage
+#'   (`multiomics_cross_enrichment$pathway_coverage`), or NULL. Reclassified on
+#'   the Multi-ORA minima (\code{multi_ora_pathway_coverage()}) and attached to
+#'   the summary table and dot plot; it changes no result.
 #' @return List with: results (data.frame), plots (list of paths)
 run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
-                          per_omics_enrichment = NULL, enzyme_pairs = NULL) {
+                          per_omics_enrichment = NULL, enzyme_pairs = NULL,
+                          pathway_coverage = NULL) {
 
     message("=== Running Multi-ORA (combined cross-omics ORA) ===")
 
@@ -1375,7 +1447,9 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                 de_df <- do.call(rbind, de_tables)
                 de_mapped <- merge(de_df, id_map, by = "feature_id")
                 de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
-                run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
+                # The shared compound floor, the same one the cross-omics
+                # compound ORA and GSEA apply: compound_min_measured().
+                run_compound_ora(de_mapped, out_dir, compound_min_measured(), 500, 0.1,
                                  universe = full_universe,
                                  exclude_classes = .excluded_pathway_classes(config))
             } else NULL
@@ -1403,7 +1477,17 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
     }
 
     # --- Combine results into summary table ---
-    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, metab_ora)
+    # Coverage labels why a layer has no result for a pathway; read after the
+    # compound ORA above, whose cache it may need.
+    mora_coverage <- tryCatch(
+        multi_ora_pathway_coverage(pathway_coverage, de_results, harmonization_res,
+                                   config, out_dir),
+        error = function(e) {
+            message("  Multi-ORA pathway coverage failed: ", e$message)
+            NULL
+        })
+    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, metab_ora,
+                                        pathway_coverage = mora_coverage)
 
     if (is.null(combined) || nrow(combined) == 0) {
         message("Multi-ORA: no enriched pathways found")
@@ -1545,7 +1629,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                     out_dir = contrast_out,
                     metab_de_tables = metab_de_tables,
                     exclude_classes = exclude_classes,
-                    classification = pathway_classes
+                    classification = pathway_classes,
+                    pathway_coverage = mora_coverage
                 )
             }, error = function(e) {
                 message("    Per-contrast Multi-ORA failed for ", cname, ": ", e$message)
@@ -1584,12 +1669,15 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
 #'   once for the whole run, passed to both producers here so no contrast
 #'   resolves it again. The lazy default only applies to a caller that has not
 #'   resolved one.
+#' @param pathway_coverage Multi-ORA pathway coverage, or NULL; attached to the
+#'   contrast's summary table.
 #' @return Invisible NULL
 .run_multi_ora_contrast_group <- function(all_de_tables, contrast_name,
                                            harmonization_res, kegg_org, org_db,
                                            out_dir, metab_de_tables = NULL,
                                            exclude_classes = NULL,
-                                           classification = kegg_pathway_categories()) {
+                                           classification = kegg_pathway_categories(),
+                                           pathway_coverage = NULL) {
 
     per_omics_sig <- list()
     per_omics_universe <- list()
@@ -1667,8 +1755,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                     de_df <- de_list[[1]]
                     de_mapped <- merge(de_df, id_map, by = "feature_id")
                     de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
-                    run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
-                                     universe = full_universe,
+                    run_compound_ora(de_mapped, out_dir, compound_min_measured(),
+                                     500, 0.1, universe = full_universe,
                                      exclude_classes = exclude_classes)
                 } else NULL
             }, error = function(e) {
@@ -1679,7 +1767,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
         }
     }
 
-    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, contrast_metab_ora)
+    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, contrast_metab_ora,
+                                        pathway_coverage = pathway_coverage)
     if (!is.null(combined) && nrow(combined) > 0) {
         write.csv(combined, file.path(out_dir, "multi_ora_results.csv"), row.names = FALSE)
 
@@ -2150,7 +2239,17 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
 #' Merges pooled ORA with per-omics results into a single table showing
 #' which omics support each pathway. Uses full outer join so compound-only
 #' pathways from metabolomics are also included.
-build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
+#'
+#' @param pooled_ora Pooled gene ORA table, or NULL.
+#' @param per_omics_ora Named list of per-layer gene ORA tables.
+#' @param metab_ora Compound ORA table, or NULL.
+#' @param pathway_coverage Per-layer KEGG pathway coverage, or NULL. When given,
+#'   the table carries n_in_pathway_<layer>, n_measured_<layer>,
+#'   n_min_required_<layer> and coverage_<layer> (see
+#'   \code{annotate_pathway_coverage()}); nothing else changes.
+#' @return Summary data frame, or NULL.
+build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora,
+                                    pathway_coverage = NULL) {
 
     if ((is.null(pooled_ora) || nrow(pooled_ora) == 0) &&
         (is.null(metab_ora) || nrow(metab_ora) == 0)) return(NULL)
@@ -2249,6 +2348,8 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
         sort_keys <- c(sort_keys, list(summary$metabolomics_padj))
     }
     summary <- summary[do.call(order, sort_keys), ]
+
+    summary <- annotate_pathway_coverage(summary, pathway_coverage)
 
     # Drop internal helper column
     summary$norm_id <- NULL
@@ -2563,6 +2664,21 @@ plot_multi_ora_barplot <- function(ora_df, title, top_n = 20,
 
 
 #' Plot multi-ORA dot plot comparing per-omics and pooled results
+#'
+#' A layer with no result for a pathway is not drawn as a point: it has no
+#' adjusted p-value, and drawing it at padj = 1 would show a result that does
+#' not exist. Where the table carries coverage (coverage_<layer> columns), such
+#' a layer gets a marker at zero instead, in its colour: an open circle when it
+#' could test the pathway, a cross when it could not (see
+#' \code{pathway_cell_state()}).
+#'
+#' @param combined Multi-ORA summary table.
+#' @param per_omics_ora Named list of per-layer gene ORA tables.
+#' @param metab_ora Compound ORA table, or NULL.
+#' @param out_dir Directory to write multi_ora_dotplot.png into.
+#' @param top_n Number of pathways to draw.
+#' @return Invisibly, the coverage marker rows drawn (NULL when nothing was
+#'   drawn); called for the figure it writes.
 plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, top_n = 20) {
 
     if (is.null(combined) || nrow(combined) == 0) return(invisible(NULL))
@@ -2596,8 +2712,8 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
         plot_data[[om]] <- data.frame(
             pathway = top$pathway,
             source = gsub("_", " ", tools::toTitleCase(om)),
-            neg_log10_padj = -log10(ifelse(is.na(matched_padj), 1, matched_padj) + 1e-300),
-            count = ifelse(is.na(matched_count), 0, matched_count),
+            neg_log10_padj = -log10(matched_padj + 1e-300),
+            count = matched_count,
             stringsAsFactors = FALSE
         )
     }
@@ -2614,27 +2730,36 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
         plot_data[["Metabolomics"]] <- data.frame(
             pathway = top$pathway,
             source = "Metabolomics",
-            neg_log10_padj = -log10(ifelse(is.na(matched_padj), 1, matched_padj) + 1e-300),
-            count = ifelse(is.na(matched_count), 0, matched_count),
+            neg_log10_padj = -log10(matched_padj + 1e-300),
+            count = matched_count,
             stringsAsFactors = FALSE
         )
     }
 
     plot_df <- do.call(rbind, plot_data)
     plot_df$neg_log10_padj <- pmin(plot_df$neg_log10_padj, 15)
-    # Remove entries where pathway was not found in the per-omics results. Guard
-    # against NA scores (pathways with no pooled/per-omic padj) — an NA in the
-    # logical index yields NA row names and aborts the subset.
-    plot_df <- plot_df[!is.na(plot_df$neg_log10_padj) & plot_df$neg_log10_padj > 0, ]
+    # A layer with no result for the pathway has no point. Guard against NA
+    # scores in the logical index, which would yield NA row names.
+    plot_df <- plot_df[!is.na(plot_df$neg_log10_padj), ]
 
     if (nrow(plot_df) == 0) return(invisible(NULL))
 
-    # Truncate long pathway names
-    plot_df$pathway_short <- ifelse(
-        nchar(plot_df$pathway) > 45,
-        paste0(substr(plot_df$pathway, 1, 42), "..."),
-        plot_df$pathway
-    )
+    shorten <- function(x) ifelse(nchar(x) > 45, paste0(substr(x, 1, 42), "..."), x)
+    plot_df$pathway_short <- shorten(plot_df$pathway)
+
+    # Layers without a result, by coverage: markers at zero.
+    marker_df <- .multi_ora_coverage_markers(top)
+    if (!is.null(marker_df)) marker_df$pathway_short <- shorten(marker_df$pathway)
+
+    # Order rows as before -- by the mean of the drawn values -- with rows that
+    # only carry markers at the bottom.
+    y_levels <- levels(stats::reorder(factor(plot_df$pathway_short),
+                                      plot_df$neg_log10_padj))
+    if (!is.null(marker_df)) {
+        y_levels <- c(setdiff(unique(marker_df$pathway_short), y_levels), y_levels)
+        marker_df$pathway_short <- factor(marker_df$pathway_short, levels = y_levels)
+    }
+    plot_df$pathway_short <- factor(plot_df$pathway_short, levels = y_levels)
 
     # ggplot dot plot
     source_colors <- c(
@@ -2647,11 +2772,24 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
     p <- ggplot2::ggplot(plot_df,
         ggplot2::aes(
             x = neg_log10_padj,
-            y = stats::reorder(pathway_short, neg_log10_padj),
+            y = pathway_short,
             color = source,
             size = count
         )) +
-        ggplot2::geom_point(alpha = 0.7) +
+        ggplot2::geom_point(alpha = 0.7)
+    if (!is.null(marker_df) && nrow(marker_df) > 0) {
+        p <- p +
+            ggplot2::geom_point(
+                data = marker_df,
+                ggplot2::aes(x = 0, y = pathway_short, color = source, shape = state),
+                size = 2.6, stroke = 0.9, inherit.aes = FALSE) +
+            ggplot2::scale_shape_manual(
+                values = c(neutral = 1, not_testable = 4),
+                labels = c(neutral = "Tested, not reported",
+                           not_testable = "Not testable (no or too few measured)"),
+                name = "No result")
+    }
+    p <- p +
         ggplot2::scale_color_manual(values = source_colors, name = "Source") +
         ggplot2::scale_size_continuous(name = "Gene Count", range = c(2, 8)) +
         ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed", color = "red", alpha = 0.5) +
@@ -2671,6 +2809,35 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
         plot = p, width = 12, height = max(6, 2 + top_n * 0.3), dpi = 300
     )
     message("  Saved multi-ORA dot plot")
+    invisible(marker_df)
+}
+
+
+#' Coverage markers for the Multi-ORA dot plot
+#'
+#' One row per (pathway, layer) where the layer has no adjusted p-value and the
+#' table says whether it could have tested the pathway.
+#'
+#' @param top Rows of the Multi-ORA summary being drawn.
+#' @return Data frame with \code{pathway}, \code{source} (display name, as the
+#'   dot plot colours it) and \code{state} (\code{neutral} or
+#'   \code{not_testable}); NULL when there is none.
+#' @keywords internal
+.multi_ora_coverage_markers <- function(top) {
+    layers <- sub("^coverage_", "", grep("^coverage_", names(top), value = TRUE))
+    rows <- lapply(layers, function(om) {
+        padj_col <- paste0(om, "_padj")
+        vals <- if (padj_col %in% names(top)) top[[padj_col]] else rep(NA_real_, nrow(top))
+        st <- pathway_cell_state(vals, top[[paste0("coverage_", om)]])
+        keep <- !is.na(st) & st %in% c("neutral", "not_testable")
+        if (!any(keep)) return(NULL)
+        data.frame(pathway = top$pathway[keep],
+                   source = gsub("_", " ", tools::toTitleCase(om)),
+                   state = st[keep], stringsAsFactors = FALSE)
+    })
+    rows <- Filter(Negate(is.null), rows)
+    if (length(rows) == 0) return(NULL)
+    do.call(rbind, rows)
 }
 
 

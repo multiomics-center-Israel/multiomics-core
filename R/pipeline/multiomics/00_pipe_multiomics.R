@@ -275,7 +275,9 @@ pipe_multiomics <- function() {
                         # pathview fallback selects pathways from it rather
                         # than from enrichment CSVs an earlier run left behind.
                         per_omics_enrichment = multiomics_cross_enrichment$per_omics,
-                        enzyme_pairs = multiomics_enzyme_metabolite$pairs
+                        enzyme_pairs = multiomics_enzyme_metabolite$pairs,
+                        # Why a layer has no result for a pathway; labels only.
+                        pathway_coverage = multiomics_cross_enrichment$pathway_coverage
                     )
                 }, error = function(e) {
                     warning("Multi-ORA failed: ", e$message)
