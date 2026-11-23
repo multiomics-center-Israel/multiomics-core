@@ -152,6 +152,15 @@ modes:
     # Require 1:1 gene-protein mapping (removes ambiguous mappings)
     require_one_to_one_mapping: false
 
+    # --- Per-pathway RNA vs protein log2FC scatter ---
+    # Optional. One GMT whose pathways the report offers in an interactive
+    # RNA log2FC vs protein log2FC scatter, ordered by within-pathway Pearson r
+    # (pathways with at least min_pairs mapped pairs). Joined on gene symbol, so the
+    # GMT must list symbols. Unset = the view is not produced.
+    # rna_protein_correlation:
+    #   pathway_gmt: "proteomics/kegg_hsa.gmt"   # relative to paths.raw
+    #   min_pairs: 11                            # pairs a pathway needs; default 11 (>10)
+
     # --- Report sections ---
     # Optional per-section switches, for dropping a section a project cannot
     # interpret without editing the shared template. Every section is ON unless
