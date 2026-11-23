@@ -276,11 +276,10 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
 
         # For small datasets (< 500 features), prefer ORA over GSEA
         use_method <- method
-        use_min_gs <- min_gs
-        if (nrow(de_mapped) < 500) {
-            use_method <- "ora"
-            use_min_gs <- max(3, min(min_gs, 5))
-        }
+        if (nrow(de_mapped) < 500) use_method <- "ora"
+        # The size floor follows the same rule; one resolver for this producer
+        # and the coverage table, see gene_min_measured().
+        use_min_gs <- gene_min_measured(min_gs, nrow(de_mapped))
 
         result <- tryCatch({
             if (omics_type == "metabolomics") {
@@ -1212,8 +1211,9 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
     pathway_names <- stats::setNames(cpd_pathways$name, cpd_pathways$pathway)
     pathway_names <- pathway_names[!duplicated(names(pathway_names))]
 
-    # Filter pathways by size (intersection with measured compounds)
-    use_min_gs <- max(2, min(min_gs, 3))
+    # Filter pathways by size (intersection with measured compounds). The floor
+    # is the compound-specific one; see compound_min_measured().
+    use_min_gs <- compound_min_measured(min_gs)
     N <- length(all_cpds)  # total measured compounds
     k <- length(sig_cpds)  # significant compounds
 
@@ -1503,8 +1503,9 @@ run_compound_gsea <- function(de_mapped, cache_dir, min_gs, max_gs, seed = 1L,
     # experiment. Clamping up to the configured value rather than down would
     # leave compound GSEA testing almost nothing under the shipped default --
     # working, reporting no error, and finding nothing. The configured maximum
-    # is honoured as given.
-    use_min_gs <- max(2, min(min_gs, 3))
+    # is honoured as given. One resolver for both producers and the coverage
+    # table: compound_min_measured().
+    use_min_gs <- compound_min_measured(min_gs)
     set_sizes <- lengths(pathway_sets)
     testable <- set_sizes >= use_min_gs & set_sizes <= max_gs
 
@@ -2029,12 +2030,19 @@ run_ora_kegg_fisher <- function(sig_genes, all_genes, kegg_org,
 #'   \code{merge_pathway_pvalues()} picks one method per layer; the per-omics
 #'   bar plots, CSVs and the ORA figure are drawn from \code{enrichment_results}
 #'   alone. A layer present only here still counts towards the two needed.
+#' @param pathway_coverage Per-layer KEGG pathway coverage from
+#'   \code{pathway_coverage_for_run()}, or NULL. When given, the meta-analysis
+#'   table carries the coverage columns of each layer
+#'   (\code{annotate_pathway_coverage()}) and the KEGG figures and lookups tell
+#'   a layer that could not test a pathway from one that tested it and
+#'   reported nothing. Nothing it holds reaches a p-value.
 #' @return List with: common_pathways, union_pathways, meta_analysis,
 #'   pathway_tables, layer_methods (the test each layer contributed to the
 #'   meta-analysis, named by layer), lookup_files (see
 #'   \code{write_cross_omics_lookups()}) and plots
 analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir = NULL,
-                                           rank_tables = NULL) {
+                                           rank_tables = NULL,
+                                           pathway_coverage = NULL) {
 
     # Cleared before anything can return, not beside the code that writes the
     # figures. These two are now written one per gene-set collection, and which
@@ -2214,6 +2222,11 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     meta_results <- attach_pathway_display_names(meta_results, merge_tables,
                                                   kegg_org = kegg_org)
 
+    # Labels only: why a layer's cell may be empty. Added for the layers this
+    # analysis has, so a run without coverage writes the table it always did.
+    meta_results <- annotate_pathway_coverage(meta_results, pathway_coverage,
+                                              layers = omics, kegg_org = kegg_org)
+
     # Sort by combined p-value
     meta_results <- meta_results[order(meta_results$combined_pval), ]
 
@@ -2312,7 +2325,8 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
             png(plots[[key]], width = 1200, height = 900, res = 120)
             tryCatch({
                 plot_cross_omics_ora_heatmap(ora_padj, pathway_tables,
-                                             kegg_org = kegg_org, collection = cl)
+                                             kegg_org = kegg_org, collection = cl,
+                                             pathway_coverage = pathway_coverage)
             }, error = function(e) {
                 plot.new()
                 text(0.5, 0.5, paste("ORA heatmap failed:", e$message), cex = 1.2)
@@ -2351,7 +2365,8 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
         lookup_files <- tryCatch(
             write_cross_omics_lookups(merge_tables, omics, out_dir,
-                                      top_n = lookup_cfg$top_n, kegg_org = kegg_org),
+                                      top_n = lookup_cfg$top_n, kegg_org = kegg_org,
+                                      pathway_coverage = pathway_coverage),
             error = function(e) {
                 message("  Cross-omics lookup failed: ", e$message)
                 list()
@@ -3363,8 +3378,12 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 #' @param main Plot title.
 #' @param col Colour vector.
 #' @param zlim Value range, from \code{.nondegenerate_range()}.
+#' @param breaks Explicit colour breaks, one more than \code{col}, or NULL to
+#'   spread \code{col} evenly over \code{zlim}.
+#' @param marks Character matrix shaped like \code{m} with text to print in
+#'   cells ("" for none), or FALSE.
 #' @return Invisibly NULL; called for the plot it draws.
-.draw_small_heatmap <- function(m, main, col, zlim) {
+.draw_small_heatmap <- function(m, main, col, zlim, breaks = NULL, marks = FALSE) {
     # image() takes z indexed [x, y] -- columns then rows -- so the matrix is
     # transposed and the row labels follow it.
     #
@@ -3373,10 +3392,23 @@ stouffer_combined_pvalues <- function(merged_pathways) {
     # rejected with "dimensions of z are not length(x)(-1) times length(y)(-1)".
     # That is precisely the shape this function exists for, so the edges are
     # given outright and every size from 1x1 upward draws.
-    graphics::image(x = seq(0.5, ncol(m) + 0.5, by = 1),
-                    y = seq(0.5, nrow(m) + 0.5, by = 1), z = t(m),
-                    col = col, zlim = zlim, axes = FALSE,
-                    xlab = "", ylab = "", main = main)
+    if (is.null(breaks)) {
+        graphics::image(x = seq(0.5, ncol(m) + 0.5, by = 1),
+                        y = seq(0.5, nrow(m) + 0.5, by = 1), z = t(m),
+                        col = col, zlim = zlim, axes = FALSE,
+                        xlab = "", ylab = "", main = main)
+    } else {
+        graphics::image(x = seq(0.5, ncol(m) + 0.5, by = 1),
+                        y = seq(0.5, nrow(m) + 0.5, by = 1), z = t(m),
+                        col = col, breaks = breaks, axes = FALSE,
+                        xlab = "", ylab = "", main = main)
+    }
+    if (is.matrix(marks)) {
+        at <- which(nzchar(marks) & !is.na(marks), arr.ind = TRUE)
+        if (nrow(at) > 0) {
+            graphics::text(at[, 2], at[, 1], marks[at], col = "grey25")
+        }
+    }
     graphics::axis(1, at = seq_len(ncol(m)), labels = colnames(m),
                    las = 2, tick = FALSE)
     graphics::axis(2, at = seq_len(nrow(m)), labels = rownames(m),
@@ -3647,14 +3679,31 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
     # see .nondegenerate_range(). One interval per colour, hence 50 + 1.
     zl <- .nondegenerate_range(log_pval_matrix)
 
+    # Why an empty cell is empty, where the table says: white when the layer
+    # could test the pathway, grey with a cross when it could not. Without
+    # coverage columns this is NULL and the figure is drawn exactly as before.
+    # See pathway_cell_state() and .coverage_heatmap_scale().
+    cell_states <- .coverage_state_matrix(
+        log_pval_matrix,
+        sapply(colnames(log_pval_matrix),
+               function(om) top_pathways[[paste0("coverage_", om)]],
+               simplify = FALSE))
+
     # Heatmap
     if (requireNamespace("pheatmap", quietly = TRUE)) {
-        pheatmap::pheatmap(log_pval_matrix,
+        sc <- .coverage_heatmap_scale(
+            log_pval_matrix, cell_states,
+            colorRampPalette(c("white", "gold", "orange", "red"))(50), zl)
+        pheatmap::pheatmap(sc$values,
                            cluster_rows = FALSE,
                            cluster_cols = FALSE,
                            main = main_title("Cross-Omics Pathway Enrichment (-log10 p-value)"),
-                           color = colorRampPalette(c("white", "gold", "orange", "red"))(50),
-                           breaks = seq(zl[1], zl[2], length.out = 51),
+                           color = sc$colors,
+                           breaks = sc$breaks,
+                           legend_breaks = sc$legend_breaks,
+                           display_numbers = sc$marks,
+                           number_color = "grey25",
+                           fontsize_number = 9,
                            fontsize_row = 7, fontsize_col = 10,
                            angle_col = 45,
                            na_col = "grey90",
@@ -3673,15 +3722,19 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
         # The value stays NA; only what shows behind it changes.
         withr::with_par(list(bg = "grey90"), {
             base_cols <- colorRampPalette(c("white", "orange", "red"))(50)
-            if (nrow(log_pval_matrix) >= 2 && ncol(log_pval_matrix) >= 2) {
+            sc <- .coverage_heatmap_scale(log_pval_matrix, cell_states, base_cols, zl)
+            if (nrow(log_pval_matrix) >= 2 && ncol(log_pval_matrix) >= 2 &&
+                !sc$has_states) {
                 heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
                         main = main_title("Cross-Omics Pathway Enrichment"),
                         col = base_cols, zlim = zl)
             } else {
-                # heatmap() refuses this shape outright; see .draw_small_heatmap().
-                .draw_small_heatmap(log_pval_matrix,
+                # heatmap() refuses this shape outright, and cannot place the
+                # coverage marks; see .draw_small_heatmap().
+                .draw_small_heatmap(sc$values,
                                     main = main_title("Cross-Omics Pathway Enrichment"),
-                                    col = base_cols, zlim = zl)
+                                    col = sc$colors, zlim = zl,
+                                    breaks = sc$breaks, marks = sc$marks)
             }
         })
     }
@@ -3715,14 +3768,19 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
 #' @param top_n Number of pathways to show.
 #' @param collection Collection name to name in the title, or NULL for a figure
 #'   drawn across collections.
+#' @param pathway_coverage Per-layer KEGG pathway coverage, or NULL; see
+#'   \code{pathway_cell_state()}. ORA reports only pathways past its cutoff,
+#'   so a testable pathway with no row is drawn white rather than grey.
 #' @return Invisibly, the -log10 matrix that was drawn, in display order and
 #'   with display labels for row names -- or NULL when there was nothing to
 #'   draw. Returned so that which rows the figure leads with can be checked
 #'   without reading pixels, or guessing which of the two drawing branches a
-#'   machine took.
+#'   machine took. Its \code{cell_state} attribute holds the coverage cell
+#'   states (NULL without coverage).
 plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
                                           kegg_org = NULL, top_n = 30,
-                                          collection = NULL) {
+                                          collection = NULL,
+                                          pathway_coverage = NULL) {
 
     main_title <- function(base) {
         if (is.null(collection)) base else paste0(collection, " gene sets\n", base)
@@ -3759,6 +3817,9 @@ plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
 
     # Truncate first, then disambiguate -- see truncate_pathway_label().
     keys <- rownames(padj_matrix)
+    coverage_class <- if (is.null(pathway_coverage)) list() else lapply(
+        pathway_coverage$layers, function(tab)
+            layer_coverage_for_keys(keys, tab, kegg_org)$coverage)
     labels <- keys
     if (!is.null(pathway_tables)) {
         labelled <- attach_pathway_display_names(
@@ -3789,13 +3850,22 @@ plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
     # See .nondegenerate_range(); one interval per colour, hence 50 + 1.
     zl <- .nondegenerate_range(log_padj_matrix)
 
+    # Same rule as the meta-analysis heatmap; NULL without coverage.
+    cell_states <- .coverage_state_matrix(log_padj_matrix, coverage_class)
+    sc <- .coverage_heatmap_scale(log_padj_matrix, cell_states,
+                                  colorRampPalette(ora_palette)(50), zl)
+
     if (requireNamespace("pheatmap", quietly = TRUE)) {
-        pheatmap::pheatmap(log_padj_matrix,
+        pheatmap::pheatmap(sc$values,
                            cluster_rows = FALSE,
                            cluster_cols = FALSE,
                            main = main_title("Cross-Omics ORA Evidence (-log10 adjusted p-value)"),
-                           color = colorRampPalette(ora_palette)(50),
-                           breaks = seq(zl[1], zl[2], length.out = 51),
+                           color = sc$colors,
+                           breaks = sc$breaks,
+                           legend_breaks = sc$legend_breaks,
+                           display_numbers = sc$marks,
+                           number_color = "grey25",
+                           fontsize_number = 9,
                            fontsize_row = 7, fontsize_col = 10,
                            angle_col = 45,
                            na_col = "grey90",
@@ -3810,19 +3880,23 @@ plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
         # same white as the low end of the scale, and the legend promises grey.
         withr::with_par(list(bg = "grey90"), {
             base_cols <- colorRampPalette(ora_palette)(50)
-            if (nrow(log_padj_matrix) >= 2 && ncol(log_padj_matrix) >= 2) {
+            if (nrow(log_padj_matrix) >= 2 && ncol(log_padj_matrix) >= 2 &&
+                !sc$has_states) {
                 heatmap(log_padj_matrix, scale = "none", Rowv = NA, Colv = NA,
                         main = main_title("Cross-Omics ORA Evidence"),
                         col = base_cols, zlim = zl)
             } else {
-                # heatmap() refuses this shape outright; see .draw_small_heatmap().
-                .draw_small_heatmap(log_padj_matrix,
+                # heatmap() refuses this shape outright, and cannot place the
+                # coverage marks; see .draw_small_heatmap().
+                .draw_small_heatmap(sc$values,
                                     main = main_title("Cross-Omics ORA Evidence"),
-                                    col = base_cols, zlim = zl)
+                                    col = sc$colors, zlim = zl,
+                                    breaks = sc$breaks, marks = sc$marks)
             }
         })
     }
 
+    attr(log_padj_matrix, "cell_state") <- cell_states
     invisible(log_padj_matrix)
 }
 
