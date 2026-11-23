@@ -30,7 +30,8 @@
 #' @param inputs  Loaded inputs (uses \code{$contrasts} for the per-contrast
 #'   QEA/ssGSEA runs); NULL skips those.
 #' @return list(qea, ssgsea, ora, gsea, qea_by_contrast, ssgsea_by_contrast,
-#'   ora_by_contrast, gsea_by_contrast, plots, files).
+#'   ora_by_contrast, gsea_by_contrast, pathway_members (see
+#'   build_pathway_feature_members()), plots, files).
 mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                                         inputs = NULL) {
     assert_pre_contract(pre, stage = "metabolomics")
@@ -368,6 +369,16 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                 "lists none of them.")
     }
 
+    # ---- Pathway members (report volcano overlay) ----
+    # Built once: every contrast tests the same features against the same GMT.
+    pathway_members <- tryCatch(
+        build_pathway_feature_members(pre, config),
+        error = function(e) {
+            warning("metabolomics pathway members failed: ", e$message)
+            NULL
+        }
+    )
+
     list(
         qea                = qea_res,
         ssgsea             = ssgsea_res,
@@ -377,6 +388,7 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
         ssgsea_by_contrast = ssgsea_by_contrast,
         ora_by_contrast    = ora_by_contrast,
         gsea_by_contrast   = gsea_by_contrast,
+        pathway_members    = pathway_members,
         plots              = plots,
         files              = unique(files)
     )
