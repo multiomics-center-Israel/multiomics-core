@@ -1135,14 +1135,12 @@ if (!is.null(de_contrasts)) {
           adjPval = ctr_tbl$adj.P.Val,
           stringsAsFactors = FALSE
         )
-        # Pipeline pass flag — single source of truth for DE counts
-        pass_col_m <- paste0("pass.", ctr_label)
-        if (!is.null(de_res$summary_df) && pass_col_m %in% names(de_res$summary_df)) {
-          pf <- as.numeric(de_res$summary_df[[pass_col_m]])
-          # Align to ctr_tbl rows by feature_id
-          pf_aligned <- pf[match(ctr_tbl$feature_id, de_res$summary_df$feature_id)]
-          vol_reg_df$passFlag <- ifelse(is.na(pf_aligned), 0, pf_aligned)
-        }
+        # No passFlag: the cutoff panel treats it as a hard gate (a feature
+        # the pipeline did not pass stays NS at any cutoff or p-value type),
+        # which froze the counts when switching to raw p or loosening cutoffs.
+        # Metabolomics pass.<contrast> is only adj.p < cutoff and
+        # |log2FC| >= cutoff, which the panel recomputes from adjPval/logFC,
+        # so the default view still matches the pipeline's DE set.
         # The plotly widget is inside the wrapper div; JS uses querySelector fallback
         cat(cutoff_register_plot(
           paste0("volcano_plot_", vol_cid),
@@ -1320,12 +1318,7 @@ if (!is.null(de_contrasts)) {
             adjPval = ctr_tbl$adj.P.Val,
             stringsAsFactors = FALSE
           )
-          pass_col_m <- paste0("pass.", ctr_label)
-          if (!is.null(de_res$summary_df) && pass_col_m %in% names(de_res$summary_df)) {
-            pf <- as.numeric(de_res$summary_df[[pass_col_m]])
-            pf_aligned <- pf[match(ctr_tbl$feature_id, de_res$summary_df$feature_id)]
-            ma_reg_df$passFlag <- ifelse(is.na(pf_aligned), 0, pf_aligned)
-          }
+          # No passFlag, for the same reason as the volcano registration.
           cat(cutoff_register_plot(
             paste0("ma_plot_", ma_cid),
             ma_reg_df, "ma", "Metabolite", ctr
