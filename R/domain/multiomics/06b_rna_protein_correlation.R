@@ -384,6 +384,32 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 }
 
 
+#' Label the RNA vs protein log2FC correlation over all and significant pairs
+#'
+#' One line per subset: every joined pair, and pairs significant in RNA or in
+#' protein (FDR < 0.05, the union drawn in colour on the scatter). The union
+#' filters one axis at a time, so unlike the both-significant same-sign
+#' "concordant" set it does not force a positive r.
+#'
+#' @param rna_log2FC,protein_log2FC Numeric log2FC per joined pair.
+#' @param is_sig_union Logical, TRUE where the pair is significant in either layer.
+#' @return Character vector of two lines; a subset with fewer than 4 complete
+#'   pairs reads "n < 4".
+rna_protein_fc_cor_lines <- function(rna_log2FC, protein_log2FC, is_sig_union) {
+    one <- function(keep, label) {
+        ok <- keep & is.finite(rna_log2FC) & is.finite(protein_log2FC)
+        n <- sum(ok)
+        if (n < 4) return(sprintf("%s: n < 4", label))
+        pe <- suppressWarnings(stats::cor.test(rna_log2FC[ok], protein_log2FC[ok], method = "pearson"))
+        sp <- suppressWarnings(stats::cor.test(rna_log2FC[ok], protein_log2FC[ok], method = "spearman", exact = FALSE))
+        sprintf("%s (n = %d): Pearson r = %.3f (p = %.2g) \u00b7 Spearman's \u03c1 = %.3f (p = %.2g)",
+                label, n, pe$estimate, pe$p.value, sp$estimate, sp$p.value)
+    }
+    c(one(rep(TRUE, length(rna_log2FC)), "All pairs"),
+      one(is_sig_union %in% TRUE, "RNA or protein FDR<0.05"))
+}
+
+
 #' Save a combined DE scatter plot showing all contrasts as facets
 .save_combined_de_scatter <- function(de_concordance_list, out_dir) {
     # Combine all concordance data frames with a contrast column
@@ -397,14 +423,16 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 
     # Compute per-contrast correlations for subtitles
     cor_labels <- sapply(split(combined, combined$contrast), function(d) {
-        r <- cor(d$rna_log2FC, d$protein_log2FC, use = "complete.obs")
         n_conc <- sum(d$concordant, na.rm = TRUE)
-        sprintf("r=%.3f, %d/%d concordant", r, n_conc, nrow(d))
+        paste(c(rna_protein_fc_cor_lines(d$rna_log2FC, d$protein_log2FC,
+                                         d$category != "Non-sig"),
+                sprintf("same sign: %d/%d", n_conc, nrow(d))),
+              collapse = "\n")
     })
 
     # Add correlation info to contrast labels
-    combined$contrast_label <- paste0(combined$contrast, "\n(",
-                                       cor_labels[combined$contrast], ")")
+    combined$contrast_label <- paste0(combined$contrast, "\n",
+                                       cor_labels[combined$contrast])
 
     custom_colors <- c(
         "Non-sig" = "gray80",
@@ -525,17 +553,11 @@ compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
     # Compute correlations
     is_sig_union <- is_sig_rna | is_sig_prot
 
-    cor_all <- cor(de_merged$rna_log2FC, de_merged$protein_log2FC, use = "complete.obs")
+    cor_lines <- rna_protein_fc_cor_lines(
+        de_merged$rna_log2FC, de_merged$protein_log2FC, is_sig_union)
 
-    cor_sig <- NA
-    if (sum(is_sig_union) > 3) {
-        cor_sig <- cor(de_merged$rna_log2FC[is_sig_union],
-                       de_merged$protein_log2FC[is_sig_union],
-                       use = "complete.obs")
-    }
-
-    message("  DE concordance: r = ", round(cor_all, 3),
-            ", ", sum(de_merged$concordant), "/", nrow(de_merged), " concordant")
+    message("  DE concordance: ", paste(cor_lines, collapse = "; "),
+            "; same sign ", sum(de_merged$concordant), "/", nrow(de_merged))
 
     # Save results and plots
     if (!is.null(out_dir)) {
@@ -557,10 +579,7 @@ compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
             "Sig Both (Red)" = "red"
         )
 
-        subtitle_text <- paste0("All genes: r = ", round(cor_all, 3))
-        if (!is.na(cor_sig)) {
-            subtitle_text <- paste0(subtitle_text, " | Sig. Union (FDR<0.05): r = ", round(cor_sig, 3))
-        }
+        subtitle_text <- paste(cor_lines, collapse = "\n")
 
         p1 <- ggplot2::ggplot(de_merged, ggplot2::aes(x = rna_log2FC, y = protein_log2FC)) +
             ggplot2::geom_vline(xintercept = 0, color = "gray90") +
