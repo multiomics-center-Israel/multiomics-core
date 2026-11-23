@@ -88,7 +88,10 @@ make_dt <- function(df, caption = NULL, pageLength = 15, pval_cols = NULL,
     rownames = FALSE,
     class    = "compact stripe hover"
   )
-  # Format numeric columns: scientific notation for p-values, 2 decimals for the rest
+  # Format numeric columns: scientific notation for p-values, whole numbers for
+  # counts, 3 significant digits for the rest. Fixed 2 decimals showed small
+  # values (RF importances, loadings around 0.005) as 0.01 / 0.00, so rows
+  # that differed looked tied.
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   pval_pattern <- "^(p[._]?val|p[._]?adj|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
   pval_cols <- union(grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE),
@@ -96,7 +99,7 @@ make_dt <- function(df, caption = NULL, pageLength = 15, pval_cols = NULL,
   int_cols <- setdiff(intersect(extra_int, num_cols), pval_cols)
   other_cols <- setdiff(num_cols, c(pval_cols, int_cols))
   if (length(other_cols) > 0) {
-    tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+    tbl <- DT::formatSignif(tbl, columns = other_cols, digits = 3)
   }
   if (length(int_cols) > 0) {
     tbl <- DT::formatRound(tbl, columns = int_cols, digits = 0)
