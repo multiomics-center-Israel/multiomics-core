@@ -357,10 +357,16 @@ resolve_metab_de_matrix <- function(pre) {
 #'
 #' @param pre    List from preprocess_metabolomics() (pre contract).
 #' @param config Full pipeline config.
+#' @param contrast_table Structured contrasts (Numerator, Denominator and,
+#'   optionally, Contrast_name). When missing or NULL, \code{config$de$contrasts}
+#'   is used instead.
 #' @return list conforming to the DE contract:
 #'   summary_df, method, de_tables (per-contrast list), de_model, and
 #'   padj_provenance (every contrast \code{"computed_bh"}; see
-#'   \code{load_precomputed_metabolomics_de()} for its shape)
+#'   \code{load_precomputed_metabolomics_de()} for its shape). For
+#'   \code{method = "limma"}, \code{de_model} is the single fit every table was
+#'   read from, with one coefficient per contrast, named as \code{de_tables}
+#'   is (see \code{fit_metab_limma_contrasts()}); NULL for the other methods.
 run_metabolomics_de <- function(pre, config, contrast_table) {
     cfg <- config$modes$metabolomics
     de_cfg <- cfg$de %||% list()
@@ -461,29 +467,53 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         mat_raw <- NULL  # fall back to FC from the (already aligned) fit matrix
     }
 
+    # The design is built from the metadata but fitted to the matrix, so the two
+    # must describe the same samples in the same order. filter_to_biological()
+    # only realigns them when it drops a sample.
+    if (!identical(as.character(meta[[sample_col]]), colnames(mat_for_test))) {
+        stop("metabolomics DE: the sample metadata does not line up with the ",
+             "columns of the matrix being tested (column '", sample_col,
+             "'). Every matrix column needs exactly one metadata row, in the ",
+             "same order; check for sample IDs missing from the metadata.")
+    }
+
+    contrast_labels <- if (!is.null(contrast_labels_override)) {
+        contrast_labels_override
+    } else {
+        vapply(contrasts, make_contrast_label, character(1), USE.NAMES = FALSE)
+    }
+    # de_tables is keyed by label, so a repeated label would silently replace
+    # an earlier contrast's results with a later one's.
+    dup_labels <- unique(contrast_labels[duplicated(contrast_labels)])
+    if (length(dup_labels) > 0) {
+        stop("metabolomics DE: contrast name(s) used more than once: ",
+             paste(dup_labels, collapse = ", "),
+             ". Each contrast needs its own Contrast_name.")
+    }
+
     # Run DE for each contrast
-    de_tables <- list()
-    de_model  <- NULL
+    de_model <- NULL
 
-    for (i in seq_along(contrasts)) {
-        ctr <- contrasts[i]
-        ctr_label <- if (!is.null(contrast_labels_override))
-            contrast_labels_override[i] else make_contrast_label(ctr)
-        message("metabolomics DE [", method, "]: ", ctr)
+    if (method == "limma") {
+        message("metabolomics DE [limma]: ", paste(contrasts, collapse = "; "))
+        # One fit for every contrast: the per-contrast tables and the model the
+        # Shiny app queries are then the same object, and cannot disagree.
+        limma_res <- fit_metab_limma_contrasts(mat_for_test, condition,
+                                               contrasts, contrast_labels)
+        de_tables <- limma_res$de_tables
+        de_model  <- limma_res$fit
+    } else {
+        de_tables <- list()
+        for (i in seq_along(contrasts)) {
+            ctr <- contrasts[i]
+            message("metabolomics DE [", method, "]: ", ctr)
 
-        tbl <- switch(method,
-            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = NULL),
-            t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
-            t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
-            wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = mat_raw)
-        )
-
-        # Capture limma model from first contrast
-        if (method == "limma" && is.null(de_model)) {
-            de_model <- attr(tbl, "fit")
+            de_tables[[contrast_labels[i]]] <- switch(method,
+                t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+                t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+                wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = mat_raw)
+            )
         }
-
-        de_tables[[ctr_label]] <- tbl
     }
 
     # Build wide summary_df
@@ -493,18 +523,10 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut,
                                    use_adjusted_pval = use_adj)
 
-    # Add Name column from row_data$original_id (HMDB → compound name)
-    if (!is.null(pre$row_data) && "original_id" %in% colnames(pre$row_data)) {
-        idx <- match(summary_df$feature_id, rownames(pre$row_data))
-        names_resolved <- pre$row_data$original_id[idx]
-        # Only add if names differ from feature_id (i.e., actually resolved)
-        if (!all(is.na(names_resolved)) && !all(names_resolved == summary_df$feature_id, na.rm = TRUE)) {
-            summary_df$Name <- names_resolved
-            # Move Name to second column
-            cols <- colnames(summary_df)
-            summary_df <- summary_df[, c("feature_id", "Name", setdiff(cols, c("feature_id", "Name")))]
-        }
-    }
+    # summary_df carries feature_id and statistics only. Annotations (Name,
+    # original_id, ...) are joined from pre$row_data by feature_id where a
+    # table is written or exported; a Name column here would shadow the
+    # row_data one in the Shiny payload and the final-results tables.
 
     message("metabolomics DE complete: ", nrow(summary_df), " features, ",
             sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
@@ -525,6 +547,83 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 
 
 # ---- limma -----------------------------------------------------------------
+
+#' Fit one limma model covering every metabolomics contrast
+#'
+#' A cell-means model (\code{~ 0 + condition}) is fitted once to all the
+#' samples given, every contrast is applied to it, and the variances are
+#' moderated with \code{eBayes()} at its defaults. Each per-contrast table is
+#' \code{topTable()} of one coefficient of that fit, so the tables and the
+#' returned model are one object seen two ways.
+#'
+#' Fitting the contrasts together gives the same statistics as fitting each
+#' alone on the same samples: the linear fit and the variance moderation do not
+#' depend on which contrasts are asked for, and the Benjamini-Hochberg
+#' adjustment is still taken within each contrast, over every feature tested.
+#'
+#' @param mat       Numeric matrix (features x samples), biological samples only.
+#' @param condition Factor of conditions, one per column of \code{mat}, in
+#'   column order.
+#' @param contrasts Character vector of contrast formulas, e.g. \code{"B - A"}.
+#' @param labels    Character vector of contrast names, one per formula, unique.
+#'   They name both the returned tables and the coefficients of the fit.
+#' @return list(\code{de_tables}, \code{fit}): \code{de_tables} is a list named
+#'   by \code{labels} of data.frames with feature_id, logFC, AveExpr,
+#'   statistic, P.Value and adj.P.Val, in the row order of \code{mat};
+#'   \code{fit} is the \code{MArrayLM} with one coefficient per label.
+#' @examples
+#' mat <- matrix(c(1, 2, 3, 5, 6, 7, 2, 1, 3, 2, 4, 1), nrow = 2, byrow = TRUE,
+#'               dimnames = list(c("f1", "f2"), paste0("s", 1:6)))
+#' res <- fit_metab_limma_contrasts(mat, factor(rep(c("A", "B"), each = 3)),
+#'                                  "B - A", "B_vs_A")
+#' colnames(res$fit$coefficients)
+fit_metab_limma_contrasts <- function(mat, condition, contrasts, labels) {
+    if (!requireNamespace("limma", quietly = TRUE)) {
+        stop("Package 'limma' is required for limma DE.")
+    }
+    if (length(contrasts) == 0 || length(contrasts) != length(labels)) {
+        stop("limma DE: expected one name per contrast, got ", length(contrasts),
+             " contrast(s) and ", length(labels), " name(s).")
+    }
+    if (anyNA(labels) || anyDuplicated(labels) > 0) {
+        stop("limma DE: contrast names must be unique and non-missing; they ",
+             "name the coefficients of the fitted model.")
+    }
+    # model.matrix() drops samples with a missing condition, which would leave
+    # the design shorter than the matrix it is fitted to.
+    if (length(condition) != ncol(mat) || anyNA(condition)) {
+        stop("limma DE: every sample (matrix column) needs a non-missing ",
+             "condition; got ", ncol(mat), " column(s) and ",
+             sum(!is.na(condition)), " condition value(s).")
+    }
+
+    design <- stats::model.matrix(~ 0 + condition)
+    colnames(design) <- levels(condition)
+
+    fit <- limma::lmFit(mat, design)
+    contrast_matrix <- limma::makeContrasts(contrasts = contrasts, levels = design)
+    # makeContrasts() names each column by its formula ("B - A"); the rest of
+    # the pipeline, and the Shiny app's topTable(coef = ), use the contrast name.
+    colnames(contrast_matrix) <- labels
+    fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast_matrix))
+
+    de_tables <- lapply(labels, function(label) {
+        tt <- limma::topTable(fit2, coef = label, number = Inf, sort.by = "none")
+        data.frame(
+            feature_id = rownames(tt),
+            logFC      = tt$logFC,
+            AveExpr    = tt$AveExpr,
+            statistic  = tt$t,
+            P.Value    = tt$P.Value,
+            adj.P.Val  = tt$adj.P.Val,
+            stringsAsFactors = FALSE
+        )
+    })
+    names(de_tables) <- labels
+
+    list(de_tables = de_tables, fit = fit2)
+}
+
 
 #' Run limma on a single contrast
 #'

@@ -233,7 +233,7 @@ These are **not** canonical. They exist only in `payload_source == "metabolomics
 
 | Key | Content | Notes |
 |---|---|---|
-| `mummichog` | `mummichog[[contrast]] = list(title, subtitle, plot, table, slug)` | see 5.1 |
+| `mummichog` | `mummichog[[contrast]] = list(title, subtitle, plot, table, slug, summary_table, ora_plot, ora_table, gsea_plot, gsea_table, overview_table, ora_detail_table, input_counts, evidence_pathway_table, evidence_ec_table, evidence_feature_table, evidence_note, evidence_log2fc_note, p_cutoff)` | see 5.1 |
 | `chosen_norm` | selected sample normalization (`NULL` in QC-review mode) | also encoded in `norm_method` |
 | `samples_hm_w_qc` | sample-distance heatmap **with** QC samples | `samples_hm` is the version without QC |
 | `rf_importance`, `rf_method` | random-forest importance table and method | |
@@ -250,23 +250,75 @@ available.
 
 ### 5.1 `mummichog`
 
-- One entry per DE contrast **that has a mummichog result**; contrasts without a
-  result are absent. The entry name is the original DE contrast label (the
-  sanitised directory name is used only if the pipeline's mapping file is missing).
+- One entry per mummichog run **that has a result**; contrasts without a result
+  are absent, so iterate over `names(payload$mummichog)` rather than over
+  `contrasts$Contrast_name`. The entry name is the original DE contrast label
+  (the sanitised directory name is used only if the pipeline's mapping file is
+  missing). With the python engine in mixed ionization mode there are two
+  entries per contrast, one per polarity, named `"<contrast>, positive ions"`
+  and `"<contrast>, negative ions"`.
 - The whole key is `NULL` when mummichog was not run or no contrast has a result.
-- Fields of each entry:
-  - `title`, `subtitle`: character, as used in the report.
-  - `plot`: a `ggplot` (enrichment ratio vs. -log10 p, bubble size = pathway
-    size, dashed line at the p cutoff, top pathways labelled when `ggrepel` is
-    available where the plot is built).
-  - `table`: data.frame with columns `Pathway`, `Overlap`, `Pathway size`,
-    `Enrichment ratio`, `p.value`, sorted by `p.value`.
-  - `slug`: filesystem-safe, de-duplicated token for the contrast (used for
-    export file names).
-- The plot and table are produced by the same presentation function as the
-  metabolomics HTML report (`build_mummichog_report_sections()`), so they follow
-  the same presentation logic and output. They are separately built objects, not
-  the report's own object.
+- Every entry has the same nineteen fields, in this order: the ten below, then
+  the nine report objects in the second table. Read the explicitly named
+  ones; `plot` and `table` are kept for existing readers and are the same
+  objects as `ora_plot` and `ora_table`.
+
+  | Field | Type | Content |
+  |---|---|---|
+  | `title`, `subtitle` | character | headings, as used in the report |
+  | `plot` | `ggplot` | same object as `ora_plot` |
+  | `table` | data.frame | same object as `ora_table` |
+  | `slug` | character | filesystem-safe, de-duplicated token for the entry (for file names) |
+  | `summary_table` | data.frame | the report's Summary: the top-ranked pathways across ORA and GSEA (at most 20 rows). The first seven columns are the ones the report displays; the remaining eight are the values behind them (`Pathway ID`, `Nominal Mummichog signal`, `ORA p.value`, `GSEA P.Value`, `GSEA padj`, `Supporting ECs`, `Supporting features`, `Identified methods tested`). |
+  | `ora_plot` | `ggplot` | ORA bubble plot (enrichment ratio vs. -log10 p, bubble size = pathway size, dashed line at the p cutoff) |
+  | `ora_table` | data.frame | **every** ORA pathway. Columns `Pathway`, `Overlap`, `Pathway size`, `Enrichment ratio`, `p.value`; the MetaboAnalyst-compatible engine adds its other p-values and Holm-adjusted columns. |
+  | `gsea_plot` | `ggplot` or `NULL` | GSEA scatter plot |
+  | `gsea_table` | data.frame or `NULL` | **every** GSEA pathway tested, with `Pathway`, `ES`, `NES`, `P.Value`, `padj`, the leading-edge EmpiricalCompounds and the engine's size columns |
+
+- The report objects (added after the ten fields above; same objects as the
+  HTML report and the all-contrast workbook `mummichog_results_all_contrasts.xlsx`):
+
+  | Field | Type | Content |
+  |---|---|---|
+  | `overview_table` | data.frame | the report's updated pathway summary, **every** pathway of the contrast, in the Summary's ranking (smaller raw p of ORA and GSEA first); its first 20 rows are the report's Summary. ORA status, raw p and Holm-adjusted p; GSEA status, raw p and BH FDR; `ORA overlap ECs (Sig.EC)`, `Features in overlap ECs` and `Annotation agreement (ECs)` (filled only for pathways nominal in ORA); identified-metabolite enrichment; `Interpretation` |
+  | `ora_detail_table` | data.frame or `NULL` | the complete ORA results, every engine column named for what it holds (incl. `Hits.*` = putative compound matches) |
+  | `input_counts` | data.frame (one row) | what entered the engine for this contrast, from its run record (engine counts are `NA` for the python engine) |
+  | `evidence_pathway_table` | data.frame or `NULL` | one row per pathway with evidence: `Supporting ECs`, `Supporting features` (distinct), and agreement counts at EC and feature-EC-link grain |
+  | `evidence_ec_table` | data.frame or `NULL` | one row per pathway × empirical compound (EC): its pathway-matching candidate(s), candidate names and KEGG IDs (listed separately, **not** paired one-to-one), original annotation, agreement |
+  | `evidence_feature_table` | data.frame or `NULL` | one row per pathway × EC × measured feature: m/z, RT, adduct, raw DE p-value, the statistic or log2FC the engine was given (column names differ by engine), original annotation, agreement; for the MetaboAnalyst-compatible engine also `Pathway candidate(s) matched by feature` and, right after it, `Candidate metabolite name(s) (putative)` (the k-th name belongs to the k-th ID; same mapping as the workbook) |
+  | `evidence_note`, `evidence_log2fc_note` | character or `NULL` | why evidence, or its log2FC column, is missing for this contrast |
+  | `p_cutoff` | numeric | the nominal threshold (`mummichog.p_cutoff`) behind the statuses in `overview_table`; the feature cutoff the engine ran with is `input_counts$"Significance rule"` |
+
+- **Scope of the evidence tables.** They hold every row the evidence layer
+  built, for every pathway that has evidence, **whatever its ORA or GSEA
+  p-value**; they are not filtered by significance. For each pathway they list
+  the ECs of its **ORA overlap** — the significant ECs the engine counted
+  (`Sig.EC`), each holding at least one feature that passed the ORA feature
+  cutoff — and every measured feature grouped into those ECs. So:
+  - evidence rows for a pathway are **putative biochemical matches, not a
+    statistical result**; for a pathway that is not nominal in ORA or GSEA
+    they do not establish enrichment;
+  - they are **not the GSEA leading edge**, and do not explain a GSEA signal;
+  - a pathway not in the ORA table (no significant EC) has **no** evidence rows,
+    and a pathway's non-significant ECs are never listed;
+  - candidate metabolites are **putative** m/z matches, never identifications;
+  - a feature with `Matched via pathway candidate = FALSE` sits in a supporting
+    EC without matching a compound of that pathway itself (agreement
+    `Not assessed`).
+- **Joining.** The evidence tables carry the pathway name only (`Pathway`), the
+  key the engines themselves use; join on the exact string. The
+  MetaboAnalyst-compatible engine refuses a model with duplicate pathway names;
+  `Pathway ID` is in `overview_table`.
+- When evidence could not be built for a contrast, the three evidence tables are
+  `NULL` and `evidence_note` says why. The ORA and GSEA results are unaffected.
+- `gsea_plot` and `gsea_table` are `NULL`, with the names still present, when
+  GSEA did not run for that entry; test them with `is.null()`.
+- The tables hold plain columns only (no list columns), so they can be
+  written with `write.csv()` or to Excel as they are. Numeric statistics are
+  numeric; a multi-valued cell is one `"; "`-separated string.
+- The pipeline passes the payload the report's own sections
+  (`metab_mummichog_sections`), so every field is the object the metabolomics
+  HTML report renders. Nothing is recomputed for the payload.
 - Each ggplot carries its plotting environment, which increases the size of the
   payload file. If size becomes a concern, a more compact representation
   (data only) is possible; this has not been needed so far.
@@ -303,7 +355,11 @@ If the app was written against an earlier payload, these are the differences.
    no longer in it.
 4. **Metabolomics `clust_patterns_list`** is now populated (it was missing).
 5. **New metabolomics extension key `mummichog`.**
-6. `payload_version` stays `"2.0"`: all changes are additive except items 2 and 3
+6. **Nine fields appended to each `mummichog` entry** (`overview_table` …
+   `p_cutoff`, see 5.1). The first ten fields, and their contents, are
+   unchanged; `summary_table` keeps its earlier wording, and `overview_table`
+   carries the report's updated one.
+7. `payload_version` stays `"2.0"`: all changes are additive except items 2 and 3
    (the content of `de_final_table`).
 
 ## 8. Open items and questions for the app owner

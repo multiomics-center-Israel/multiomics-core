@@ -63,7 +63,13 @@ tryCatch({
 # ---------------------------------------------------------------------------
 # Helper: downloadable DT table with CSV/Excel export (proteomics style)
 # ---------------------------------------------------------------------------
-make_dt <- function(df, caption = NULL, pageLength = 15) {
+make_dt <- function(df, caption = NULL, pageLength = 15, pval_cols = NULL,
+                    int_cols = NULL) {
+  # pval_cols / int_cols: extra columns to show in scientific notation / as
+  # whole numbers, for tables whose column names the pattern below cannot
+  # recognise (e.g. "ORA raw p (FET)"). NULL keeps the default behaviour.
+  extra_pval <- pval_cols
+  extra_int  <- int_cols
   if (is.null(df) || nrow(df) == 0) return(invisible(NULL))
   safe_caption <- gsub("[^a-zA-Z0-9]", "_", caption %||% "data")
   tbl <- DT::datatable(
@@ -85,10 +91,15 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
   # Format numeric columns: scientific notation for p-values, 2 decimals for the rest
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   pval_pattern <- "^(p[._]?val|p[._]?adj|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
-  pval_cols <- grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE)
-  other_cols <- setdiff(num_cols, pval_cols)
+  pval_cols <- union(grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE),
+                     intersect(extra_pval, num_cols))
+  int_cols <- setdiff(intersect(extra_int, num_cols), pval_cols)
+  other_cols <- setdiff(num_cols, c(pval_cols, int_cols))
   if (length(other_cols) > 0) {
     tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+  }
+  if (length(int_cols) > 0) {
+    tbl <- DT::formatRound(tbl, columns = int_cols, digits = 0)
   }
   if (length(pval_cols) > 0) {
     pval_idx <- which(names(df) %in% pval_cols) - 1L
@@ -146,6 +157,8 @@ render_pathway_evidence <- function(evidence, pathway) {
   if (nrow(ecs) == 0 || nrow(ps) == 0) return(invisible(NULL))
   feats <- evidence$feature_table[evidence$feature_table$Pathway == pathway, ,
                                   drop = FALSE]
+  all_conf <- evidence$feature_table[["Annotation confidence"]]
+  show_confidence <- !is.null(all_conf) && any(!is.na(all_conf))
 
   n_ec <- ps[["Supporting ECs"]][1]
   n_ft <- ps[["Supporting features"]][1]
@@ -175,9 +188,15 @@ render_pathway_evidence <- function(evidence, pathway) {
       html_or_dash(agree)))
     rows <- feats[feats$EmpiricalCompound == eid, , drop = FALSE]
     if (nrow(rows) > 0) {
-      # A Mixed EC holds both outcomes, so its features show which is which.
-      cols <- c("Feature", "m/z", "RT", "Adduct/ion",
-                if (identical(agree, "Mixed")) c("Original annotation", "Agreement"))
+      # One column set for every EC, whatever its roll-up (Match, Conflict,
+      # Mixed, Not assessed), so each measured feature can be read against its
+      # own annotation and verdict. Annotation confidence is shown when the
+      # dataset declares any, decided once for the contrast so every EC's table
+      # has the same columns. Polarity and the pathway-candidate flag exist
+      # only in the MetaboAnalyst-compatible engine's evidence.
+      cols <- c("Feature", "Polarity", "m/z", "RT", "Adduct/ion",
+                "Matched via pathway candidate", "Original annotation",
+                if (show_confidence) "Annotation confidence", "Agreement")
       print(htmltools::tagList(make_dt(rows[, intersect(cols, names(rows)), drop = FALSE],
                                        caption = NULL, pageLength = 10)))
     }
@@ -199,6 +218,60 @@ advanced_block <- function(title, body) {
   cat("\n\n</details>\n\n")
   invisible(NULL)
 }
+
+#' Write an expandable information panel (blue "ⓘ", native <details>)
+#'
+#' Secondary methodology, one click away, with no JavaScript: <details> works
+#' offline, with the keyboard and with screen readers. The summary carries a
+#' text label, not only the icon. Essential caveats are written as visible
+#' text beside a panel, never only inside one.
+#'
+#' @param title Short label shown after the icon.
+#' @param body  Markdown text of the panel (character, pasted together).
+#' @return Invisibly NULL; called for the HTML it writes.
+info_panel <- function(title, body) {
+  cat(sprintf("<details class=\"mmc-info\"><summary><span class=\"mmc-info-icon\" aria-hidden=\"true\">&#9432;</span> %s</summary>\n\n",
+              htmltools::htmlEscape(title)))
+  cat(paste(body, collapse = ""))
+  cat("\n\n</details>\n\n")
+  invisible(NULL)
+}
+
+#' make_dt() for the mummichog presentation tables
+#'
+#' Their columns are named for what they hold ("ORA raw p (FET)", "GSEA BH
+#' FDR"), which make_dt()'s name pattern does not recognise; this tells it
+#' which columns are p-values (scientific notation) and which are counts
+#' (whole numbers), via mmc_dt_column_formats().
+#'
+#' @param df  A presentation table.
+#' @param ... Passed to make_dt() (caption, pageLength).
+#' @return As make_dt().
+make_mm_dt <- function(df, ...) {
+  f <- mmc_dt_column_formats(df)
+  make_dt(df, ..., pval_cols = f$pval, int_cols = f$int)
+}
+
+# The mummichog workbook, where the exports target writes it: under this
+# report's own directory (the report renders from the run directory, beside
+# metabolomics/). The report does not depend on the exports target (it is a
+# leaf), so the workbook is named only when the file is actually there. A file
+# on disk does not show which run wrote it, so the report only points to it,
+# saying it comes from the exports step, and never says this run produced it.
+mm_workbook_rel  <- file.path("metabolomics", "mummichog_pinned", .MMC_WORKBOOK_FILE)
+mm_workbook_path <- file.path(dirname(knitr::current_input(dir = TRUE)), mm_workbook_rel)
+mm_has_workbook  <- file.exists(mm_workbook_path)
+mm_workbook_note <- "written by the pipeline's exports step, not by this report"
+
+# Styles for info_panel(), written once at the top of the mummichog section.
+INFO_PANEL_CSS <- paste0(
+  "<style>",
+  "details.mmc-info{margin:0.3em 0 0.9em 0;}",
+  "details.mmc-info>summary{cursor:pointer;color:#1f5fa8;font-weight:600;}",
+  "details.mmc-info>summary:focus-visible{outline:2px solid #1f5fa8;outline-offset:2px;}",
+  "details.mmc-info .mmc-info-icon{margin-right:0.25em;font-size:1.1em;}",
+  "details.mmc-info[open]{border-left:3px solid #1f5fa8;padding-left:0.8em;}",
+  "</style>\n\n")
 
 # ---------------------------------------------------------------------------
 # Helper: safely print a ggplot or return invisible(NULL)
@@ -1468,17 +1541,81 @@ if (!is.null(de_contrasts)) {
     cat(knitr::knit_print(top_dt))
     cat("\n\n")
 
-    # Full table with normalized intensities
+    # Full table with the expression values behind the statistics
     cat("### Full Results + Expression\n\n")
-    cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>",
-        "Full DE results merged with normalized expression values. ",
-        "Use the search box to find specific metabolites and the buttons to export.</em></p>\n")
 
     full_tbl <- ctr_tbl[order(ctr_tbl$P.Value), ,drop=FALSE]
     full_display <- full_tbl[, c("feature_id", "Name", "logFC", "AveExpr", "P.Value", "adj.P.Val", "Direction")]
 
-    # Merge transformed expression (glog10, before scaling) for meaningful values
-    de_tbl_expr <- pre$expr_log %||% pre$expr_work
+    # The expression columns are the DE input, resolved by the helper QEA/ssGSEA
+    # already use: the unscaled matrix, biological samples only. expr_log would
+    # show values without sample normalization, plus QC/blank/pool columns that
+    # DE never saw, next to statistics computed from something else.
+    de_tbl_expr <- tryCatch(
+      .metab_de_matrix_condition(pre, cfg)$mat,
+      error = function(e) {
+        message("DE results table: expression columns omitted (",
+                conditionMessage(e), ")")
+        NULL
+      }
+    )
+
+    # Describe what this pipeline did to the values, which is all it knows.
+    # chosen_norm = "none" is the path for tables normalized upstream, so it
+    # means no normalization was added here, not that the data are unnormalized.
+    .de_expr_steps <- if (is.null(ni_r)) {
+      "after the preprocessing configured for this run"
+    } else {
+      .sn <- tolower(ni_r$sample_norm %||% "none")
+      # info$normalization$transform records the configured transform, but
+      # these normalizers always log2-transform whatever it says; only median
+      # and none honour it. Same list as always_log2_norms in
+      # build_group_cv_metabolomics() -- keep the two in step.
+      .tf <- if (.sn %in% c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")) {
+        "log2"
+      } else {
+        tolower(ni_r$transform %||% "log2")
+      }
+      paste0(
+        if (.sn != "none") paste0("normalized (", toupper(.sn), ")")
+        else "no sample normalization applied by this pipeline",
+        ", ",
+        if (.tf != "none") paste0("transformed (", .tf, ")")
+        else "no transform applied by this pipeline",
+        # drift_applied stays TRUE when individual features were skipped.
+        if (isTRUE(ni_r$drift_applied)) ", drift correction applied where it could be fitted" else ""
+      )
+    }
+    .de_expr_desc <- paste0(.de_expr_steps, ", not feature-scaled, biological ",
+                            "samples only (QC, blank and pooled samples excluded)")
+    # Pre-computed DE tables were not computed here, so this matrix is not
+    # known to be the one behind them.
+    .de_precomputed <- identical(tolower(de_method), "precomputed")
+    # Only limma reads every column off this matrix. The t-test and Wilcoxon
+    # methods test it, but take logFC and AveExpr from group means of the
+    # filtered pre-normalization intensities when run_metabolomics_de() has them.
+    .de_all_from_matrix <- identical(tolower(de_method), "limma")
+    cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>",
+        if (is.null(de_tbl_expr)) {
+          "Full DE results. Expression values are not shown for this run. "
+        } else if (.de_precomputed) {
+          paste0("Full DE results with this pipeline's expression values: ",
+                 .de_expr_desc, ". The DE statistics were loaded from ",
+                 "pre-computed tables and were not calculated from these values. ")
+        } else if (.de_all_from_matrix) {
+          paste0("Full DE results with the expression values the statistics ",
+                 "were calculated from: ", .de_expr_desc, ". ")
+        } else {
+          paste0("Full DE results with the expression values the test statistic ",
+                 "and p-values were calculated from: ", .de_expr_desc, ". ",
+                 "For this method (", de_method, "), logFC and AveExpr are ",
+                 "calculated separately, from group means of the filtered ",
+                 "input intensities (before this pipeline's normalization and ",
+                 "transform) when those are available, and from these values ",
+                 "otherwise. ")
+        },
+        "Use the search box to find specific metabolites and the buttons to export.</em></p>\n")
+
     if (!is.null(de_tbl_expr)) {
       expr_df2 <- as.data.frame(de_tbl_expr, check.names = FALSE)
       expr_df2$feature_id <- rownames(de_tbl_expr)
@@ -1488,7 +1625,12 @@ if (!is.null(de_contrasts)) {
 
     full_dt <- DT::datatable(
       full_display,
-      caption = paste0("DE Results + Normalized Expression: ", ctr),
+      caption = paste0(
+        if (is.null(de_tbl_expr)) "DE Results: "
+        else if (.de_precomputed) "DE Results + Expression (unscaled, biological samples): "
+        else if (.de_all_from_matrix) "DE Results + Expression (DE input matrix, unscaled, biological samples): "
+        else "DE Results + Expression (DE test input matrix, unscaled, biological samples): ",
+        ctr),
       extensions = "Buttons",
       options = list(
         scrollX = TRUE, pageLength = 10, dom = "Bfrtip",
@@ -2491,6 +2633,107 @@ ppm     <- mummi_cfg$tolerance_ppm  %||% 10
 n_perm  <- mummi_cfg$n_permutations %||% 100
 
 cat("## Methodology\n\n")
+cat(INFO_PANEL_CSS)
+# Described from the sections that were built, not from the config switch.
+mummi_engine <- unique(vapply(mummi_sections, function(s) s$engine %||% "python",
+                              character(1)))
+if (identical(mummi_engine, "metaboanalyst")) {
+  ma_infos <- Filter(Negate(is.null), lapply(mummi_sections, `[[`, "ma_info"))
+  ma1 <- if (length(ma_infos)) ma_infos[[1]] else list()
+  ma_p <- ma1$params %||% list()
+  ma_mode <- ma_p$ionization_mode %||% "?"
+  # The feature cutoff the engine recorded for the run (ma_run_info.json).
+  ma_cut <- ma_p$p_cutoff %||% p_cut
+  cat("**Mummichog pathway analysis (MetaboAnalyst-compatible engine).** For each contrast, Mummichog asks whether metabolic pathways hold more LC–MS signal than expected **without requiring identified metabolites**: features are matched by m/z to candidate compounds of the metabolic model, grouped into **EmpiricalCompounds (ECs)**, and pathways are tested on those ECs. Its results are pathway-level **hypotheses**, and its candidate compounds are putative matches, not identifications. It complements, and does not replace, enrichment based on identified metabolites.\n\n", sep = "")
+  cat("**Read the results with these in mind:**\n\n")
+  cat(sprintf("- **What enters:** every feature that reached DE for the contrast — not only the features passing the overall DE selection (`pass_any_contrast`). A feature counts as significant at **raw DE p ≤ %s**, not at adjusted DE significance.\n", ma_cut))
+  cat(sprintf("- **ORA** gives Fisher's exact test (FET) raw p and its **Holm** adjustment; Holm is applied over the pathways in the ORA table only (those with at least one significant EC), not every pathway tested. **GSEA** gives a raw p and a **Benjamini–Hochberg FDR**. *Nominal* (raw p < %s) marks a hypothesis, not a result that survives multiple testing.\n", p_cut))
+  cat("- **Counts are not additive:** one EC is not one metabolite, and the same EC and feature can support several pathways and contrasts.\n\n")
+
+  # What entered the engine, per contrast, from each run record (06t).
+  inputs <- Filter(is.data.frame, lapply(mummi_sections, `[[`, "input_counts"))
+  if (length(inputs) > 0) {
+    in_tbl <- do.call(rbind, lapply(names(inputs), function(n)
+      data.frame(Contrast = gsub("_vs_", " vs ", n, fixed = TRUE), inputs[[n]],
+                 check.names = FALSE, stringsAsFactors = FALSE)))
+    show_cols <- c("Contrast", "Features at DE (this contrast)", "Passed to the engine",
+                   "Not passed (missing m/z, RT, p or statistic)",
+                   "Removed: m/z out of range", "Removed: duplicate m/z",
+                   "Features retained for Mummichog analysis",
+                   "ORA significant features (raw DE p ≤ cutoff)", "Significance rule")
+    print(htmltools::tagList(make_mm_dt(in_tbl[, intersect(show_cols, names(in_tbl)), drop = FALSE],
+                                     caption = "What entered Mummichog, per contrast (from each contrast's run record)",
+                                     pageLength = 25)))
+    n_all  <- inputs[[1]][["Features in DE results (all contrasts)"]]
+    n_pass <- inputs[[1]][["Passing overall DE selection (pass_any_contrast; not the Mummichog input)"]]
+    if (!is.na(n_all) && !is.na(n_pass)) {
+      cat(sprintf("\n\n%s features are in the DE results; %s of them pass the overall DE selection in at least one contrast (`pass_any_contrast`). **That subset is not the Mummichog input**: it selects features for other outputs, such as clustering and the filtered DE workbook.\n\n",
+                  format(n_all, big.mark = ","), format(n_pass, big.mark = ",")))
+    }
+  }
+
+  info_panel("Mummichog input and feature selection", c(
+    if (identical(ma_mode, "mixed")) sprintf("**Mixed-polarity data, analysed jointly.** Positive- and negative-ion features form **one** analysis per contrast, with each feature's polarity read from the `%s` column. Each feature is matched only against the ion forms of its own polarity (MetaboAnalyst's 25 positive and 16 negative forms). A compound's matches from either polarity at similar retention times form **one** EmpiricalCompound. Significant features, the background of ECs and the permutation null are shared by both polarities, and retention times of both polarities are compared on one scale.\n\n", ma_p$polarity_column %||% "?")
+    else sprintf("Every feature was read as a **%s** ion (MetaboAnalyst's %s ion forms).\n\n", ma_mode, if (identical(ma_mode, "positive")) "25 positive" else "16 negative"),
+    "**Which features are retained.** Every measured feature in the contrast's DE results is considered. Features with a missing or invalid m/z, retention time, p-value or statistic are left out, as are features with m/z outside 50–2001. When several features have exactly the same m/z — including a positive- and a negative-ion feature — only the one with the smallest p-value is kept. What remains are the **features retained for Mummichog analysis**. The analysis does not run for a contrast with fewer than 100 retained features, or with fewer than 11 (or under 1% of) significant ones. The table above gives each contrast's counts, as recorded by the run.\n\n",
+    sprintf("**ORA significant features.** ORA uses the contrast's unadjusted DE p-value: a retained feature is significant when its p-value is at or below the configured cutoff (p ≤ %s). This count includes significant features that match no compound in the metabolic model; such features belong to no empirical compound, so they cannot make one significant. An empirical compound is significant when at least one of its features is. To judge enrichment, ORA repeats the test many times with the same number of features drawn at random from all retained features.\n\n", ma_cut),
+    "**GSEA does not use this cutoff.** It ranks empirical compounds, each scored by the largest signed statistic among its features. The statistic is chosen from the DE method: the t statistic when the method reports one (limma, t-test), otherwise the log2 fold change.\n\n"))
+
+  info_panel("ORA and statistical significance", c(
+    "Per pathway, over-representation of significant ECs among the pathway's ECs is tested with **Fisher's exact test (FET)** — the ORA p-value shown throughout, and the plot's y axis, as in MetaboAnalyst's own plot — and with the EASE score. A **Gamma**-adjusted p-value is MetaboAnalyst's: a Gamma distribution fitted to the permutation p-values of all pathways, then applied to FET. An **empirical** p-value is the share of permutations, each drawing as many features at random from the whole peak list, whose pathway p-value is at most FET.\n\n",
+    "**Adjusted p-values are Holm, not Benjamini–Hochberg.** They are MetaboAnalyst's own adjustment: `p.adjust()` with its default, Holm's family-wise method, applied to the rounded FET, EASE and Gamma values **over the pathways in the ORA table** — those with at least one significant EC. Pathways without a significant EC are not in that table and not in that family, so the adjustment can be less strict than one over every pathway tested.\n\n",
+    sprintf("Pathways with fewer than %s compounds in the model are not tested. A pathway that GSEA tested but that has no significant EC reads **No significant EC overlap** for ORA. *Nominal* means raw p < %s: a hypothesis to follow up, not a finding.\n\n", ma_p$min_pathway_size %||% 3, p_cut),
+    "**Putative compound matches** (`Hits.*` in the full ORA table) count model compounds matched by m/z — alternatives for the same signal, not identified metabolites.\n\n"))
+
+  ma_gseas <- Filter(Negate(is.null), lapply(mummi_sections, `[[`, "gsea"))
+  if (length(ma_gseas) > 0) {
+    g1 <- ma_gseas[[1]]
+    labels <- unique(vapply(ma_gseas, function(g) g$metric_label %||% "?", character(1)))
+    info_panel("GSEA and its interpretation", sprintf(
+      "MetaboAnalyst's peaks GSEA, on the **same** EmpiricalCompounds and pathway sets as the ORA, using the **complete ranked EC list without a significance cutoff**. Each feature is scored by the %s; an EC's score is the **maximum** over its member features, which in mixed mode can come from both polarities. The test is MetaboAnalyst's fixed-permutation fgsea variant (%s permutations, minimum set size %s, seed %s). It reports a raw permutation p-value and its **Benjamini–Hochberg FDR**, computed over the pathways tested — GSEA is BH-adjusted, ORA Holm-adjusted, as in MetaboAnalyst; the two control different error rates. A pathway can have a GSEA signal without an ORA signal; ORA evidence is then never shown as its support. %s\n\n",
+      if (length(labels) == 1L) labels else paste0("statistic chosen per contrast (", paste(labels, collapse = "; "), ")"),
+      g1$params$n_perm %||% "?", g1$params$min_size %||% "?", g1$params$seed %||% "?",
+      g1$nes_note %||% ""))
+  } else {
+    cat("**GSEA** has no results in this report: either it was switched off (`gsea_enabled`), `fgsea` was unavailable, or no pathway passed its size filter. The console log for the run distinguishes them.\n\n")
+  }
+
+  info_panel("Empirical Compounds, candidate identities and annotation agreement", c(
+    "**Pathway Evidence** lists, for each pathway, the ECs that make up its ORA result — its significant ECs, the ones counted in `Sig.EC` — and every measured feature the engine grouped into each of them, significant or not. It is read from the engine's own results (its matched-feature table, the pathway table's significant ECs and the metabolic model) and changes no result.\n\n",
+    "**Pathway evidence rules.** A pathway's supporting ECs are the significant ECs the engine counted for it (`Supporting ECs` equals `Sig.EC`). A **pathway-matching candidate** is a *putative* identity: a compound matched in the EC that also belongs to this pathway in the metabolic model. Several candidates can qualify and all are listed; the engine writes no single identity per EC. Candidate names come from the model; candidate names and KEGG IDs are de-duplicated separately and are not paired one-to-one.\n\n",
+    "Because MetaboAnalyst merges the ECs of features that match several compounds, an EC can hold a feature matched only to compounds outside the pathway. That feature still belongs to the EC — and, if significant, can make the EC significant — but it did not match a pathway candidate itself; `Matched via pathway candidate` says which features did. So **features in overlap ECs** can include features that are not significant and features without their own pathway-candidate match. In mixed mode an EC can hold features of both polarities.\n\n",
+    "**Agreement** compares a feature's original annotation only with the pathway candidates **that feature itself matched** — by KEGG compound ID when both sides carry one, then by HMDB ID, otherwise by a conservative name/synonym comparison; never by m/z, formula or mass. It reads `Match`, `Conflict` or `Not assessed`; a feature without its own pathway-candidate match, or without a usable annotation, is `Not assessed`. An EmpiricalCompound rolls its features up into `Match`, `Conflict`, `Mixed` (both) and `Not assessed`. Conflicts are reported, never removed. **Annotation confidence** is whatever the dataset declares, a separate concept.\n\n",
+    "Counts come at two grains. `ECs ...` counts EmpiricalCompounds by their roll-up state. `feature-EC links ...` counts feature-EC links, so a feature in several ECs is counted once per EC; the count of distinct features is `Supporting features`.\n\n",
+    "**Feature values.** `Feature p-value` is the raw DE p-value the engine was given; features are not marked significant here. `Feature statistic (MetaboAnalyst input)` is the signed statistic the engine was given — the one its GSEA ranks on — and `Feature log2FC (DE)` is the log2 fold change from the DE results, a separate column; when no DE table can be matched to the contrast, or some features have no log2FC in it, the cells are empty and the Pathway Evidence tab says why.\n\n",
+    "**What the evidence cannot show.** Features dropped for a duplicate m/z, outside the m/z range, matched to no library compound, or whose only matches were removed (currency compounds, the primary-ion rule) appear in no EC. The run record counts the features dropped as out of range or as duplicate m/z, but does not name them. Evidence re-reads the metabolic model, so it is built only when that model's sha256 equals the one recorded for the analysis; otherwise the Pathway Evidence tab gives the reason.\n\n"))
+
+  gamma_state <- vapply(names(ma_infos), function(n) {
+    g <- ma_infos[[n]]$gamma
+    if (isTRUE(g$fitted)) sprintf("%s: fitted (shape %.4g, scale %.4g)", n, g$shape, g$scale)
+    else sprintf("%s: not fitted (%s) — Gamma is NA", n, g$error %||% "too few hits")
+  }, character(1))
+  devs <- if (length(ma_gseas) > 0) unique(unlist(lapply(ma_gseas, `[[`, "deviations"), use.names = FALSE)) else character(0)
+  info_panel("Parameters and reproducibility", c(
+    sprintf("- Engine: native R reimplementation of MetaboAnalyst's MS Peaks-to-Pathways mummichog, MetaboAnalystR `%s`; each step checked against that version's own output on synthetic reference data\n", substr(ma1$reference$commit %||% "398476ae2a0c996e390925fa62adc46b5ecde334", 1, 10)),
+    sprintf("- Ionization mode: %s\n", ma_mode),
+    sprintf("- ORA significant features: raw DE p ≤ %s\n", ma_cut),
+    sprintf("- Mass tolerance: %s ppm\n", ma_p$tolerance_ppm %||% ppm),
+    sprintf("- Primary-ion rule: %s\n", if (isTRUE(ma_p$force_primary_ion)) "on (an EC needs at least one primary ion: M+H, M+Na, M-H2O+H, M-H, M-2H or M-H2O-H)" else "off"),
+    sprintf("- Retention-time tolerance fraction: %s\n", ma_p$rt_frac %||% 0.02),
+    sprintf("- Permutations: %s (permutation i seeded 123 + i, MetaboAnalyst's seeds)\n", ma_p$n_permutations %||% n_perm),
+    sprintf("- Metabolic model: %s (version %s)\n", ma1$model$id %||% "?", ma1$model$version %||% "?"),
+    sprintf("- Gamma fit per contrast: %s\n", paste(gamma_state, collapse = "; ")),
+    if (length(ma_gseas) > 0) sprintf("- GSEA engine: MetaboAnalystR peaks GSEA (%s @ `%s`), fgsea %s; adjustment %s\n",
+                                      g1$reference$repo %||% "?", substr(g1$reference$commit %||% "?", 1, 10),
+                                      g1$params$fgsea_version %||% "?", g1$adjustment %||% "BH"),
+    if (length(devs) > 0) sprintf("- **GSEA deviations from the reference implementation:** %s\n", paste(devs, collapse = "; ")),
+    "- Gamma parameterization: MetaboAnalyst fits (scale, shape) and evaluates `1 - pgamma(1 - FET, shape, rate = <scale estimate>)`; this engine reproduces that exactly. fitdistrplus may warn about the standard errors of the fit; they are not used.\n",
+    sprintf("- fitdistrplus %s\n", ma1$fitdistrplus_version %||% "?"),
+    "- Row order and rounding are MetaboAnalyst's: rows ordered by Gamma (by FET when Gamma is unavailable), values rounded to 5 significant digits.\n",
+    "- The full MetaboAnalyst-format table, the matched features and the run record are written per contrast under `mummichog_pinned/<contrast>/metaboanalyst/`",
+    if (mm_has_workbook) sprintf("; a workbook with all contrasts is at `%s` (%s).\n", mm_workbook_rel, mm_workbook_note) else ".\n"))
+  cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123. Pang Z, Chong J, Zhou G, et al. MetaboAnalyst 5.0. Nucleic Acids Res. 2021;49(W1):W388-W396.*\n\n")
+} else {
 cat("**Mummichog pathway analysis.** [Mummichog](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) complements pathway enrichment based on identified metabolites by using LC–MS features **without requiring a confident metabolite identity for every feature**.\n\n")
 cat("Mummichog groups compatible LC–MS signals into **EmpiricalCompounds (ECs)**, links them to possible metabolite identities and metabolic pathways, and tests whether particular pathways receive more support than expected by chance. Each contrast is analysed independently using that contrast's differential-abundance results.\n\n")
 # Described from the sections that were built, not from the config switch.
@@ -2583,6 +2826,7 @@ cat("Counts come at two grains. `ECs ...` counts EmpiricalCompounds by their rol
 cat(sprintf("**Summary join.** A Mummichog pathway is compared with enrichment based on identified metabolites through its exact pathway ID in the metabolic model, matched to the same ID in the identified-metabolite pathway library — never by pathway name. A method counts as support at FDR < %g.\n\n",
             .MMC_SUMMARY_FDR))
 cat("</details>\n\n")
+}
 ```
 
 ```{r mummichog-per-contrast, results='asis', fig.width=11, fig.height=8}
@@ -2592,9 +2836,46 @@ cat("</details>\n\n")
 # the report used to show is lost. The ORA bubble is never shown under a GSEA
 # heading -- a contrast without GSEA gets the explanation instead of a
 # substituted plot.
-ora_p_note <- "Mummichog ORA reports empirical raw pathway p-values; no adjusted pathway p-value is reported."
+ora_p_note_python <- "Mummichog ORA reports empirical raw pathway p-values; no adjusted pathway p-value is reported."
+ora_p_note_ma <- "The ORA p-value is MetaboAnalyst's unadjusted Fisher exact test (FET) p-value (`ORA raw p (FET)` in the full table, which also gives EASE, Gamma and empirical p-values and their Holm-adjusted values: Holm, not BH/FDR)."
+
+# ---- Across contrasts -----------------------------------------------------------
+# A lookup of each contrast's existing results (06u), placed before the
+# contrast tabs. Nothing is tested or combined across contrasts.
+mummi_across <- build_mummichog_across_contrasts(mummi_sections)
+# Shown for more than one DE contrast: the python engine's per-polarity runs of
+# one contrast are not several contrasts.
+if (!is.null(mummi_across) && length(mummi_across$de_contrasts) > 1L) {
+  cat("\n## Across contrasts\n\n")
+  cat(sprintf("Pathways with **nominal evidence in at least two contrasts**, or **adjusted significance in at least one**, side by side. In each cell, **ORA Holm** or **GSEA FDR** means an adjusted p < %g (Holm for ORA, Benjamini–Hochberg for GSEA); **ORA nominal** or **GSEA nominal** means raw p < %g only — a hypothesis; **—** means a result without nominal evidence; **No result** means the pathway is in neither the ORA nor the GSEA results of that contrast.\n\n",
+              .MMC_SUMMARY_FDR, p_cut))
+  cat("**Recurring is not replicating:** a pathway that appears in several contrasts is not shown to change in the same direction there, nor to be supported by the same ECs or features. Nothing is tested across contrasts. Compare each contrast's **Pathway Evidence** to see which ECs and features carry it.\n\n")
+  aw <- mummi_across$wide
+  keep_rows <- mmc_across_report_rows(aw)
+  if (!any(keep_rows)) {
+    cat("No pathway has nominal evidence in more than one contrast or adjusted significance in any contrast.\n\n")
+  } else {
+    shown <- aw[keep_rows, c("Pathway", "Contrasts with adjusted evidence",
+                             "Contrasts with nominal evidence",
+                             mummi_across$contrasts), drop = FALSE]
+    names(shown) <- gsub("_vs_", " vs ", names(shown), fixed = TRUE)
+    print(htmltools::tagList(make_mm_dt(
+      shown, caption = "Pathways with nominal evidence in at least two contrasts, or adjusted significance in at least one",
+      pageLength = 25)))
+  }
+  info_panel("How this view is built", c(
+    "Each cell reads that contrast's own results — the same ORA and GSEA values as its Summary. Pathways are aligned on the metabolic model's pathway ID (by name only where a pathway has no ID). ",
+    "*Contrasts with adjusted evidence* counts contrasts where ORA Holm or GSEA FDR is below the threshold; *contrasts with nominal evidence* also counts those with only a raw p below the cutoff. ",
+    "ORA (Holm, family-wise) and GSEA (BH, false discovery rate) control different error rates, so their adjusted values are not interchangeable. ",
+    "No p-value is combined across contrasts, and NES sign is not shown because it is not a biological direction here.",
+    if (mm_has_workbook) sprintf(" For every pathway with each contrast's four p-values, see the **Across Contrasts** sheet of the workbook `%s` (%s).", mm_workbook_rel, mm_workbook_note),
+    "\n\n"))
+}
+
 for (contrast in names(mummi_sections)) {
   s     <- mummi_sections[[contrast]]
+  is_ma_section <- identical(s$engine, "metaboanalyst")
+  ora_p_note <- if (is_ma_section) ora_p_note_ma else ora_p_note_python
   label <- gsub("_vs_", " vs ", contrast, fixed = TRUE)
   cat(sprintf("\n## %s {.tabset}\n\n", label))
 
@@ -2612,9 +2893,21 @@ for (contrast in names(mummi_sections)) {
     sibs <- vapply(mummi_sections[same], function(x) x$polarity %||% NA_character_,
                    character(1))
     both <- all(c("positive", "negative") %in% sibs)
-    cat(sprintf("This tab covers **%s-ion features only**. The **Identified-metabolite support** column is **contrast-level evidence** from enrichment on identified metabolites across the **%s**; it is not specific to %s-ion features.%s\n\n",
-                pol, if (both) "full dataset (both polarities)" else "full dataset",
+    cat(sprintf("This tab covers **%s-ion features only**. The **%s** column is **contrast-level evidence** from enrichment on identified metabolites across the **%s**; it is not specific to %s-ion features.%s\n\n",
+                pol, if (is.data.frame(s$overview)) "Identified-metabolite enrichment" else "Identified-metabolite support",
+                if (both) "full dataset (both polarities)" else "full dataset",
                 pol, if (both) " It is the same in the positive- and negative-ion tabs." else ""))
+  }
+  # What entered the engine for this contrast, from its run record (06t).
+  ic <- s$input_counts
+  if (is.data.frame(ic) && !is.na(ic[["Features retained for Mummichog analysis"]])) {
+    # The cutoff this contrast was run with (its run record), else the config's.
+    ic_cut <- s$ma_info$params$p_cutoff %||% p_cut
+    cat(sprintf("**Input:** %s features retained for Mummichog analysis (out of %s DE features, after input filtering). Of these, %s have raw DE p ≤ %s and form the ORA significant feature list. GSEA does not use this cutoff; it ranks empirical compounds.\n\n",
+                format(ic[["Features retained for Mummichog analysis"]], big.mark = ","),
+                format(ic[["Features at DE (this contrast)"]], big.mark = ","),
+                format(ic[["ORA significant features (raw DE p ≤ cutoff)"]], big.mark = ","),
+                ic_cut))
   }
   if (is.null(s$summary)) {
     cat("The Summary could not be built for this contrast; the full results are under **Advanced / Downloads**.\n\n")
@@ -2625,11 +2918,38 @@ for (contrast in names(mummi_sections)) {
     if (!any(s$summary[["Nominal Mummichog signal"]])) {
       cat(sprintf("**No Mummichog pathway reached nominal p < %g in ORA or GSEA for this contrast.** The rows below are the top-ranked pathways, not significant results.\n\n", p_cut))
     }
+    # The reader-facing overview (06t) when the section has it: its first rows
+    # are the Summary's rows, relabelled. Sections without it keep the Summary.
+    summary_view <- if (is.data.frame(s$overview)) {
+      mmc_overview_display(utils::head(s$overview, .MMC_SUMMARY_TOP_N))
+    } else {
+      s$summary[, .MMC_SUMMARY_DISPLAY_COLS, drop = FALSE]
+    }
     # pageLength = 20 for this table only, so the whole top-20 fits one page.
-    print(htmltools::tagList(make_dt(
-      s$summary[, .MMC_SUMMARY_DISPLAY_COLS, drop = FALSE],
+    print(htmltools::tagList(make_mm_dt(
+      summary_view,
       caption = sprintf("Mummichog summary — %s", label),
       pageLength = .MMC_SUMMARY_TOP_N)))
+    if (is.data.frame(s$overview)) {
+      ora_legend <- if (is_ma_section) {
+        "<strong>ORA</strong>: Fisher's exact test (FET) raw p and its Holm adjustment, over the pathways in this contrast's ORA table. <em>No significant EC overlap</em>: no significant EC in the pathway, so it is not in the ORA table."
+      } else {
+        paste("<strong>ORA</strong>:", ora_p_note_python)
+      }
+      cat(sprintf(paste0(
+        "\n\n<p style='font-size:0.9em; color:#555;'>%s ",
+        "<strong>GSEA</strong>: raw p and Benjamini–Hochberg FDR. <em>Nominal</em> means raw p &lt; %g: a hypothesis, not a result that survives multiple testing.<br>",
+        "<strong>ORA overlap ECs</strong> (Sig.EC) and <strong>features in overlap ECs</strong> are shown only for pathways nominal in ORA, never for a GSEA-only pathway. %s See <strong>Pathway Evidence</strong>.</p>\n\n"),
+        ora_legend, p_cut,
+        if (is_ma_section) "The features include ones that are not significant and ones without their own pathway-candidate match." else
+          "The features include ones that are not significant."))
+      info_panel("How to read the Summary", c(
+        sprintf("Pathways are ranked by the smaller raw p-value of ORA and GSEA; the top %d are listed here. Every pathway is under **Advanced / Downloads**%s.\n\n", .MMC_SUMMARY_TOP_N,
+                if (mm_has_workbook) sprintf("; see also the **Pathway Overview** sheet of the workbook `%s` (%s)", mm_workbook_rel, mm_workbook_note) else ""),
+        sprintf("**Identified-metabolite enrichment** looks up the same pathway ID in this contrast's enrichment on identified metabolites (ORA, QEA, GSEA) and lists the methods with FDR < %g. *Not comparable*: no shared pathway ID. *Not in this contrast's identified-metabolite results*: in the shared library but not tested there.\n\n", .MMC_SUMMARY_FDR),
+        "**Interpretation** reads those columns, never decides them: *Also supported by identified-metabolite enrichment* means a nominal Mummichog pathway is also below the FDR threshold there — consistent results from two analyses, not a confirmation of each other; *Mummichog-only hypothesis* means a nominal Mummichog pathway without that support; *No nominal Mummichog signal* means ranked here only.\n\n",
+        "**Annotation agreement (ECs)** counts the pathway's overlap ECs by how their features' dataset annotations compare with the candidate identities; see **Pathway Evidence**.\n\n"))
+    } else {
     cat(sprintf(paste0(
       "\n\n<p style='font-size:0.9em; color:#555;'>",
       "<strong>Nominal</strong> means unadjusted p < %g. %s Mummichog GSEA FDR is the Benjamini–Hochberg adjustment.<br>",
@@ -2640,6 +2960,10 @@ for (contrast in names(mummi_sections)) {
       "A <strong>Mummichog-only candidate</strong> is a pathway-level hypothesis, not a confirmed finding.<br>",
       "<strong>Supporting evidence</strong> counts the ECs and distinct measured features behind a nominal ORA result; see <strong>Pathway Evidence</strong>.</p>\n\n"),
       p_cut, ora_p_note, .MMC_SUMMARY_FDR))
+    }
+  }
+  if (!is.null(s$evidence_note)) {
+    cat("**Pathway evidence is not available for this contrast**, so the evidence and annotation-agreement columns are not filled; the **Pathway Evidence** tab gives the reason. The ORA and GSEA results are unaffected.\n\n")
   }
 
   # ---- ORA plot ---------------------------------------------------------------
@@ -2667,6 +2991,8 @@ for (contrast in names(mummi_sections)) {
       # found nothing when its table says otherwise.
       cat("GSEA ran for this contrast but its scatter could not be rendered. The results themselves are unaffected — see the full GSEA table under **Advanced / Downloads**.\n\n")
     }
+  } else if (is_ma_section) {
+    cat("No GSEA results for this contrast: either GSEA was switched off or unavailable, or no pathway passed its size filter. The ORA analysis for this contrast is shown under the **ORA plot** tab.\n\n")
   } else {
     # Same wording as the methodology block: a NULL result does not say which
     # of the two it was, so the tab names both.
@@ -2681,8 +3007,23 @@ for (contrast in names(mummi_sections)) {
     cat("\n\n### Pathway Evidence\n\n")
     cat("This section shows **which measured features support each Mummichog pathway** and how well the metabolite identities used by Mummichog agree with this dataset's existing annotations.\n\n")
     cat("For each EmpiricalCompound (EC), a **pathway-matching candidate** is a putative metabolite identity that links that EC to the pathway. Because LC–MS features can match more than one metabolite, several candidates may be shown.\n\n")
-    cat("**Annotation agreement** compares these Mummichog candidates with the dataset annotation: **Match** means they agree; **Conflict** means they disagree; **Mixed** means the EC contains both outcomes; and **Not assessed** means there is not enough annotation information to compare.\n\n")
-    cat("These agreement labels are provided only to help interpret the pathway evidence. They do **not** change the Mummichog enrichment results or remove conflicting features. **Supporting features** is the number of distinct measured LC–MS features underlying the pathway evidence.\n\n")
+    if (is_ma_section) {
+      # This engine compares each feature only with the candidates it matched
+      # itself, so "Not assessed" has a second cause the python text lacks.
+      cat("**Annotation agreement** compares each feature's dataset annotation with the pathway candidates **that feature itself matched**: **Match** means they agree; **Conflict** means they disagree; **Mixed** means the EC contains both outcomes; and **Not assessed** means there is not enough annotation information to compare, or the feature matched no pathway candidate itself (see `Matched via pathway candidate`).\n\n")
+    } else {
+      cat("**Annotation agreement** compares these Mummichog candidates with the dataset annotation: **Match** means they agree; **Conflict** means they disagree; **Mixed** means the EC contains both outcomes; and **Not assessed** means there is not enough annotation information to compare.\n\n")
+    }
+    info_panel("Empirical Compounds, candidate identities and annotation agreement", c(
+      "These agreement labels only help interpret the evidence: they do **not** change the Mummichog results or remove conflicting features. ",
+      "**Supporting features** is the number of distinct measured LC–MS features in the pathway's overlap ECs",
+      if (is_ma_section) ", including features that are not significant and features without their own pathway-candidate match (`Matched via pathway candidate`)" else "",
+      ". One EC is not one metabolite, and the same EC and feature can appear under several pathways and contrasts, so counts are not additive.\n\n"))
+    # Blank log2FC cells are explained where the reader meets them.
+    if (!is.null(s$evidence_log2fc_note)) {
+      cat(sprintf("<p><strong>Feature log2FC (DE) is incomplete for this contrast.</strong> %s</p>\n\n",
+                  htmltools::htmlEscape(s$evidence_log2fc_note)))
+    }
 
     # Summary pathways whose evidence the Summary shows (nominal in ORA, with an
     # evidence row), in Summary order -- read from the Summary itself so the two
@@ -2702,6 +3043,13 @@ for (contrast in names(mummi_sections)) {
                             length(shown), length(pws)) else ""))
       for (pw in shown) render_pathway_evidence(s$evidence, pw)
     }
+  } else if (!is.null(s$evidence_note)) {
+    # The tab stays, with the reason, so a contrast never loses its evidence
+    # without saying why.
+    cat("\n\n### Pathway Evidence\n\n")
+    cat("**Pathway evidence could not be built for this contrast.** The Mummichog ORA and GSEA results above are unaffected; only the evidence tables are missing.\n\n")
+    cat(sprintf("<p><strong>Reason:</strong> %s</p>\n\n",
+                htmltools::htmlEscape(s$evidence_note)))
   }
 
   # ---- Advanced / Downloads ---------------------------------------------------
@@ -2718,12 +3066,30 @@ for (contrast in names(mummi_sections)) {
   cat(sprintf("Complete result tables for this contrast. Each table has CSV / Excel buttons; the complete files are also written to `metabolomics/mummichog_pinned/` with the suffix `_%s` (%s, each as TSV and CSV).\n\n",
               s$slug %||% contrast,
               paste0("`", export_stems, "`", collapse = ", ")))
+  if (mm_has_workbook && is.data.frame(s$overview)) {
+    cat(sprintf("A workbook with every contrast, pathway, EC and feature is at `%s` (%s).\n\n",
+                mm_workbook_rel, mm_workbook_note))
+  }
 
-  if (!is.null(s$table)) {
+  if (is.data.frame(s$overview)) {
+    advanced_block("All pathways (overview)", function() {
+      cat("Every pathway of this contrast, in the Summary's ranking, with each test's raw and adjusted p-values as numbers.\n\n")
+      print(htmltools::tagList(
+        make_mm_dt(s$overview, caption = sprintf("Mummichog pathway overview — %s", label))))
+    })
+  }
+
+  # The detailed ORA table names every engine column for what it holds (06t);
+  # sections without it show the ORA table as before.
+  ora_full <- if (is.data.frame(s$ora_detail)) s$ora_detail else s$table
+  if (!is.null(ora_full)) {
     advanced_block("Full Mummichog ORA table", function() {
       cat(ora_p_note, "\n\n")
+      if (is_ma_section && is.data.frame(s$ora_detail)) {
+        cat("The `Putative compound matches` (`Hits.*`) columns count model compounds matched by m/z: alternative identities for the same signals, not identified metabolites.\n\n")
+      }
       print(htmltools::tagList(
-        make_dt(s$table, caption = sprintf("Mummichog Pathway Enrichment — %s", label))))
+        make_mm_dt(ora_full, caption = sprintf("Mummichog Pathway Enrichment — %s", label))))
     })
   }
 
@@ -2746,7 +3112,7 @@ for (contrast in names(mummi_sections)) {
                     paste(s$gsea$es_fallback_reasons, collapse = "; ")))
       }
       print(htmltools::tagList(
-        make_dt(s$gsea$table,
+        make_mm_dt(s$gsea$table,
                 caption = sprintf("Mummichog GSEA (MS peaks-to-pathways) — %s", label))))
     })
   }
@@ -2755,15 +3121,19 @@ for (contrast in names(mummi_sections)) {
     advanced_block("Pathway evidence summary (all pathways)", function() {
       cat("`ECs ...` columns count EmpiricalCompounds by their roll-up state; `feature-EC links ...` columns count feature-EC links, so a feature in several ECs is counted once per EC. `Supporting features` counts distinct measured features.\n\n")
       print(htmltools::tagList(
-        make_dt(s$evidence$pathway_summary,
+        make_mm_dt(s$evidence$pathway_summary,
                 caption = sprintf("Pathway evidence summary — %s", label))))
     })
     advanced_block("EmpiricalCompound evidence (all pathways)", function() {
       print(htmltools::tagList(
-        make_dt(s$evidence$ec_table,
+        make_mm_dt(s$evidence$ec_table,
                 caption = sprintf("EmpiricalCompound evidence — %s", label))))
     })
     advanced_block("Feature-level evidence", function() {
+      if (!is.null(s$evidence_log2fc_note)) {
+        cat(sprintf("<p><strong>Feature log2FC (DE) is incomplete for this contrast.</strong> %s</p>\n\n",
+                    htmltools::htmlEscape(s$evidence_log2fc_note)))
+      }
       ft <- s$evidence$feature_table
       if (nrow(ft) > MUMMI_FEATURE_PREVIEW_ROWS) {
         cat(sprintf("Showing the first %d of %d feature-EC rows; the complete table is exported as `mummichog_evidence_features_%s` (TSV / CSV).\n\n",
@@ -2771,7 +3141,7 @@ for (contrast in names(mummi_sections)) {
         ft <- utils::head(ft, MUMMI_FEATURE_PREVIEW_ROWS)
       }
       print(htmltools::tagList(
-        make_dt(ft, caption = sprintf("Feature-level evidence — %s", label))))
+        make_mm_dt(ft, caption = sprintf("Feature-level evidence — %s", label))))
     })
   }
 
@@ -2809,22 +3179,22 @@ if (!is.null(enrichment_res)) {
   )
   if (!is.null(enrichment_res$qea))
     enrich_rows <- rbind(enrich_rows, data.frame(
-      File = "enrichment_qea_results.csv",
+      File = "Enrichment/QEA/combined/all_samples/results.tsv",
       Description = "QEA pathway enrichment results table",
       stringsAsFactors = FALSE))
   if (!is.null(enrichment_res$ssgsea))
     enrich_rows <- rbind(enrich_rows, data.frame(
-      File = "enrichment_ssgsea_results.csv",
+      File = "Enrichment/ssGSEA/combined/all_samples/results.tsv",
       Description = "ssGSEA pathway enrichment results and scores",
       stringsAsFactors = FALSE))
   if (!is.null(enrichment_res$ora))
     enrich_rows <- rbind(enrich_rows, data.frame(
-      File = "enrichment_ora_results.csv",
+      File = "Enrichment/ORA/combined/contrasts/*/de/results.tsv",
       Description = "ORA pathway enrichment results (Fisher's exact test)",
       stringsAsFactors = FALSE))
   if (!is.null(enrichment_res$gsea))
     enrich_rows <- rbind(enrich_rows, data.frame(
-      File = "enrichment_gsea_results.csv",
+      File = "Enrichment/GSEA/combined/ranking_by_fc/*/results.tsv",
       Description = "GSEA pathway enrichment results (fgsea)",
       stringsAsFactors = FALSE))
   if (nrow(enrich_rows) > 0) files_tbl <- rbind(files_tbl, enrich_rows)
@@ -2866,6 +3236,12 @@ if (any(vapply(mummi_sections, function(s) !is.null(s$summary), logical(1)))) {
   files_tbl <- rbind(files_tbl, data.frame(
     File = "metabolomics/mummichog_pinned/mummichog_summary_*",
     Description = "Mummichog Summary per contrast: the top-ranked pathways by min(ORA p, GSEA p), including rows without a nominal signal (flagged), with identified-metabolite support, contribution and evidence counts (TSV/CSV)",
+    stringsAsFactors = FALSE))
+}
+if (mm_has_workbook && any(vapply(mummi_sections, function(s) is.data.frame(s$overview), logical(1)))) {
+  files_tbl <- rbind(files_tbl, data.frame(
+    File = mm_workbook_rel,
+    Description = paste0("Mummichog workbook, every contrast: README, Across Contrasts, Pathway Overview (all pathways), ORA and GSEA results, EC and feature evidence (", mm_workbook_note, ")"),
     stringsAsFactors = FALSE))
 }
 if (has_gsea) {

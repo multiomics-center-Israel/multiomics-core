@@ -31,30 +31,6 @@ de_integration_column_keys <- function() {
 }
 
 
-#' Check that a config block is a map holding only known keys
-#'
-#' A misspelt key is dropped without a word and its default used instead, so
-#' every block of this mode's config refuses keys it does not read.
-#'
-#' @param x The block, or NULL when absent.
-#' @param known Keys the block may hold.
-#' @param at Config path of the block, for the error message.
-#' @return \code{x}, invisibly.
-.check_dei_keys <- function(x, known, at) {
-    if (is.null(x)) return(invisible(x))
-    if (!is.list(x) || (length(x) > 0 &&
-                        (is.null(names(x)) || any(is.na(names(x)) | !nzchar(trimws(names(x))))))) {
-        stop(at, " must be a map of settings (key: value).", call. = FALSE)
-    }
-    bad <- setdiff(names(x), known)
-    if (length(bad) > 0) {
-        stop(at, " has unknown key(s): ", paste(bad, collapse = ", "), ". Known: ",
-             paste(known, collapse = ", "), ".", call. = FALSE)
-    }
-    invisible(x)
-}
-
-
 #' Check one set of hit settings
 #'
 #' The global \code{hits} and every layer's override merged onto it go
@@ -100,7 +76,7 @@ de_integration_column_keys <- function() {
 #' validate_de_integration_config(cfg)$hits$p_cutoff   # 0.05
 validate_de_integration_config <- function(cfg) {
     where <- "modes.de_integration"
-    .check_dei_keys(cfg, c("layers", "comparisons", "hits", "concordance"), where)
+    assert_known_keys(cfg, c("layers", "comparisons", "hits", "concordance"), where)
     layers <- cfg$layers
     if (!is.list(layers) || length(layers) < 2) {
         stop(where, ".layers needs at least two layers to compare; found ",
@@ -112,9 +88,9 @@ validate_de_integration_config <- function(cfg) {
     for (i in seq_along(layers)) {
         ly <- layers[[i]]
         at <- sprintf("%s.layers[[%d]]", where, i)
-        .check_dei_keys(ly, c("name", "label", "omics_type", "format", "path", "id_col",
-                              "contrast", "columns", "observed", "annotation_file",
-                              "hits"), at)
+        assert_known_keys(ly, c("name", "label", "omics_type", "format", "path", "id_col",
+                                "contrast", "columns", "observed", "annotation_file",
+                                "hits"), at)
         nm <- ly$name
         if (!is.character(nm) || length(nm) != 1 || !grepl("^[a-z][a-z0-9_]*$", nm)) {
             stop(at, ".name must be one lower-case word (letters, digits, '_', ",
@@ -170,8 +146,8 @@ validate_de_integration_config <- function(cfg) {
             cols <- ly$columns %||% list()
             # A key present but blank (YAML "padj:") or misspelt would otherwise
             # be dropped, and the reader would fall back to BH or cutoffs.
-            .check_dei_keys(cols, de_integration_column_keys(),
-                            sprintf("%s ('%s').columns", at, nm))
+            assert_known_keys(cols, de_integration_column_keys(),
+                              sprintf("%s ('%s').columns", at, nm))
             blank <- names(cols)[!vapply(cols, .dei_is_name, logical(1))]
             if (length(blank) > 0) {
                 stop(at, " ('", nm, "').columns.", paste(blank, collapse = ", columns."),
@@ -201,8 +177,8 @@ validate_de_integration_config <- function(cfg) {
         if (!is.null(ly$observed)) {
             obs <- ly$observed
             obs_at <- sprintf("%s ('%s').observed", at, nm)
-            .check_dei_keys(obs, c("matrix", "samplesheet", "sample_col",
-                                   "contrasts_file", "id_col"), obs_at)
+            assert_known_keys(obs, c("matrix", "samplesheet", "sample_col",
+                                     "contrasts_file", "id_col"), obs_at)
             need <- c("matrix", "samplesheet", "sample_col", "contrasts_file")
             gap <- need[!need %in% names(obs)]
             if (length(gap) > 0) {
@@ -224,7 +200,7 @@ validate_de_integration_config <- function(cfg) {
     for (j in seq_along(comps)) {
         cp <- comps[[j]]
         at <- sprintf("%s.comparisons[[%d]]", where, j)
-        .check_dei_keys(cp, c("name", "members", "flip"), at)
+        assert_known_keys(cp, c("name", "members", "flip"), at)
         if (!.dei_is_name(cp$name)) {
             stop(at, ".name is required: one label that is not blank.", call. = FALSE)
         }
@@ -275,7 +251,7 @@ validate_de_integration_config <- function(cfg) {
     cfg$comparisons <- comps
 
     hit_keys <- c("use_table_flag", "p_cutoff", "use_adjusted", "linear_fc_cutoff")
-    .check_dei_keys(cfg$hits, hit_keys, paste0(where, ".hits"))
+    assert_known_keys(cfg$hits, hit_keys, paste0(where, ".hits"))
     hits <- cfg$hits %||% list()
     hits$use_table_flag   <- hits$use_table_flag %||% TRUE
     hits$p_cutoff         <- hits$p_cutoff %||% 0.05
@@ -290,11 +266,11 @@ validate_de_integration_config <- function(cfg) {
         ov <- cfg$layers[[i]]$hits
         if (is.null(ov)) next
         at <- sprintf("%s.layers[[%d]] ('%s').hits", where, i, cfg$layers[[i]]$name)
-        .check_dei_keys(ov, hit_keys, at)
+        assert_known_keys(ov, hit_keys, at)
         .check_dei_hits(utils::modifyList(hits, ov), at)
     }
 
-    .check_dei_keys(cfg$concordance, "well_observed_min", paste0(where, ".concordance"))
+    assert_known_keys(cfg$concordance, "well_observed_min", paste0(where, ".concordance"))
     conc <- cfg$concordance %||% list()
     conc$well_observed_min <- conc$well_observed_min %||% 2
     w <- conc$well_observed_min

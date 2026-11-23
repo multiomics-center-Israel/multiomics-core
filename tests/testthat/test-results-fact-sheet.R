@@ -436,3 +436,50 @@ test_that("F6 missing values in the normalised matrix do not silently drop the s
     expect_false(grepl("NA", pc$value))
     expect_false(any(grepl("NA", s$value[s$claim == "pearson correlation between libraries"])))
 })
+
+# write_rnaseq_datasets_legacy() names the table rna_norm_<method>.tsv and never
+# removes older ones, so a rerun with another method leaves a stale table that
+# sorts first. The sheet must read the one for the method that ran.
+write_stale_norm_run <- function(root) {
+    write_run(root, "contrast")              # leaves rna_norm_TMMlogCPM.tsv (stale)
+    ds <- file.path(root, "Datasets")
+    vst <- data.frame(gene = paste0("g", 1:4),
+                      S_1 = c(6.1, 3.2, 1.0, 5.3), S_2 = c(1.2, 5.9, 4.4, 2.0),
+                      N_1 = c(4.8, 1.1, 6.2, 3.3), N_2 = c(2.5, 4.0, 1.7, 6.6),
+                      check.names = FALSE)
+    write.table(vst, file.path(ds, "rna_norm_VST.tsv"), sep = "\t",
+                quote = FALSE, row.names = FALSE)
+    root
+}
+
+test_that("F6 a stale normalized table from an earlier run is not read", {
+    root <- write_stale_norm_run(file.path(withr::local_tempdir(), "rna"))
+    pre_vst <- list(meta = fixture_meta(), info = list(expr_work_method = "VST"))
+    build <- function() build_rnaseq_fact_sheet(root, fixture_config(), pre = pre_vst,
+                                                inputs = list(contrasts = fixture_contrasts()))
+    s <- build()
+    pc <- s[s$claim == "variance explained by PC1 and PC2", ]
+    expect_equal(nrow(pc), 1)
+    expect_equal(pc$source_file, "Datasets/rna_norm_VST.tsv (recomputed)")
+
+    # The values, not just the label, come from the VST table: removing the
+    # stale table changes nothing.
+    cor_claim <- "pearson correlation between libraries"
+    expect_true(cor_claim %in% s$claim)
+    file.remove(file.path(root, "Datasets", "rna_norm_TMMlogCPM.tsv"))
+    s_only <- build()
+    expect_equal(s$value[s$claim == cor_claim], s_only$value[s_only$claim == cor_claim])
+    expect_equal(pc$value, s_only$value[s_only$claim == "variance explained by PC1 and PC2"])
+})
+
+test_that("F6 with several normalized tables and no record of the method, none is read", {
+    root <- write_stale_norm_run(file.path(withr::local_tempdir(), "rna"))
+    expect_warning(
+        s <- build_rnaseq_fact_sheet(root, fixture_config(),
+                                     pre = list(meta = fixture_meta()),
+                                     inputs = list(contrasts = fixture_contrasts())),
+        "no record of which method ran"
+    )
+    expect_false(any(grepl("rna_norm_", s$source_file)))
+    expect_false("variance explained by PC1 and PC2" %in% s$claim)
+})

@@ -32,7 +32,7 @@ test_that("mod_mummichog_pinned rejects a bad params.seed before any work", {
   config <- list(
     params = list(seed = 1.5),
     modes  = list(metabolomics = list(enrichment = list(
-      mummichog = list(enabled = TRUE))))
+      mummichog = list(enabled = TRUE, engine = "python"))))
   )
   expect_error(
     mod_mummichog_pinned(pre = NULL, de_res = NULL, config = config,

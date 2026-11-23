@@ -167,13 +167,14 @@ We work with biological data. Some of it may be unpublished, patient-associated,
 
 ---
 
-## Running R — you don't, we do
+## Running R
 
-- **Never run R.** Not `R`, not `Rscript`, not the test suite, not `tar_validate()`, not a one-liner to check what a function returns.
-- **Never install R or an R package.** Not `install.packages()`, not a system package manager, not into a scratch library. A missing package is a reason to hand the check over, not to go and fetch it.
-- **When you need a result from R, write the commands and ask us to run them.** Give a block we can paste, say what you expect to see, and wait for the answer before continuing.
+- **You may run R when it is already installed in the developer's own project environment** (their machine, their `renv` library): `Rscript`, the test suite, `tar_validate()`, a one-liner to check what a function returns. A developer can opt out in their personal `CLAUDE.md` (`~/.claude/CLAUDE.md` or `CLAUDE.local.md`); if they do, follow it.
+- **Never install R or an R package.** Not `install.packages()`, not a system package manager, not into a scratch library. If R or a package is missing (as in cloud sessions), that is a reason to hand the check over, not to go and fetch it.
+- **When you can't run it, write the commands and ask us to run them.** Give a block we can paste, say what you expect to see, and wait for the answer before continuing.
+- Running R does not lift the other rules: still no `tar_make()` or `tar_destroy()` unless asked, no `renv::snapshot()`, and no printing data values.
 
-**Why:** your environment is not the one this pipeline runs in. Different R version, no Bioconductor packages, and options like `keep.source` differ from an interactive session. A green result there can hide a failure we would hit, and a red one can be an artefact of your sandbox — we have had both. Running it yourself does not save a round trip, it adds one.
+**Why not install it yourself:** a sandbox is not the environment this pipeline runs in. Different R version, no Bioconductor packages, and options like `keep.source` differ from an interactive session. A green result there can hide a failure we would hit, and a red one can be an artefact of your sandbox — we have had both.
 
 This applies to verification claims too. If you could not run something, **say so plainly** in the PR body and leave the checklist box unticked, rather than wording it so it reads as checked. Checks that need no R are still yours to do and worth doing: re-reading the diff, brace balance, grepping for a symbol, confirming a function is defined once.
 
@@ -258,7 +259,7 @@ This protects the user from autopilot mistakes while not blocking them when they
 
 Your own reading of a diff is not the bar. A PR is ready to merge when **CI is green and Codex returns with no findings, both on the head you last pushed** — not before.
 
-This is the same reasoning as *Running R — you don't, we do*: it is a check you cannot perform on yourself, so hand it over and wait for the answer.
+This is the same reasoning as handing over an R check you cannot run: it is a check you cannot perform on yourself, so hand it over and wait for the answer.
 
 **Read the review threads, not the summary.** Codex posts a summary comment *and* inline threads. The summary has said "Didn't find any major issues" on a commit that carried three inline P2 findings. When they disagree, the threads are the review.
 

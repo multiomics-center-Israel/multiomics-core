@@ -95,6 +95,7 @@ in the lowest layer that fits its meaning; don't move omics-specific logic into
 | `10_organism_detection.R`, `11_annotation.R` | Organism detection and gene annotation |
 | `15_user_summary.R`, `16_pptx_helpers.R`, `de_summary_counts.R`, `de_shrinkage_check.R`, `results_fact_sheet.R` | Reporting helpers and result sanity checks |
 | `18_targets_store.R` | The per-project `{targets}` store that `run.R` uses |
+| `19_batch_correction.R` | Batch correction of a log-scale matrix for display and clustering (`correct_batch_combat()`, `correct_batch_limma()`), with a confounding check |
 
 ### `R/domain/<omics>/`
 

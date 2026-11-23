@@ -189,12 +189,52 @@ rna_cfg <- cfg$modes$rna
 # filtering config keys.
 rna_filt <- describe_rna_filtering(params$rna_info, rna_cfg$filtering)
 
-# The normalization that produced expr_work, as recorded at runtime: a VST that
-# fails falls back to TMMlogCPM, so the configured method can be wrong. Other
-# recorded values (preprocessed input, or no record) keep the configured wording.
+# Gene counts and the input they belong to, as preprocess_rna() recorded them
+# for the input it actually used. Not re-read from files$counts: with files$txi
+# also set, that key can name a file the run never used.
+rna_gene_n <- rna_recorded_gene_counts(params$rna_info)
+rna_input_src <- params$rna_info$input_source
+
+# The normalization that produced expr_work, as recorded at runtime. Which
+# method to report is decided by resolve_rna_norm_method() below, the resolver
+# the pipeline summary, PowerPoint and commentary also use.
 rna_norm_ran <- params$rna_info$expr_work_method
-rna_norm_cfg <- rna_cfg$normalization$method %||% "TMMlogCPM"
-rna_norm_method <- if (isTRUE(rna_norm_ran %in% c("TMMlogCPM", "VST"))) rna_norm_ran else rna_norm_cfg
+
+# write_rnaseq_datasets_legacy() names the normalized table after the method
+# that produced expr_work (rna_norm_<method>.tsv), so without params$rna_info a
+# sole table's name is the runtime record: read the method from it, so the
+# method, the labels and the values shown all come from the same run. With
+# several tables (reruns with different methods) nothing says which belongs to
+# these results; show none, and say why in the report (setup-chunk warnings are
+# not rendered).
+rna_norm_notice <- NULL
+if (is.null(rna_norm_ran)) {
+    rna_norm_found <- list.files(datasets_dir, pattern = "^rna_norm_.*\\.tsv$")
+    if (length(rna_norm_found) == 1) {
+        rna_norm_ran <- sub("^rna_norm_(.*)\\.tsv$", "\\1", rna_norm_found)
+    } else if (length(rna_norm_found) > 1) {
+        rna_norm_notice <- sprintf(paste0(
+            "Normalized expression is not shown: Datasets/ holds %d normalized tables (%s) ",
+            "and this report has no record of which normalization produced these results. ",
+            "Re-render the report from the pipeline, or remove the tables from earlier runs."),
+            length(rna_norm_found), paste(rna_norm_found, collapse = ", "))
+    }
+}
+rna_norm_res <- resolve_rna_norm_method(list(expr_work_method = rna_norm_ran), rna_cfg$normalization)
+rna_norm_cfg <- rna_norm_res$configured
+rna_norm_method <- rna_norm_res$method
+
+# Label for the values in expr_work (axis titles, captions). Preprocessed input
+# was not normalized here, so it must not borrow the configured method's name.
+rna_norm_label <- if (identical(rna_norm_method, "preprocessed")) "preprocessed input" else rna_norm_method
+
+# Read that exact name: a pattern match could pick up a table left behind by an
+# earlier run with another method.
+rna_norm_file <- if (!is.null(rna_norm_ran)) {
+    file.path(datasets_dir, sprintf("rna_norm_%s.tsv", rna_norm_ran))
+} else {
+    NA_character_
+}
 
 # The transformation behind the QC plots, from the same resolver the QC module
 # used, read against what ran (params$rna_info), not the configured method.
@@ -272,6 +312,16 @@ cat('<div style="background: #eef6ff; border: 1px solid #b8d4f0; border-radius: 
 </div>\n')
 ```
 
+```{r project-overview, results='asis', echo=FALSE}
+# project.user_notes, as documented in the config template. No notes, no
+# section; line breaks in a multi-line note are kept (wrap_notes_html()).
+project_overview_html <- project_notes_html(cfg$project$user_notes)
+if (!is.null(project_overview_html)) {
+    cat("# Project Overview\n\n")
+    cat(project_overview_html, "\n\n")
+}
+```
+
 # Technical Summary
 
 ```{r technical-summary, results='asis', echo=FALSE}
@@ -346,15 +396,21 @@ norm_desc <- if (identical(norm_method, "VST")) {
     sprintf(paste0("edgeR TMM scaling with log2-CPM transformation ",
                    "(prior.count = %s, in read units scaled by library size)"), prior_ct)
 }
+# Preprocessed input was not normalized here, so no method is claimed for it.
+norm_sentence <- if (identical(norm_method, "preprocessed")) {
+    "The input was preprocessed upstream and was not normalized by the pipeline."
+} else {
+    sprintf("Normalization was performed using %s.", norm_desc)
+}
 
 cat(sprintf(
     paste0(
-        "%s Normalization was performed using %s. ",
+        "%s %s ",
         "Differential expression was tested using %s (%s test, %s mode). ",
         "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
     ),
     rna_filt$methods,
-    norm_desc,
+    norm_sentence,
     toupper(de_method), "Wald", deseq_mode,
     p_label, format(p_cut, nsmall = 2), fc_cut,
     p_corr
@@ -428,6 +484,21 @@ proj <- data.frame(
 kable(proj, col.names = c("Parameter", "Value"))
 ```
 
+## Input Data
+
+```{r params-input, results='asis'}
+# The input preprocess_rna() actually used (params$rna_info$input_source), not
+# the keys set in the config: several can be set, and only one is used.
+if (is.null(rna_input_src)) {
+    cat("The expression input this run used is not recorded for this report.\n\n")
+} else {
+    cat(sprintf("**Expression input used:** %s.\n\n", rna_input_src$description))
+    if (!is.null(rna_input_src$note)) {
+        cat(sprintf("> **Note:** %s\n\n", rna_input_src$note))
+    }
+}
+```
+
 ## Experimental Design
 
 ```{r params-design}
@@ -457,10 +528,12 @@ settings <- data.frame(
     "Clustering Enabled"
   ),
   Value = c(
-    if (!identical(rna_norm_method, rna_norm_cfg)) {
+    if (isTRUE(rna_norm_res$fell_back)) {
         sprintf("%s (%s was configured and failed)", rna_norm_method, rna_norm_cfg)
-    } else rna_cfg$normalization$method %||% "N/A",
-    if (identical(rna_norm_method, "VST")) "not used (VST)" else prior_count,
+    } else rna_norm_res$label,
+    if (identical(rna_norm_method, "VST")) "not used (VST)"
+    else if (identical(rna_norm_method, "preprocessed")) "not used (preprocessed input)"
+    else prior_count,
     rna_filt$short,
     rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
     rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
@@ -523,19 +596,7 @@ cat("\n\n")
 # Executive Summary
 
 ```{r executive-summary, results='asis', echo=FALSE}
-# Compute gene counts early (also used by filter-stats section later)
-raw_counts_file_exec <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
-filt_counts_file_exec <- file.path(datasets_dir, "rna_counts_filtered.tsv")
-n_genes_raw <- NA
-n_genes_filt <- NA
-# `files$counts` is NULL for tximport input (files$txi); `%||% ""` keeps nzchar()
-# length-1 so the `if` does not error with a zero-length/NA condition.
-if (nzchar(rna_cfg$files$counts %||% "") && file.exists(raw_counts_file_exec) && !dir.exists(raw_counts_file_exec)) {
-    n_genes_raw <- nrow(read.csv(raw_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
-}
-if (file.exists(filt_counts_file_exec) && !dir.exists(filt_counts_file_exec)) {
-    n_genes_filt <- nrow(read.delim(filt_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
-}
+n_genes_filt <- rna_gene_n$after
 
 exec_summary_path <- file.path(run_dir, "rna", "executive_summary.md")
 exec_available <- file.exists(exec_summary_path)
@@ -629,19 +690,8 @@ cat("</div>\n")
 
 ```{r technical-metadata-table-rna, results='asis'}
 # Technical metadata table — what ran, and gene counts before/after filtering.
-.tm_n_before <- if (!is.null(raw_counts <- tryCatch({
-    f <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
-    if (nzchar(rna_cfg$files$counts %||% "") && file.exists(f) && !dir.exists(f)) {
-        read.csv(f, stringsAsFactors = FALSE, check.names = FALSE)
-    } else NULL
-}, error = function(e) NULL))) nrow(raw_counts) else NA_integer_
-
-.tm_n_after <- if (!is.null(filt_counts <- tryCatch({
-    f <- file.path(datasets_dir, "rna_counts_filtered.tsv")
-    if (file.exists(f) && !dir.exists(f)) {
-        read.delim(f, stringsAsFactors = FALSE, check.names = FALSE)
-    } else NULL
-}, error = function(e) NULL))) nrow(filt_counts) else NA_integer_
+.tm_n_before <- rna_gene_n$before
+.tm_n_after  <- rna_gene_n$after
 
 .tm_steps <- list(
     list(label = "Filtering",
@@ -694,24 +744,24 @@ Counts before and after the gene filter described under *Analysis Parameters →
 (`r rna_filt$short`).
 
 ```{r filter-stats}
-# Read raw and filtered counts to get gene numbers
-raw_counts_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
-filt_counts_file <- file.path(datasets_dir, "rna_counts_filtered.tsv")
-
-n_genes_raw <- NA
-n_genes_filt <- NA
+# Gene numbers as the run recorded them (rna_gene_n, setup chunk).
+n_genes_raw <- rna_gene_n$before
+n_genes_filt <- rna_gene_n$after
 raw_counts <- NULL
 filt_counts <- NULL
 
-# `files$counts` is NULL for tximport input (files$txi); `%||% ""` keeps nzchar()
-# length-1 so the `if` does not collapse to NA / zero-length and error.
-if (nzchar(rna_cfg$files$counts %||% "") && file.exists(raw_counts_file) && !dir.exists(raw_counts_file)) {
-    raw_counts <- read.csv(raw_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
-    n_genes_raw <- nrow(raw_counts)
+# The "before" histogram needs the unfiltered matrix, which only exists on
+# disk as the input file. Read it only when the run is recorded to have used
+# files$counts as a raw count matrix, so it never draws a file the run ignored.
+if (identical(rna_input_src$used_key, "counts") && identical(rna_input_src$source_type, "matrix")) {
+    raw_counts_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_input_src$used_file)
+    if (file.exists(raw_counts_file) && !dir.exists(raw_counts_file)) {
+        raw_counts <- read.csv(raw_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
+    }
 }
+filt_counts_file <- file.path(datasets_dir, "rna_counts_filtered.tsv")
 if (file.exists(filt_counts_file) && !dir.exists(filt_counts_file)) {
     filt_counts <- read.delim(filt_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
-    n_genes_filt <- nrow(filt_counts)
 }
 
 if (!is.na(n_genes_raw) && !is.na(n_genes_filt)) {
@@ -767,7 +817,7 @@ if (!is.null(raw_counts)) {
                lty = 2, lwd = 2, col = "black", bty = "n")
     }
 } else {
-    cat("Raw counts not available for histogram.\n")
+    cat("Raw counts not available for histogram: it is drawn only from a raw count matrix input (files$counts) that this run is recorded to have used.\n")
 }
 ```
 
@@ -806,15 +856,48 @@ figure_legend("Distribution of mean log2(CPM + 1) expression per gene after low-
 
 ## Expression Distributions {.tabset}
 
-**Normalization method: TMMlogCPM**
-
-TMMlogCPM is a two-step normalization approach commonly used in RNA-seq analysis:
-
-1. **TMM (Trimmed Mean of M-values)**: A normalization method from the edgeR package that calculates scaling factors to account for differences in library composition between samples. TMM trims the most extreme log-fold-changes and absolute expression values before computing a weighted mean, making it robust to outliers and genes with very high/low expression.
-
-2. **logCPM (log2 Counts Per Million)**: After TMM scaling, counts are converted to CPM (counts per million) to normalize for sequencing depth, then log2-transformed to stabilize variance and make the data more normally distributed.
-
-The resulting **TMMlogCPM** values are suitable for visualization, clustering, and downstream analysis, providing comparable expression levels across samples regardless of library size or composition differences.
+```{r norm-method-intro, results='asis', echo=FALSE}
+# Describes the method that produced expr_work (rna_norm_method), so a VST run,
+# or a VST that fell back to TMMlogCPM, is described as what actually ran.
+if (identical(rna_norm_method, "preprocessed")) {
+    cat(paste0(
+        "**Normalization method: none (preprocessed input)**\n\n",
+        "The input table was already processed upstream, so the pipeline did not normalize it. ",
+        "The plots below show the values as provided, with every gene retained ",
+        "(preprocessed input is not filtered).\n"
+    ))
+} else if (identical(rna_norm_method, "VST")) {
+    cat(paste0(
+        "**Normalization method: VST**\n\n",
+        "VST (variance-stabilizing transformation) is the DESeq2 transformation for RNA-seq counts:\n\n",
+        "1. **Library correction**: DESeq2 corrects the counts for sequencing depth and library composition ",
+        "(per-sample size factors; for tximport input, the transcript-length offsets).\n\n",
+        "2. **Variance stabilization**: the size-factor-corrected counts are transformed to a log2-like scale ",
+        "on which the variance no longer depends strongly on the mean, so low-count genes are not ",
+        "dominated by noise. The transformation was run blind to the experimental design.\n\n",
+        "The resulting **VST** values are used for visualization, clustering and the exported normalized ",
+        "table. Differential expression is tested on the counts, not on these values.\n"
+    ))
+} else {
+    cat(paste0(
+        "**Normalization method: TMMlogCPM**\n\n",
+        "TMMlogCPM is a two-step normalization approach commonly used in RNA-seq analysis:\n\n",
+        "1. **TMM (Trimmed Mean of M-values)**: A normalization method from the edgeR package that calculates ",
+        "scaling factors to account for differences in library composition between samples. TMM trims the most ",
+        "extreme log-fold-changes and absolute expression values before computing a weighted mean, making it ",
+        "robust to outliers and genes with very high/low expression.\n\n",
+        "2. **logCPM (log2 Counts Per Million)**: After TMM scaling, counts are converted to CPM (counts per ",
+        "million) to normalize for sequencing depth, then log2-transformed to stabilize variance and make the ",
+        "data more normally distributed.\n\n",
+        "The resulting **TMMlogCPM** values are suitable for visualization, clustering, and downstream analysis, ",
+        "providing comparable expression levels across samples regardless of library size or composition differences.\n"
+    ))
+}
+if (isTRUE(rna_norm_res$fell_back)) {
+    cat(sprintf("\n*%s was configured but failed; the pipeline fell back to %s.*\n",
+                rna_norm_cfg, rna_norm_method))
+}
+```
 
 ### Before Normalization
 
@@ -1026,6 +1109,57 @@ if (file.exists(pca3d_file)) {
 ```
 
 
+```{r batch-correction-setup, include=FALSE}
+# Built from Datasets/batch_correction.tsv, the record written by the correction
+# that ran -- not from batch_correction in the config, which only asked for it.
+.bc_file <- file.path(datasets_dir, "batch_correction.tsv")
+bc_record <- if (file.exists(.bc_file)) read.delim(.bc_file, stringsAsFactors = FALSE) else NULL
+bc_text <- rna_batch_correction_sentence(bc_record)
+bc_show <- !is.null(bc_text)
+bc_suffix <- if (bc_show) paste0("_batch_corr_", bc_record$method[1]) else ""
+
+# One tab with the uncorrected figure on the left and its batch-corrected
+# counterpart on the right; skipped unless both files exist.
+bc_pair_tab <- function(heading, base, legend) {
+    before <- file.path(diag_dir, paste0(base, ".png"))
+    after  <- file.path(diag_dir, paste0(base, bc_suffix, ".png"))
+    if (!file.exists(before) || !file.exists(after)) return(invisible(NULL))
+    cat(sprintf("\n### %s\n\n", heading))
+    # Markdown images inside the divs, as the clustering section embeds its
+    # figures, so pandoc resolves the paths the same way.
+    side <- function(label, path) {
+        cat(sprintf("<div style='flex: 1; text-align: center;'>\n\n**%s**\n\n![%s](%s){width=100%%}\n\n</div>\n",
+                    label, label, path))
+    }
+    cat("<div style='display: flex; gap: 10px; align-items: flex-start;'>\n")
+    side("Uncorrected", before)
+    side(sprintf("Batch-corrected (%s)", bc_record$method[1]), after)
+    cat("</div>\n\n")
+    figure_legend(legend)
+}
+```
+
+```{r batch-correction-qc, eval=bc_show, results='asis'}
+cat("## Batch Correction (exploratory) {.tabset}\n\n")
+cat(bc_text, "\n\n")
+cat("Each figure is shown before and after the correction. Every other figure, table and statistic in this report uses the uncorrected data.\n\n")
+
+bc_panel <- file.path(diag_dir, "PCA_batch_before_after.png")
+if (file.exists(bc_panel)) {
+    cat("\n### PCA by group and batch\n\n")
+    cat(sprintf("![PCA before and after batch correction](%s){width=100%%}\n\n", bc_panel))
+    figure_legend("PC1 vs PC2 before (left) and after (right) batch correction. Each row is coloured by one metadata column, named in the panel titles: first the group that the correction kept, then the report's primary colour column when that is a different one, then each batch column. Both sides use the same genes: every filtered gene that varies in both matrices, not a top-variable subset. Their number is given under each panel title, and because it differs from the top-N gene sets above, the percentages of variance do not match those PCAs. PCA is fitted separately for each side, so axes are not comparable between left and right. A batch structure that fades while the group separation remains is the expected pattern; it is a visual check, not a test.")
+}
+# No pair of the standalone PCA plots here: each of those is fitted on the
+# genes usable in its own matrix, so the two sides need not hold the same
+# genes. The panel above is the before/after PCA, fitted on shared genes.
+bc_pair_tab("Distance Heatmap", "sample_distance_heatmap",
+            "Sample-to-sample Euclidean distances before and after batch correction.")
+bc_pair_tab("Top DE Heatmap", "heatmap_top_DE",
+            "Row z-scores of the same genes before and after batch correction: the genes with the smallest adjusted p-value across contrasts. They are ranked among all tested genes, so the heatmap can include genes that were not called differentially expressed. The ranking comes from the differential expression results, which do not use the corrected values.")
+cat("\n")
+```
+
 ## Sample Similarity
 
 Pairwise sample distance assesses overall reproducibility within and between experimental groups. Clear between-group separation indicates a detectable biological signal. `r rna_qc_sentence`
@@ -1126,6 +1260,16 @@ figure_legend("Expression heatmap with hierarchical row clustering but without c
 Differential expression was performed using **DESeq2** (`r rna_cfg$de$deseq_mode` mode).
 Genes were considered significant at adjusted p-value $\leq$ `r rna_cfg$de$p_cutoff`
 and |linear fold change| $\geq$ `r rna_cfg$de$linear_fc_cutoff`.
+
+```{r de-design-batch, results='asis'}
+# Built from Datasets/de_design.tsv, written from the design the DE actually
+# fitted -- not from batch_in_model in the config, which only asked for it.
+.de_design_file <- file.path(datasets_dir, "de_design.tsv")
+.de_design_text <- if (file.exists(.de_design_file)) {
+    rna_de_design_sentence(read.delim(.de_design_file, stringsAsFactors = FALSE))
+}
+if (!is.null(.de_design_text)) cat(.de_design_text, "\n\n")
+```
 
 ## DE Summary
 
@@ -2015,9 +2159,9 @@ explorer_ready <- FALSE
 explorer_json_str <- "{}"
 
 # Load normalized expression matrix
-norm_expr_file_exp <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
+norm_expr_file_exp <- rna_norm_file
 norm_expr_exp <- NULL
-if (file.exists(norm_expr_file_exp)) {
+if (isTRUE(file.exists(norm_expr_file_exp))) {
     norm_expr_exp <- read.delim(norm_expr_file_exp, stringsAsFactors = FALSE,
                                  row.names = 1, check.names = FALSE)
 }
@@ -2103,6 +2247,7 @@ cat('<script>\nvar geneExprData = ')
 cat(explorer_json_str)
 cat(';\n')
 cat(sprintf('var bpGroupLabel = "%s";\n', group_col_exp))
+cat('var bpExprLabel = ', jsonlite::toJSON(rna_norm_label, auto_unbox = TRUE), ';\n', sep = '')
 cat('
 var boxplotAcIndex = -1;
 var selectedGenes = [];  // array of {name, idx}
@@ -2246,7 +2391,7 @@ function renderMultiBoxplot() {
         });
         var layout = {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
-            yaxis: { title: "Expression (TMMlogCPM)" },
+            yaxis: { title: "Expression (" + bpExprLabel + ")" },
             xaxis: { title: bpGroupLabel },
             showlegend: false,
             margin: { t: 50, b: 80, l: 70, r: 30 },
@@ -2284,7 +2429,7 @@ function renderMultiBoxplot() {
         var geneNames = selectedGenes.map(function(sg) { return sg.name; });
         var layout = {
             title: { text: "Gene Expression Comparison", font: { size: 16 } },
-            yaxis: { title: "Expression (TMMlogCPM)" },
+            yaxis: { title: "Expression (" + bpExprLabel + ")" },
             xaxis: { title: "Gene", categoryorder: "array", categoryarray: geneNames },
             showlegend: true,
             legend: { title: { text: bpGroupLabel } },
@@ -2302,7 +2447,7 @@ function renderMultiBoxplot() {
     var infoLines = selectedGenes.map(function(sg) {
         var vals = geneExprData.expr[sg.idx].filter(function(v) { return !isNaN(v); });
         var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
-        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " TMMlogCPM (" + vals.length + " samples)";
+        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " " + bpExprLabel + " (" + vals.length + " samples)";
     });
     document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
     document.getElementById("boxplot_export_bar").style.display = "flex";
@@ -2352,16 +2497,16 @@ document.addEventListener("click", function(e) {
 ```
 
 ```{r gene-explorer-fallback, eval=!explorer_ready, results='asis', echo=FALSE}
-cat("*Gene expression explorer requires normalized expression data and metadata.*\n")
+cat("*", rna_norm_notice %||% "Gene expression explorer requires normalized expression data and metadata.", "*\n", sep = "")
 ```
 
 ## Normalized Counts
 
-Download the full normalized expression matrix (TMMlogCPM) for all genes that passed filtering. Use the search box to find specific genes.
+Download the full normalized expression matrix (`r rna_norm_label`) for all genes that passed filtering. Use the search box to find specific genes.
 
 ```{r norm-counts-table}
-norm_counts_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
-if (file.exists(norm_counts_file)) {
+norm_counts_file <- rna_norm_file
+if (isTRUE(file.exists(norm_counts_file))) {
     norm_counts_df <- read.delim(norm_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
 
     # Add gene names from annotation if available
@@ -2386,7 +2531,7 @@ if (file.exists(norm_counts_file)) {
 
     DT::datatable(
         norm_counts_df,
-        caption = paste0("Normalized expression (TMMlogCPM) — ",
+        caption = paste0("Normalized expression (", rna_norm_label, ") — ",
                          format(nrow(norm_counts_df), big.mark = ","), " genes"),
         extensions = 'Buttons',
         options = list(
@@ -2394,8 +2539,8 @@ if (file.exists(norm_counts_file)) {
             pageLength = 15,
             dom = 'Bfrtip',
             buttons = list(
-                list(extend = 'csv', filename = 'normalized_counts_TMMlogCPM'),
-                list(extend = 'excel', filename = 'normalized_counts_TMMlogCPM')
+                list(extend = 'csv', filename = sub("\\.tsv$", "", sub("^rna_norm_", "normalized_counts_", basename(norm_counts_file)))),
+                list(extend = 'excel', filename = sub("\\.tsv$", "", sub("^rna_norm_", "normalized_counts_", basename(norm_counts_file))))
             ),
             search = list(regex = TRUE, caseInsensitive = TRUE)
         ),
@@ -2403,7 +2548,7 @@ if (file.exists(norm_counts_file)) {
         filter = 'top'
     ) |> DT::formatRound(columns = num_cols_nc, digits = 3)
 } else {
-    cat("Normalized counts file not found.\n")
+    cat(rna_norm_notice %||% "Normalized counts file not found.", "\n")
 }
 ```
 
@@ -2413,10 +2558,10 @@ Expression heatmap of top differentially expressed genes. Select the number of g
 
 ```{r top-de-heatmap-prep, include=FALSE}
 # Load normalized expression data
-norm_expr_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
+norm_expr_file <- rna_norm_file
 norm_expr <- NULL
 # Load expression matrix regardless of de_summary_full — we can fall back to de_data
-if (file.exists(norm_expr_file)) {
+if (isTRUE(file.exists(norm_expr_file))) {
     norm_expr <- read.delim(norm_expr_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE)
 }
 
@@ -2520,7 +2665,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source) && nrow(heatmap_de_source
         if (!is.null(hm)) print(hm)
     }, error = function(e) cat("Heatmap error:", e$message))
 } else {
-    cat("Expression matrix or DE results not available.")
+    cat(rna_norm_notice %||% "Expression matrix or DE results not available.")
 }
 ```
 
@@ -2603,9 +2748,17 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 
 ```{r clustering-discover-rna, include=FALSE}
 # ---- Discover clustering outputs on disk for RNA-seq ----
-# Hierarchical is intentionally excluded for RNA-seq (per Apr 2026 reviewer
+# Hierarchical is hidden by default for RNA-seq (per Apr 2026 reviewer
 # guidance — too dense to be informative on whole-transcriptome DE lists).
-clustering_root_rna <- file.path(run_dir, "rna", "Clustering")
+# clustering.steps.hierarchical.show_in_report: true opts in; it only shows the
+# heatmap the clustering step already wrote, so the step must be enabled (same
+# default as clustering_run_flags()) and the file must exist.
+# From rna_dir, not run_dir: the report may be rendered from inside rna/, where
+# run_dir is already that directory.
+clustering_root_rna <- file.path(rna_dir, "Clustering")
+hier_cfg_rna <- rna_cfg$clustering$steps$hierarchical
+hier_hm_rna <- file.path(clustering_root_rna, "Hierarchical", "Hierarchical_DE_heatmap.png")
+has_hier_rna <- isTRUE(hier_cfg_rna$show_in_report) && isTRUE(hier_cfg_rna$enabled %||% TRUE) && file.exists(hier_hm_rna)
 part_root_rna  <- file.path(clustering_root_rna, "Partition_clustering")
 binary_dir_rna <- file.path(clustering_root_rna, "Binary_patterns")
 
@@ -2632,15 +2785,35 @@ binary_pngs_rna <- if (dir.exists(binary_dir_rna)) {
 clustering_enabled_rna <- isTRUE(rna_cfg$clustering$enabled)
 has_part_rna   <- !is.na(part_hm_rna) && file.exists(part_hm_rna)
 has_binary_rna <- length(binary_pngs_rna) > 0
-clustering_show_rna <- clustering_enabled_rna && (has_part_rna || has_binary_rna)
+
+# The clustering of the batch-corrected matrix is discovered on its own, from
+# the record mod_rnaseq_clustering_batch_corr() wrote and the files next to it,
+# so it is shown (or its skip is reported) whether or not the uncorrected
+# clustering produced figures.
+.bc_clust_file <- file.path(datasets_dir, "clustering_batch_correction.tsv")
+bc_clust_record <- if (file.exists(.bc_clust_file)) {
+  read.delim(.bc_clust_file, stringsAsFactors = FALSE)
+} else NULL
+bc_clust <- rna_batch_clustering_view(bc_clust_record, rna_dir)
+bc_clust_show_rna <- clustering_enabled_rna && isTRUE(bc_clust$show)
+
+clustering_show_rna <- clustering_enabled_rna &&
+  (has_hier_rna || has_part_rna || has_binary_rna || bc_clust_show_rna)
 ```
 
 ```{r clustering-header-rna, eval=clustering_show_rna, results='asis'}
 cat("# Clustering {.tabset}\n\n")
 cat("Clustering was performed on the differentially expressed genes. Each method below answers a different question:\n\n")
+if (has_hier_rna) cat("- **Hierarchical** — bottom-up tree built from gene-by-gene distances; reveals nested groupings.\n")
 cat("- **Partition** — splits genes into clusters with similar expression trajectories across groups.\n")
 cat("- **Binary patterns** — assigns each gene to an on/off (1/0) pattern across groups based on correlation.\n\n")
-cat("*Hierarchical clustering is omitted for RNA-seq — DE gene lists are typically too large for the dendrogram to be readable.*\n\n")
+```
+
+```{r clustering-hier-rna, eval=clustering_show_rna && has_hier_rna, results='asis'}
+cat("## Hierarchical\n\n")
+cat(sprintf("![Hierarchical clustering heatmap](%s){width=100%%}\n\n", hier_hm_rna))
+figure_legend("Hierarchical clustering heatmap of differentially expressed genes (rows z-scored). Row dendrogram reflects gene similarity; samples are annotated by experimental group.")
+render_commentary("clustering_hierarchical")
 ```
 
 ```{r clustering-partition-rna, eval=clustering_show_rna && has_part_rna, results='asis'}
@@ -2672,6 +2845,52 @@ for (bf in binary_pngs_rna) {
     "Heatmap of genes assigned to binary on/off pattern '%s' across experimental groups.", pat))
 }
 render_commentary("clustering_binary")
+```
+
+```{r clustering-batch-corrected-rna, eval=bc_clust_show_rna, results='asis'}
+# Built from clustering_batch_correction.tsv (bc_clust, see the discovery
+# chunk): what ran or why it was skipped, not what the config asked for.
+bc_method <- bc_clust$method
+bc_part_hm <- bc_clust$partition_heatmap
+bc_binary <- bc_clust$binary_heatmaps
+bc_cmp_file <- file.path(datasets_dir, "clustering_batch_comparison.tsv")
+
+cat(sprintf("## Batch-corrected (%s) {.tabset}\n\n", bc_method))
+if (identical(bc_clust$status, "skipped")) {
+  cat(bc_clust$note, "\n\n")
+} else {
+  cat("The same differentially expressed genes were clustered again on the batch-corrected expression values, with the same settings. ",
+      "This view is exploratory. The Excel gene order, the cluster-based enrichment and the interactive app use the clusters of the uncorrected data. ",
+      "Cluster numbers are assigned separately in each run, so equal numbers do not mean the same cluster.\n\n", sep = "")
+  if (!is.null(bc_clust$note)) cat("**Note.** ", bc_clust$note, "\n\n", sep = "")
+
+  if (!is.na(bc_part_hm)) {
+    cat("### Partition heatmap\n\n")
+    cat(sprintf("![Partition clustering heatmap, batch-corrected](%s){width=100%%}\n\n", bc_part_hm))
+    figure_legend(sprintf("Partition clustering heatmap of the batch-corrected (%s) expression values.", bc_method))
+  }
+  if (length(bc_binary) > 0) {
+    cat("\n### Binary patterns {.tabset}\n\n")
+    for (bf in bc_binary) {
+      pat <- sub("^Heatmap_([01]+)\\.png$", "\\1", basename(bf))
+      cat(sprintf("\n#### Pattern %s\n\n", pat))
+      cat(sprintf("![Binary pattern %s, batch-corrected](%s){width=100%%}\n\n", pat, bf))
+    }
+  }
+  if (file.exists(bc_cmp_file)) {
+    bc_cmp <- read.delim(bc_cmp_file, stringsAsFactors = FALSE)
+    cat("\n### Comparison\n\n")
+    cat("Number of genes by their cluster in the uncorrected data (rows) and in the batch-corrected data (columns). ",
+        "Genes that stay together fall in one cell of a row; a row spread over several columns is a cluster that the correction split. ",
+        "The per-gene table is `Datasets/clustering_batch_comparison.tsv`.\n\n", sep = "")
+    bc_tab <- table(Uncorrected = bc_cmp$cluster_uncorrected,
+                    `Batch-corrected` = bc_cmp$cluster_batch_corrected, useNA = "ifany")
+    bc_tab_df <- as.data.frame.matrix(bc_tab)
+    bc_tab_df <- cbind(`Uncorrected (rows) / batch-corrected (columns)` = rownames(bc_tab_df), bc_tab_df)
+    print(knitr::kable(bc_tab_df, row.names = FALSE))
+    cat("\n\n")
+  }
+}
 ```
 
 ```{r clustering-divider-rna, eval=clustering_show_rna, results='asis'}
@@ -2710,25 +2929,108 @@ n_failed_units <- sum(!evaluated)
 n_sig_units <- if (offline_ran && "n_significant" %in% names(enr_manifest)) {
     sum(enr_manifest$n_significant[evaluated] > 0, na.rm = TRUE)
 } else NA_integer_
-gsea_plot_dir <- file.path(enrich_dir, "GSEA")
-offline_dotplots <- if (dir.exists(gsea_plot_dir)) {
-    list.files(gsea_plot_dir, pattern = "^dotplot\\.png$",
-               full.names = TRUE, recursive = TRUE)
-} else character(0)
-# Keep only unit dotplots (<db>/ranking_by_<ranking>/<contrast>/dotplot.png),
-# so a stray file neither opens an empty section nor hides the legacy plots.
-offline_dotplots <- offline_dotplots[grepl(
-    "^[^/]+/ranking_by_[^/]+/[^/]+/dotplot\\.png$",
-    substring(offline_dotplots, nchar(gsea_plot_dir) + 2L))]
+# The online path's dotplots. An offline run draws its plots in the GSEA view
+# below, so a plots/ folder left by an earlier online run is not shown for it.
 legacy_dotplots <- if (dir.exists(enrich_plot_dir)) {
     list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
 } else character(0)
-has_pathway_plots <- length(offline_dotplots) + length(legacy_dotplots) > 0
+has_pathway_plots <- !offline_ran && length(legacy_dotplots) > 0
 # The cutoffs enrichment ran with: a GSEA set is significant at padj <= gsea_cut;
 # offline ORA was run with ora_cut as clusterProfiler's pvalueCutoff.
 enr_settings <- resolve_rna_gsea_settings(cfg)
 gsea_cut <- enr_settings$sig_cutoff
 ora_cut  <- enr_settings$ora_cutoff
+
+# --- Shared by the offline GSEA and ORA views below --------------------------
+# In each view three selectors choose one analysis: its bar plot (one embedded
+# image per analysis) is swapped in and the view's one table is narrowed to its
+# rows, by updateEnrichmentView() at the end of this section.
+
+# Genes of each row (a list of ID vectors): the first 15, as symbols where
+# gene_annotation.csv names them, and how many more there are.
+enrichment_gene_text <- function(genes) {
+    anno_file <- file.path(enrich_dir, "gene_annotation.csv")
+    anno <- if (file.exists(anno_file)) read.csv(anno_file, stringsAsFactors = FALSE)
+    vapply(genes, function(g) {
+        if (!is.null(anno)) {
+            sym <- anno$symbol[match(g, anno$gene_id)]
+            g[!is.na(sym)] <- sym[!is.na(sym)]
+        }
+        more <- length(g) - 15L
+        paste0(paste(head(g, 15), collapse = ", "),
+               if (more > 0) sprintf(" (+%d more)", more) else "")
+    }, character(1))
+}
+
+# A bar plot as an embedded PNG; NULL if it cannot be drawn, which leaves the
+# analysis in the table.
+enrichment_plot_uri <- function(p, n_bar) {
+    tryCatch({
+        png_file <- tempfile(fileext = ".png")
+        ggplot2::ggsave(png_file, p, width = 11,
+                        height = .enrich_bar_height_in(n_bar) + 0.6, dpi = 110)
+        uri <- knitr::image_uri(png_file)
+        unlink(png_file)
+        uri
+    }, error = function(e) NULL)
+}
+
+# The view's selectors (each list(name, label, values, text); their order is
+# the order of the table's first three columns), the plot of the first
+# selection, and the line where messages go.
+enrichment_view_controls <- function(view, selectors, units, alt) {
+    cat(sprintf('<div id="%s_view_controls" style="margin-bottom: 16px;">\n', view))
+    for (sel in selectors) {
+        id <- paste0(view, "_view_", sel$name)
+        cat(sprintf('<label for="%s"><strong>%s:</strong></label>\n', id, sel$label))
+        cat(sprintf(paste0('<select id="%s" onchange="updateEnrichmentView(\'%s\')" style="padding: 8px; ',
+                           'border-radius: 4px; border: 1px solid #ccc; font-size: 14px; margin-right: 18px;">\n'),
+                    id, view))
+        cat(sprintf('<option value="%s">%s</option>\n',
+                    htmltools::htmlEscape(sel$values, attribute = TRUE),
+                    htmltools::htmlEscape(sel$text)), sep = "")
+        cat('</select>\n')
+    }
+    cat('</div>\n\n')
+    # The first choice of each selector is shown until the reader changes one.
+    first <- units[[selectors[[1]]$values[1]]][[selectors[[2]]$values[1]]][[selectors[[3]]$values[1]]]
+    cat('<div style="text-align: center;">\n')
+    cat(sprintf('<img id="%s_view_image" ', view),
+        if (is.null(first$img)) 'style="display: none; ' else paste0('src="', first$img, '" style="'),
+        sprintf('width: 100%%; max-width: 1000px; height: auto;" alt="%s" />\n', alt), sep = "")
+    cat(sprintf('<p id="%s_view_message" style="font-style: italic;"></p>\n', view))
+    cat('</div>\n\n')
+}
+
+# The view's table: make_dt(), plus options local to it (make_dt() is shared):
+# the id the selectors address, a rows-per-page menu, smallest adjusted p
+# first, counts as whole numbers, exports that carry the stored numbers rather
+# than the rounded display, and the gene list closed until asked for, so it
+# adds no height to a row. Only the display of the list changes: search and
+# exports still see it. Its width is fixed so that opening a list changes the
+# row's height and no column's width, which would leave the header out of line.
+enrichment_view_dt <- function(tbl, view, caption, counts, list_col) {
+    dt <- make_dt(tbl, caption = caption)
+    dt$elementId <- paste0(view, "_view_table")
+    dt$x$options$dom <- "Blfrtip"
+    dt$x$options$lengthMenu <- c(15, 25, 50, 100)
+    dt$x$options$order <- list(list(which(names(tbl) == "padj") - 1L, "asc"))
+    for (b in seq_along(dt$x$options$buttons)) {
+        dt$x$options$buttons[[b]]$exportOptions <- list(orthogonal = "export")
+    }
+    dt <- DT::formatRound(dt, counts, digits = 0)
+    dt$x$options$columnDefs <- c(
+        list(list(
+            targets = which(names(tbl) == list_col) - 1L,
+            orderable = FALSE,
+            render = DT::JS(
+                "function(data, type) {",
+                "  return type === 'display' && data ?",
+                "    '<details style=\"width: 200px;\"><summary>show</summary>' + data + '</details>' : data;",
+                "}"))),
+        dt$x$options$columnDefs)
+    dt
+}
 ```
 
 ```{r pathway-skip, eval=!has_enrichment, results='asis'}
@@ -2776,30 +3078,304 @@ if (file.exists(anno_file)) {
 
 **Key metrics:**
 
-- **NES (Normalized Enrichment Score)**: The primary statistic from fGSEA. Positive NES indicates the pathway is enriched in **up-regulated** genes; negative NES indicates enrichment in **down-regulated** genes. The magnitude reflects the degree of enrichment.
+- **NES (Normalized Enrichment Score)**: The primary statistic from fGSEA. Under a signed ranking, positive NES indicates the pathway is enriched in **up-regulated** genes; negative NES indicates enrichment in **down-regulated** genes. The magnitude reflects the degree of enrichment. Under the unsigned ranking (`pval_wo_direction`, offline workflow only) the sign of NES does not indicate up- or down-regulation.
 - **padj**: Benjamini-Hochberg adjusted p-value (FDR). Pathways with padj ≤ `r gsea_cut` are considered significant.
 - **size**: Number of genes in the pathway that were present in the dataset.
 
-## fGSEA Results {.tabset}
-
-```{r fgsea-tables-prep, eval=has_enrichment, include=FALSE}
-# Offline: the significant rows of every ranking's results.csv, one row per
-# pathway and ranking, and the evaluated (contrast, database) units from the
-# manifest, so a unit with nothing significant is still shown. Online: the
-# flat pathway_<contrast>_<db>_fgsea.csv files.
-offline_gsea <- NULL
-offline_units <- NULL
-if (offline_ran) {
+```{r gsea-view-data, include=FALSE}
+# Offline GSEA view: one plot and one table, both following three selectors.
+# The table holds the significant rows of every ranking's results.csv, one row
+# per pathway and ranking; nothing is combined across rankings, contrasts or
+# databases. The selectable analyses come from the manifest, so one that was
+# evaluated with nothing significant can still be chosen.
+has_gsea_view <- FALSE
+gsea_view <- list()
+if (has_enrichment && offline_ran) {
     offline_gsea <- read_offline_gsea_tables(file.path(enrich_dir, "GSEA"), gsea_cut)
     gsea_ran <- enr_manifest[enr_manifest$analysis == "GSEA" & evaluated, , drop = FALSE]
-    offline_units <- unique(data.frame(contrast = as.character(gsea_ran$item),
-                                       database = as.character(gsea_ran$database),
-                                       stringsAsFactors = FALSE))
-    offline_units <- offline_units[order(offline_units$contrast, offline_units$database), ,
-                                   drop = FALSE]
+    gsea_units <- unique(data.frame(contrast = as.character(gsea_ran$item),
+                                    database = as.character(gsea_ran$database),
+                                    ranking  = as.character(gsea_ran$group),
+                                    stringsAsFactors = FALSE))
+    has_gsea_view <- nrow(gsea_units) > 0
 }
-fgsea_files <- if (offline_ran) character(0) else
-    list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+if (has_gsea_view) {
+    # Leading edge, compact: how many genes the GSEA reported, and the first 15
+    # of them for the table to show on request. The complete lists stay in each
+    # analysis's results.csv.
+    gsea_le_genes <- lapply(strsplit(offline_gsea$leading_edge, ",", fixed = TRUE),
+                            function(g) g[!is.na(g) & nzchar(g)])
+    gsea_le <- enrichment_gene_text(gsea_le_genes)
+    # Contrast, Database and Ranking come first: the selectors filter on them,
+    # and they keep an exported table self-describing.
+    gsea_tbl <- data.frame(
+        Contrast = offline_gsea$contrast, Database = offline_gsea$database,
+        Ranking = offline_gsea$ranking_method, Pathway = offline_gsea$Pathway,
+        ID = offline_gsea$ID, NES = offline_gsea$NES,
+        Direction = offline_gsea$Direction, pval = offline_gsea$pval,
+        padj = offline_gsea$padj, Size = offline_gsea$size,
+        `LE genes` = lengths(gsea_le_genes), `Leading edge` = gsea_le,
+        check.names = FALSE, stringsAsFactors = FALSE)
+
+    # One bar plot per analysis, embedded as an image for the selectors to swap.
+    for (u in seq_len(nrow(gsea_units))) {
+        cn <- gsea_units$contrast[u]; db <- gsea_units$database[u]; rk <- gsea_units$ranking[u]
+        rows <- offline_gsea[offline_gsea$contrast == cn & offline_gsea$database == db &
+                             offline_gsea$ranking_method == rk, , drop = FALSE]
+        unit <- list(n = nrow(rows))
+        if (nrow(rows) > 0) {
+            # plot_gsea_enrichment_bar() reads the column names of a unit's
+            # results.csv, which the reader renamed. Same selection and size as
+            # the exported enrichment_bar_top20.pdf.
+            bar_df <- data.frame(
+                Description = rows$Pathway, NES = rows$NES, padj = rows$padj,
+                setSize = rows$size,
+                core_enrichment = gsub(",", "/", rows$leading_edge, fixed = TRUE),
+                stringsAsFactors = FALSE)
+            n_bar <- min(ENRICH_BAR_TOP_N, nrow(bar_df))
+            # A plot that cannot be drawn leaves the analysis in the table.
+            bar_plot <- tryCatch({
+                bar_plot <- plot_gsea_enrichment_bar(bar_df, max_terms = n_bar)
+                # NES axis view, for the labels at the bar ends. It spans zero
+                # and every plotted bar (the builder's $data, so a pathway it
+                # left out cannot stretch it), plus 30% of the axis on each side
+                # that has bars, where the builder puts their labels (right of
+                # NES >= 0, left of NES < 0), and a 2% gap on a side with none.
+                # The legend goes below, giving the plot area its width. Layout
+                # only; the builder and what it draws are unchanged.
+                nes <- bar_plot$data$NES
+                room <- c(if (any(nes < 0)) 0.3 else 0.02, if (any(nes >= 0)) 0.3 else 0.02)
+                span <- (max(0, nes) - min(0, nes)) / (1 - sum(room))
+                bar_plot +
+                    ggplot2::coord_cartesian(
+                        xlim = c(min(0, nes) - room[1] * span, max(0, nes) + room[2] * span),
+                        expand = c(left = FALSE, right = FALSE)) +
+                    ggplot2::theme(legend.position = "bottom")
+            }, error = function(e) NULL)
+            if (!is.null(bar_plot)) unit$img <- enrichment_plot_uri(bar_plot, n_bar)
+        }
+        if (is.null(gsea_view[[cn]])) gsea_view[[cn]] <- list()
+        if (is.null(gsea_view[[cn]][[db]])) gsea_view[[cn]][[db]] <- list()
+        gsea_view[[cn]][[db]][[rk]] <- unit
+    }
+}
+```
+
+```{r gsea-view-none, eval=has_enrichment && offline_ran && !has_gsea_view, results='asis', echo=FALSE}
+cat("\n## GSEA\n\n")
+cat("No GSEA unit was evaluated in this run. Every evaluated unit is listed in ",
+    "`Enrichment/enrichment_manifest.csv`.\n", sep = "")
+```
+
+```{r gsea-view-controls, eval=has_gsea_view, results='asis', echo=FALSE}
+cat("\n## GSEA\n\n")
+cat("GSEA was run with several gene rankings. They are alternative analyses of ",
+    "the same differential-expression results, not independent evidence, and none ",
+    "is primary; p-values are not combined across rankings. Choose a contrast, a ",
+    "database and a ranking: the plot and the table below both show that one ",
+    "analysis. The plot shows up to ", ENRICH_BAR_TOP_N, " of its significant ",
+    "pathways, those with the smallest adjusted p-values; the table lists every ",
+    "pathway with adjusted p-value ≤ ", format(gsea_cut), ". `LE genes` is the ",
+    "number of leading-edge genes; `show` lists the first 15. The table each ",
+    "analysis exported, with its complete leading-edge gene lists, is ",
+    "`Enrichment/GSEA/<database>/ranking_by_<ranking>/<contrast>/results.csv`. ",
+    "Direction is not given for the unsigned ranking (`pval_wo_direction`), whose ",
+    "NES sign does not mean up or down.\n\n", sep = "")
+if ("any_contrast" %in% gsea_units$contrast) {
+    cat("`any_contrast` ranks genes by their minimum p-value across all contrasts ",
+        "(unsigned).\n\n", sep = "")
+}
+
+# Rankings in the order of their labels; none is primary.
+gsea_rankings <- c(intersect(names(.RNA_GSEA_RANKING_LABELS), gsea_units$ranking),
+                   setdiff(gsea_units$ranking, names(.RNA_GSEA_RANKING_LABELS)))
+gsea_selectors <- list(
+    list(name = "contrast", label = "Contrast",
+         values = unique(gsea_units$contrast), text = unique(gsea_units$contrast)),
+    list(name = "database", label = "Database",
+         values = unique(gsea_units$database), text = unique(gsea_units$database)),
+    list(name = "ranking", label = "Ranking", values = gsea_rankings,
+         text = ifelse(gsea_rankings %in% names(.RNA_GSEA_RANKING_LABELS),
+                       paste0(gsea_rankings, " (", .RNA_GSEA_RANKING_LABELS[gsea_rankings], ")"),
+                       gsea_rankings)))
+enrichment_view_controls("gsea", gsea_selectors, gsea_view, "GSEA enrichment bar plot")
+figure_legend(paste0(
+    "NES of up to ", ENRICH_BAR_TOP_N, " significant pathways of the selected analysis, ",
+    "those with the smallest adjusted p-values, ordered by NES. Fill: −log10 adjusted ",
+    "p-value. Bar labels: gene-set size and number of leading-edge genes (LE). Under the ",
+    "unsigned ranking the sign of NES does not indicate up- or down-regulation."))
+```
+
+```{r gsea-view-table, eval=has_gsea_view, echo=FALSE}
+gsea_dt <- enrichment_view_dt(gsea_tbl, "gsea", "GSEA significant pathways",
+                              counts = c("Size", "LE genes"), list_col = "Leading edge")
+gsea_dt
+```
+
+```{r ora-view-data, include=FALSE}
+# Offline ORA view, laid out as the GSEA view: the ORA of DE genes only, per
+# contrast its All DE, Up and Down gene sets, and the union of DE genes across
+# contrasts (any_contrast). ORA of gene clusters and binary patterns is not
+# shown. Each gene set is its own test; nothing is combined across gene sets,
+# contrasts or databases. The selectable analyses come from the manifest, so
+# one with nothing significant can still be chosen.
+has_ora_view <- FALSE
+ora_view <- list()
+if (has_enrichment && offline_ran) {
+    ora_res <- read_offline_ora_tables(file.path(enrich_dir, "ORA"), enr_manifest, ora_cut)
+    ora_units <- ora_res$units
+    ora_terms <- ora_res$terms
+    has_ora_view <- nrow(ora_units) > 0
+}
+if (has_ora_view) {
+    ora_genes <- lapply(strsplit(ora_terms$geneID, "/", fixed = TRUE),
+                        function(g) g[!is.na(g) & nzchar(g)])
+    # Contrast, Database and Gene set come first: the selectors filter on them,
+    # and they keep an exported table self-describing.
+    ora_tbl <- data.frame(
+        Contrast = ora_terms$contrast, Database = ora_terms$database,
+        `Gene set` = ora_terms$gene_set, Pathway = ora_terms$Description,
+        ID = ora_terms$ID, Count = ora_terms$Count, GeneRatio = ora_terms$GeneRatio,
+        BgRatio = ora_terms$BgRatio, `Fold enrichment` = ora_terms$FoldEnrichment,
+        pvalue = ora_terms$pvalue, padj = ora_terms$p.adjust,
+        Genes = enrichment_gene_text(ora_genes),
+        check.names = FALSE, stringsAsFactors = FALSE)
+
+    # One bar plot per analysis. plot_ora_enrichment_bar() is the builder of the
+    # exported enrichment_bar_top20.pdf; its axis starts at zero and keeps room
+    # right of the bars for their labels, so only the legend is moved below.
+    for (u in seq_len(nrow(ora_units))) {
+        cn <- ora_units$contrast[u]; db <- ora_units$database[u]; gs <- ora_units$gene_set[u]
+        rows <- ora_terms[ora_terms$contrast == cn & ora_terms$database == db &
+                          ora_terms$gene_set == gs, , drop = FALSE]
+        unit <- list(n = nrow(rows))
+        if (nrow(rows) > 0) {
+            n_bar <- min(ENRICH_BAR_TOP_N, nrow(rows))
+            ora_plot <- tryCatch(
+                plot_ora_enrichment_bar(rows, max_terms = n_bar) +
+                    ggplot2::theme(legend.position = "bottom"),
+                error = function(e) NULL)
+            if (!is.null(ora_plot)) unit$img <- enrichment_plot_uri(ora_plot, n_bar)
+        }
+        if (is.null(ora_view[[cn]])) ora_view[[cn]] <- list()
+        if (is.null(ora_view[[cn]][[db]])) ora_view[[cn]][[db]] <- list()
+        ora_view[[cn]][[db]][[gs]] <- unit
+    }
+}
+```
+
+```{r ora-view-none, eval=has_enrichment && offline_ran && !has_ora_view, results='asis', echo=FALSE}
+cat("\n## ORA\n\n")
+cat("No ORA of differentially expressed genes is recorded for this run in ",
+    "`Enrichment/enrichment_manifest.csv`. It runs for contrasts with DE genes, ",
+    "and not in multiomics mode.\n", sep = "")
+```
+
+```{r ora-view-controls, eval=has_ora_view, results='asis', echo=FALSE}
+cat("\n## ORA\n\n")
+cat("Over-representation analysis (ORA) tests whether a pathway holds more of a ",
+    "set of differentially expressed (DE) genes than expected by chance, against the ",
+    "genes annotated in that database. Each contrast has three gene sets: All DE, ",
+    "Up and Down, the genes the DE analysis called in that contrast. Each gene set ",
+    "is a separate test; p-values are not combined across gene sets, contrasts or ",
+    "databases. Choose a contrast, a database and a gene set: the plot and the ",
+    "table below both show that one analysis. The plot shows up to ",
+    ENRICH_BAR_TOP_N, " of its significant terms, those with the smallest adjusted ",
+    "p-values, ordered by gene count; the table lists every term with adjusted ",
+    "p-value < ", format(ora_cut), ". `Count` is the number of the gene set's genes ",
+    "in the term; `show` lists the first 15. GO terms are the full list, not the ",
+    "simplified one. The table each analysis exported is ",
+    "`Enrichment/ORA/<database>/contrasts/<contrast>/{de,up,down}/results.csv`. ",
+    "ORA of gene clusters and binary patterns is not shown here; it is exported ",
+    "under `Enrichment/ORA/<database>/partition` and `binary_patterns`.\n\n", sep = "")
+if ("any_contrast" %in% ora_units$contrast) {
+    cat("`any_contrast` is the union of genes DE in at least one contrast, tested ",
+        "once as All DE; its table is ",
+        "`Enrichment/ORA/<database>/all_DE/any_contrast/results.csv`.\n\n", sep = "")
+}
+
+# The union of DE genes after the contrasts, so the two kinds stay apart.
+ora_contrasts <- unique(ora_units$contrast)
+ora_contrasts <- c(setdiff(ora_contrasts, "any_contrast"),
+                   intersect(ora_contrasts, "any_contrast"))
+ora_gene_sets <- intersect(c("All DE", "Up", "Down"), ora_units$gene_set)
+ora_selectors <- list(
+    list(name = "contrast", label = "Contrast", values = ora_contrasts,
+         text = ifelse(ora_contrasts == "any_contrast",
+                       "any_contrast (union of DE genes)", ora_contrasts)),
+    list(name = "database", label = "Database",
+         values = unique(ora_units$database), text = unique(ora_units$database)),
+    list(name = "geneset", label = "Gene set", values = ora_gene_sets, text = ora_gene_sets))
+enrichment_view_controls("ora", ora_selectors, ora_view, "ORA enrichment bar plot")
+figure_legend(paste0(
+    "Gene count of up to ", ENRICH_BAR_TOP_N, " significant terms of the selected ",
+    "analysis, those with the smallest adjusted p-values, ordered by gene count. Fill: ",
+    "−log10 adjusted p-value. Bar labels: the gene set's genes in the term / genes ",
+    "annotated to the term, and fold enrichment (FE)."))
+```
+
+```{r ora-view-table, eval=has_ora_view, echo=FALSE}
+ora_dt <- enrichment_view_dt(ora_tbl, "ora", "ORA significant terms",
+                             counts = "Count", list_col = "Genes")
+ora_dt
+```
+
+```{r enrichment-views-js, include=FALSE}
+# What the selector script below needs of each view that is shown: its plots
+# and counts per analysis, and its two messages.
+enrichment_views <- Filter(Negate(is.null), list(
+    gsea = if (has_gsea_view) list(
+        units = gsea_view,
+        none = sprintf("No significant pathways (adjusted p-value ≤ %s) for this selection.",
+                       format(gsea_cut)),
+        not_run = paste("No result for this combination: it was not run, or it failed",
+                        "(see Enrichment/enrichment_manifest.csv).")),
+    ora = if (has_ora_view) list(
+        units = ora_view,
+        none = sprintf("No significant terms (adjusted p-value < %s) for this selection.",
+                       format(ora_cut)),
+        not_run = paste("No result for this combination: it was not run",
+                        "(see Enrichment/enrichment_manifest.csv). The union of DE genes",
+                        "(any_contrast) has All DE only."))))
+enrichment_views_json <- if (length(enrichment_views) > 0) {
+    jsonlite::toJSON(enrichment_views, auto_unbox = TRUE)
+} else "{}"
+```
+
+<script>
+// Enrichment views (GSEA, ORA): in each, three selectors choose one analysis.
+// Its plot is swapped in, as the PCA selector does, and the view's table is
+// narrowed to its rows: an exact match on the table's first three columns,
+// which hold the selected values in selector order.
+var enrichmentViews = `r enrichment_views_json`;
+
+function updateEnrichmentView(view) {
+    var spec = enrichmentViews[view];
+    var picked = $("#" + view + "_view_controls select").map(function () { return this.value; }).get();
+    var unit = ((spec.units[picked[0]] || {})[picked[1]] || {})[picked[2]];
+    var img = document.getElementById(view + "_view_image");
+    if (unit && unit.img) img.src = unit.img;
+    img.style.display = unit && unit.img ? "" : "none";
+    document.getElementById(view + "_view_message").textContent =
+        !unit ? spec.not_run : unit.n === 0 ? spec.none
+        : unit.img ? "" : "The plot could not be drawn; the table below lists the results.";
+    var table = $("#" + view + "_view_table").data("datatable");
+    if (!table) return;
+    picked.forEach(function (value, column) {
+        table.column(column).search(
+            "^" + $.fn.dataTable.util.escapeRegex(value) + "$", true, false, false);
+    });
+    table.draw();
+}
+
+$(window).on("load", function () {
+    for (var view in enrichmentViews) updateEnrichmentView(view);
+});
+</script>
+
+```{r fgsea-tables-prep, eval=has_enrichment && !offline_ran, include=FALSE}
+# Online: the flat pathway_<contrast>_<db>_fgsea.csv files.
+fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
 fgsea_tables <- list()
 if (length(fgsea_files) > 0) {
     for (i in seq_along(fgsea_files)) {
@@ -2825,39 +3401,9 @@ if (length(fgsea_files) > 0) {
 }
 ```
 
-```{r fgsea-tables, eval=has_enrichment, results='asis'}
-if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
-    cat("GSEA was run with several gene rankings. They are alternative analyses of ",
-        "the same differential-expression results, not independent evidence, and none ",
-        "is primary. Each row below is one pathway in one ranking: a pathway significant ",
-        "under several rankings appears once per ranking, and p-values are not combined ",
-        "across rankings. Only pathways with adjusted p-value ≤ ", format(gsea_cut),
-        " are shown; every tested pathway is in ",
-        "`Enrichment/GSEA/<database>/ranking_by_<ranking>/<contrast>/results.csv`. ",
-        "Direction is not given for the unsigned ranking, whose NES sign does not mean ",
-        "up or down.\n\n", sep = "")
-    for (u in seq_len(nrow(offline_units))) {
-        cn <- offline_units$contrast[u]; db <- offline_units$database[u]
-        cat(sprintf("\n### %s — %s\n\n", cn, db))
-        if (identical(cn, "any_contrast")) {
-            cat("Genes ranked by their minimum p-value across all contrasts (unsigned).\n\n")
-        }
-        rows <- offline_gsea[offline_gsea$contrast == cn & offline_gsea$database == db, ,
-                             drop = FALSE]
-        if (nrow(rows) == 0) {
-            cat(sprintf("No significant pathways (padj ≤ %s) in any ranking for this contrast/database.\n\n",
-                        format(gsea_cut)))
-            next
-        }
-        cat(sprintf("%d row(s): %d distinct pathway(s) across %d ranking(s).\n\n",
-                    nrow(rows), length(unique(rows$ID)), length(unique(rows$Ranking))))
-        print(knitr::kable(
-            rows[, c("Pathway", "ID", "Ranking", "NES", "Direction", "pval", "padj", "size")],
-            caption = sprintf("Significant pathways by ranking — %s, %s", cn, db),
-            row.names = FALSE, digits = 4))
-        cat("\n\n")
-    }
-} else if (length(fgsea_tables) > 0) {
+```{r fgsea-tables, eval=has_enrichment && !offline_ran, results='asis'}
+cat("\n## fGSEA Results {.tabset}\n\n")
+if (length(fgsea_tables) > 0) {
     for (i in seq_along(fgsea_tables)) {
         tbl <- fgsea_tables[[i]]
         cat(sprintf("\n### %s {.tabset}\n\n", tbl$label))
@@ -2897,9 +3443,6 @@ if (offline_ran && !is.null(offline_units) && nrow(offline_units) > 0) {
             cat("\n\n")
         }
     }
-} else if (offline_ran) {
-    cat("No GSEA unit was evaluated in this run. Every evaluated unit is listed in ",
-        "`Enrichment/enrichment_manifest.csv`.\n")
 } else {
     cat("No fGSEA result files found.\n")
 }
@@ -2911,39 +3454,21 @@ cat("\n## Pathway Dotplots {.tabset}\n\n")
 ```
 
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
-if (length(offline_dotplots) > 0) {
-    # Show one tab per contrast/database, with all available rankings inside.
-    # Paths were checked against the unit layout in the setup chunk.
-    rel <- substring(offline_dotplots, nchar(gsea_plot_dir) + 2L)
-    p <- strsplit(rel, "/", fixed = TRUE)
-    db <- vapply(p, `[[`, character(1), 1L)
-    ranking <- sub("^ranking_by_", "", vapply(p, `[[`, character(1), 2L))
-    contrast <- vapply(p, `[[`, character(1), 3L)
-    group <- paste(contrast, db, sep = " — ")
-    for (key in unique(group)) {
-        cat(sprintf("\n### %s\n\n", key))
-        for (i in which(group == key)) {
-            label <- paste(contrast[i], db[i], ranking[i], sep = " — ")
-            cat(sprintf("\n**Ranking: %s**\n\n", ranking[i]))
-            cat(sprintf("![%s](%s)\n\n", label, offline_dotplots[i]))
-        }
-    }
-} else if (length(legacy_dotplots) > 0) {
-    for (pp in legacy_dotplots) {
-        label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
-        label <- gsub("_", " ", label_raw)
-        cat(sprintf("\n### %s\n\n", label))
-        cat(sprintf("![%s](%s)\n\n", label, pp))
-        render_commentary(paste0("pathway_", label_raw))
-    }
+for (pp in legacy_dotplots) {
+    label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
+    label <- gsub("_", " ", label_raw)
+    cat(sprintf("\n### %s\n\n", label))
+    cat(sprintf("![%s](%s)\n\n", label, pp))
+    render_commentary(paste0("pathway_", label_raw))
 }
 ```
 
-## Leading Edge Genes {.tabset}
+```{r leading-edge, eval=has_enrichment && !offline_ran, results='asis'}
+cat("\n## Leading Edge Genes {.tabset}\n\n")
+cat("The **leading edge** genes are those that contribute most to the enrichment ",
+    "signal of each pathway. These are the genes that appear before the peak of ",
+    "the running enrichment score.\n\n", sep = "")
 
-The **leading edge** genes are those that contribute most to the enrichment signal of each pathway. These are the genes that appear before the peak of the running enrichment score.
-
-```{r leading-edge, eval=has_enrichment, results='asis'}
 # Load annotation for gene name lookup
 anno_le <- NULL
 anno_file_le <- file.path(enrich_dir, "gene_annotation.csv")
@@ -2951,84 +3476,46 @@ if (file.exists(anno_file_le)) {
     anno_le <- read.csv(anno_file_le, stringsAsFactors = FALSE)
 }
 
-if (offline_ran && !is.null(offline_gsea) && nrow(offline_gsea) > 0) {
-    # The leading edge each ranking's GSEA reported (fgsea's leadingEdge, or
-    # clusterProfiler's core_enrichment), unchanged; top 10 pathways per ranking.
-    for (key in unique(paste(offline_gsea$contrast, offline_gsea$database, sep = "\r"))) {
-        rows <- offline_gsea[paste(offline_gsea$contrast, offline_gsea$database, sep = "\r") == key, ,
-                             drop = FALSE]
-        cat(sprintf("\n### %s — %s\n\n", rows$contrast[1], rows$database[1]))
-        le_rows <- do.call(rbind, lapply(split(rows, rows$ranking_method), function(r) {
-            head(r[order(r$padj), , drop = FALSE], 10)
-        }))
-        le_df <- data.frame(
-            Pathway = le_rows$Pathway,
-            ID = le_rows$ID,
-            Ranking = le_rows$Ranking,
-            NES = round(le_rows$NES, 2),
-            padj = signif(le_rows$padj, 3),
-            `Leading Edge Genes` = vapply(strsplit(le_rows$leading_edge, ",", fixed = TRUE),
-                function(g) {
-                    g <- g[!is.na(g) & nzchar(g)]
-                    if (!is.null(anno_le)) {
-                        sym <- anno_le$symbol[match(g, anno_le$gene_id)]
-                        g[!is.na(sym)] <- sym[!is.na(sym)]
-                    }
-                    paste(head(g, 15), collapse = ", ")
-                }, character(1)),
-            check.names = FALSE, stringsAsFactors = FALSE)
-        print(knitr::kable(le_df, caption = sprintf("Leading edge genes, top pathways per ranking — %s, %s",
-                                                    rows$contrast[1], rows$database[1]),
-                           row.names = FALSE))
-        cat("\n\n")
-    }
-} else if (offline_ran) {
-    cat("No significant pathways with leading edge information.\n\n")
-}
+fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+for (ff in fgsea_files) {
+    label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
+    label_clean <- gsub("_", " ", label)
+    cat(sprintf("\n### %s\n\n", label_clean))
 
-fgsea_files <- if (offline_ran) character(0) else
-    list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
-if (length(fgsea_files) > 0) {
-    for (ff in fgsea_files) {
-        label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
-        label_clean <- gsub("_", " ", label)
-        cat(sprintf("\n### %s\n\n", label_clean))
+    fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
+    sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj <= gsea_cut, ]
 
-        fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
-        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj <= gsea_cut, ]
+    if (nrow(sig) > 0 && "leadingEdge" %in% names(sig)) {
+        sig <- head(sig[order(sig$padj), ], 10)  # Top 10 pathways
 
-        if (nrow(sig) > 0 && "leadingEdge" %in% names(sig)) {
-            sig <- head(sig[order(sig$padj), ], 10)  # Top 10 pathways
+        le_list <- list()
+        for (i in seq_len(nrow(sig))) {
+            pathway_name <- if ("pathway_name" %in% names(sig)) sig$pathway_name[i] else sig$pathway[i]
+            le_genes <- strsplit(sig$leadingEdge[i], ",")[[1]]
 
-            le_list <- list()
-            for (i in seq_len(nrow(sig))) {
-                pathway_name <- if ("pathway_name" %in% names(sig)) sig$pathway_name[i] else sig$pathway[i]
-                le_genes <- strsplit(sig$leadingEdge[i], ",")[[1]]
-
-                # Convert to gene symbols if annotation available
-                if (!is.null(anno_le)) {
-                    le_symbols <- anno_le$symbol[match(le_genes, anno_le$gene_id)]
-                    le_symbols[is.na(le_symbols)] <- le_genes[is.na(le_symbols)]
-                    le_genes <- le_symbols
-                }
-
-                le_list[[i]] <- data.frame(
-                    Pathway = pathway_name,
-                    NES = round(sig$NES[i], 2),
-                    padj = signif(sig$padj[i], 3),
-                    `Leading Edge Genes` = paste(head(le_genes, 15), collapse = ", "),
-                    check.names = FALSE,
-                    stringsAsFactors = FALSE
-                )
+            # Convert to gene symbols if annotation available
+            if (!is.null(anno_le)) {
+                le_symbols <- anno_le$symbol[match(le_genes, anno_le$gene_id)]
+                le_symbols[is.na(le_symbols)] <- le_genes[is.na(le_symbols)]
+                le_genes <- le_symbols
             }
 
-            le_df <- do.call(rbind, le_list)
-            print(knitr::kable(le_df, caption = paste("Leading edge genes for top pathways —", label_clean),
-                               row.names = FALSE))
-            cat("\n\n")
-        } else {
-            cat("No significant pathways with leading edge information.\n\n")
+            le_list[[i]] <- data.frame(
+                Pathway = pathway_name,
+                NES = round(sig$NES[i], 2),
+                padj = signif(sig$padj[i], 3),
+                `Leading Edge Genes` = paste(head(le_genes, 15), collapse = ", "),
+                check.names = FALSE,
+                stringsAsFactors = FALSE
+            )
         }
+
+        le_df <- do.call(rbind, le_list)
+        print(knitr::kable(le_df, caption = paste("Leading edge genes for top pathways —", label_clean),
+                           row.names = FALSE))
+        cat("\n\n")
+    } else {
+        cat("No significant pathways with leading edge information.\n\n")
     }
 }
 ```
@@ -3046,7 +3533,7 @@ files_tbl <- data.frame(
     "Datasets/deseq2_summary_p0.05.tsv",
     "Datasets/de_summary_counts.tsv",
     "Datasets/rna_counts_filtered.tsv",
-    "Datasets/rna_norm_TMMlogCPM.tsv"
+    if (isTRUE(file.exists(rna_norm_file))) file.path("Datasets", basename(rna_norm_file)) else "Datasets/rna_norm_<method>.tsv"
   ),
   Description = c(
     "Excel workbook with all genes and DE statistics (p < 0.05)",
@@ -3055,7 +3542,7 @@ files_tbl <- data.frame(
     "DESeq2 summary for significant genes",
     "DE gene counts per contrast (up/down/total)",
     "Raw counts matrix after gene filtering",
-    "TMMlogCPM-normalized expression matrix"
+    sprintf("Normalized expression matrix (%s)", rna_norm_label)
   ),
   stringsAsFactors = FALSE
 )
@@ -3072,6 +3559,17 @@ if (has_enrichment) {
         )
         files_tbl <- rbind(files_tbl, enrich_tbl)
     }
+}
+
+if (bc_show) {
+    files_tbl <- rbind(files_tbl, data.frame(
+        File = file.path("Datasets", c(bc_record$output_file[1], "batch_correction.tsv")),
+        Description = c(
+            sprintf("Batch-corrected expression matrix (%s) — exploratory display only, not DE input",
+                    bc_record$method[1]),
+            "Record of the batch correction that ran"),
+        stringsAsFactors = FALSE
+    ))
 }
 
 kable(files_tbl, caption = "Key output files in the rna/ directory")
@@ -3149,10 +3647,9 @@ n_samples
 
 cat(rna_filt$methods, " ")
 
-cat(sprintf(
-"Expression values were normalized using %s. ",
-norm_desc
-))
+cat(norm_sentence, " ")
+
+if (bc_show) cat(bc_text, " ")
 
 cat(sprintf(
 "Differential expression analysis was performed using %s with default parameters. ",
@@ -3176,9 +3673,10 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). %s",
-rna_filt$methods, norm_desc, de_method, padj_cut, lfc_cut, pathway_methods_text
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). %s %s Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). %s",
+rna_filt$methods, norm_sentence, de_method, padj_cut, lfc_cut, pathway_methods_text
 ))
+if (bc_show) cat(" ", bc_text)
 
 cat("\n</div>\n")
 ```

@@ -359,6 +359,39 @@ assert_one_of <- function(x, name, choices, allow_null = FALSE) {
     invisible(TRUE)
 }
 
+#' Check that a config block is a map holding only known keys
+#'
+#' A key no code reads is otherwise dropped without a word and its default used
+#' instead: the run finishes, and the saved config still shows the setting as
+#' if it had applied. Each validator that knows which keys a block may hold
+#' calls this, so the refusal reads the same in every mode.
+#'
+#' @param x The config block, or NULL when the block is absent (accepted).
+#' @param known Character vector of the keys the block may hold.
+#' @param at Config path of the block, used to open the error message.
+#' @param hint Optional sentence appended to the unknown-key message, for a
+#'   caller that can say what the reader should do next.
+#' @return \code{TRUE}, invisibly. Stops when \code{x} is not a map of named
+#'   settings, or holds a key that is not in \code{known}; every unknown key is
+#'   named, not only the first.
+#' @examples
+#' assert_known_keys(list(p_cutoff = 0.05), c("p_cutoff", "method"), "de")
+#' try(assert_known_keys(list(p_cuttoff = 0.05), c("p_cutoff", "method"), "de"))
+assert_known_keys <- function(x, known, at, hint = NULL) {
+    if (is.null(x)) return(invisible(TRUE))
+    if (!is.list(x) || (length(x) > 0 &&
+                        (is.null(names(x)) || any(is.na(names(x)) | !nzchar(trimws(names(x))))))) {
+        stop(at, " must be a map of settings (key: value).", call. = FALSE)
+    }
+    bad <- setdiff(names(x), known)
+    if (length(bad) > 0) {
+        stop(at, " has unknown key(s): ", paste(bad, collapse = ", "), ". Known: ",
+             paste(known, collapse = ", "), ".",
+             if (!is.null(hint)) paste0("\n  ", hint), call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
 #' Assert PCA Scores Contract
 #'
 #' Validates that an object conforms to the PCA scores data.frame contract.

@@ -41,7 +41,12 @@
 # through the existing mmc_select_model() (06d). The built-in `human_mfn` model
 # lives inside the Python package and is not readable from R; with that model
 # the evidence layer reports itself unavailable (returns NULL) rather than
-# guessing. Nothing in this file is wired into the pipeline or the report yet.
+# guessing.
+#
+# The chain itself (`.mmc_assemble_evidence()`) does not depend on the engine.
+# This file feeds it from the python engine's EC tables; 06s feeds it from the
+# MetaboAnalyst-compatible engine's matched-feature table. The report sections
+# (06e) pick the reader by engine.
 
 # Statistical caveat: this layer reports the per-feature p-value and logFC that
 # mummichog received as input, but does NOT flag features as significant. That
@@ -345,9 +350,14 @@ read_mummichog_model_pathways <- function(path) {
 #' have the model available when evidence is built. Callers can then omit the
 #' evidence instead of showing guessed identities.
 #'
+#' The model file's sha256 travels with the index as `attr(, "sha256")`, so a
+#' consumer can check that the model it reads is the one an analysis recorded
+#' (the MetaboAnalyst-compatible engine records it in `ma_run_info.json`).
+#'
 #' @param config    Full pipeline config.
 #' @param cache_dir Model cache directory (as used by the stage).
-#' @return The list from `read_mummichog_model_pathways()`, or `NULL`.
+#' @return The list from `read_mummichog_model_pathways()` with the file's
+#'   sha256 as `attr(, "sha256")`, or `NULL`.
 mmc_load_model_pathways <- function(config,
                                     cache_dir = "envs/mummichog-models") {
   mummi_cfg <- config$modes$metabolomics$enrichment$mummichog %||% list()
@@ -369,10 +379,12 @@ mmc_load_model_pathways <- function(config,
             "Configure model_ref / model_json to enable it.")
     return(NULL)
   }
-  tryCatch(read_mummichog_model_pathways(network), error = function(e) {
+  out <- tryCatch(read_mummichog_model_pathways(network), error = function(e) {
     warning("mummichog evidence: ", conditionMessage(e), call. = FALSE)
     NULL
   })
+  if (!is.null(out)) attr(out, "sha256") <- .mmc_sha256_file(network)
+  out
 }
 
 
@@ -839,12 +851,63 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
     return(NULL)
   }
 
+  .mmc_assemble_evidence(
+    pathways,
+    ec_lists   = lapply(pathways[[ec_col]], .mmc_split_cell, sep = ","),
+    cand_by_ec = split(cand, cand$EID),
+    feat_by_ec = split(feat, feat$EID),
+    model      = model,
+    annot      = annot)
+}
+
+#' Assemble the three evidence frames from per-EC candidates and features
+#'
+#' The engine-independent half of the evidence layer: for every pathway, its
+#' supporting ECs, their pathway-matching candidates (the EC's candidates that
+#' belong to the pathway), their measured features, each feature's original
+#' annotation and agreement, and the pathway-level roll-up. The readers that
+#' feed it (python: `build_mummichog_pathway_evidence()`; MetaboAnalyst-
+#' compatible: `build_mummichog_ma_pathway_evidence()`, 06s) decide which ECs
+#' support a pathway and which features an EC holds; this function decides
+#' nothing about either.
+#'
+#' Two agreement rules, chosen by `own_matches`:
+#' \describe{
+#'   \item{`FALSE` (python engine)}{every feature of an EC is compared with all
+#'     of the EC's pathway-matching candidates.}
+#'   \item{`TRUE` (MetaboAnalyst-compatible engine)}{each feature is compared
+#'     only with the pathway-matching candidates it matched itself
+#'     (`feat$matched_compounds`). A MetaboAnalyst EC can hold features matched
+#'     to different compounds, so a feature can sit in a supporting EC without
+#'     matching any of the pathway's compounds; it reads `"Not assessed"`. The
+#'     feature table then also carries the engine's own columns (polarity, the
+#'     feature's matches, the input statistic and the DE log2FC).}
+#' }
+#' Either way the pathway's EC membership and the support counts are the
+#' reader's, untouched.
+#'
+#' @param pathways   Pathway table with `pathway`, `overlap_size`,
+#'   `pathway_size` and a p-value column.
+#' @param ec_lists   List, one element per row of `pathways`: the ids of the
+#'   ECs supporting that pathway.
+#' @param cand_by_ec Named list, EC id -> data.frame with `compound_id` and
+#'   `compound_name` (NA falls back to the model's name).
+#' @param feat_by_ec Named list, EC id -> data.frame with `feature_id`, `mz`,
+#'   `retention_time`, `adduct`, `p_value`, `statistic`; with `own_matches`
+#'   also `polarity`, `matched_compounds` (";"-joined) and `log2fc`.
+#' @param model      Model index from `read_mummichog_model_pathways()`.
+#' @param annot      Normalised annotations from `normalize_metab_annotation()`.
+#' @param own_matches Use the MetaboAnalyst-compatible agreement rule and
+#'   columns (see above).
+#' @return `NULL` when no pathway has evidence, else the list described in
+#'   `build_mummichog_pathway_evidence()`.
+#' @noRd
+.mmc_assemble_evidence <- function(pathways, ec_lists, cand_by_ec, feat_by_ec,
+                                   model, annot, own_matches = FALSE) {
   p_col <- .mmc_find_col(pathways,
                          c("p-value", "p.value", "pvalue", "p_value", "P.Value"),
                          "^p[._-]?value$")
 
-  cand_by_ec <- split(cand, cand$EID)
-  feat_by_ec <- split(feat, feat$EID)
   annot_idx  <- if (nrow(annot) > 0) {
     stats::setNames(seq_len(nrow(annot)), as.character(annot$feature_id))
   } else {
@@ -858,7 +921,7 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
   for (i in seq_len(nrow(pathways))) {
     pw_name <- as.character(pathways$pathway[i])
     pw_cpds <- model$pathways[[pw_name]]
-    eids    <- .mmc_split_cell(pathways[[ec_col]][i], ",")
+    eids    <- ec_lists[[i]]
     if (length(eids) == 0) next
 
     ec_acc   <- list()
@@ -902,27 +965,66 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
         }
         a_conf[ok] <- annot$original_annotation_confidence[idx[ok]]
       }
-      agree <- vapply(seq_len(nrow(ec_feat)), function(k) {
-        mmc_annotation_agreement(a_kegg[k], a_name[k],
-                                 cand_ids, cand_kegg, cand_nms,
-                                 annot_hmdb = a_hmdb[k])
-      }, character(1))
+      if (own_matches) {
+        # Each feature's own matches among this pathway's candidates: the only
+        # identities its annotation is compared with.
+        own <- lapply(ec_feat$matched_compounds, function(x)
+          intersect(.mmc_split_cell(x, ";"), cand_ids))
+        agree <- vapply(seq_len(nrow(ec_feat)), function(k) {
+          j <- which(cand_ids %in% own[[k]])
+          if (length(j) == 0) return("Not assessed")
+          mmc_annotation_agreement(a_kegg[k], a_name[k],
+                                   cand_ids[j], cand_kegg[j], cand_nms[j],
+                                   annot_hmdb = a_hmdb[k])
+        }, character(1))
+        join_ids <- function(x) .mmc_join_unique(.mmc_split_cell(x, ";"))
+        feat_acc[[length(feat_acc) + 1L]] <- data.frame(
+          check.names = FALSE, stringsAsFactors = FALSE,
+          "Pathway"                = pw_name,
+          "EmpiricalCompound"      = eid,
+          "Feature"                = ec_feat$feature_id,
+          "Polarity"               = ec_feat$polarity,
+          "m/z"                    = ec_feat$mz,
+          "RT"                     = ec_feat$retention_time,
+          "Adduct/ion"             = ec_feat$adduct,
+          "Matched compound(s)"    = vapply(ec_feat$matched_compounds, join_ids,
+                                            character(1), USE.NAMES = FALSE),
+          "Pathway candidate(s) matched by feature" =
+            vapply(own, .mmc_join_unique, character(1)),
+          "Matched via pathway candidate" = lengths(own) > 0,
+          "Feature p-value"        = ec_feat$p_value,
+          # The signed statistic the engine was given (its GSEA ranks on it):
+          # a t statistic for limma, so never labelled log2FC.
+          "Feature statistic (MetaboAnalyst input)" = ec_feat$statistic,
+          "Feature log2FC (DE)"    = ec_feat$log2fc,
+          "Original annotation"    = a_name,
+          "Annotation ID"          = a_id,
+          "Annotation confidence"  = a_conf,
+          "Agreement"              = agree
+        )
+      } else {
+        agree <- vapply(seq_len(nrow(ec_feat)), function(k) {
+          mmc_annotation_agreement(a_kegg[k], a_name[k],
+                                   cand_ids, cand_kegg, cand_nms,
+                                   annot_hmdb = a_hmdb[k])
+        }, character(1))
 
-      feat_acc[[length(feat_acc) + 1L]] <- data.frame(
-        check.names = FALSE, stringsAsFactors = FALSE,
-        "Pathway"                = pw_name,
-        "EmpiricalCompound"      = eid,
-        "Feature"                = ec_feat$feature_id,
-        "m/z"                    = ec_feat$mz,
-        "RT"                     = ec_feat$retention_time,
-        "Adduct/ion"             = ec_feat$adduct,
-        "Feature p-value"        = ec_feat$p_value,
-        "Feature log2FC (mummichog input)" = ec_feat$statistic,
-        "Original annotation"    = a_name,
-        "Annotation ID"          = a_id,
-        "Annotation confidence"  = a_conf,
-        "Agreement"              = agree
-      )
+        feat_acc[[length(feat_acc) + 1L]] <- data.frame(
+          check.names = FALSE, stringsAsFactors = FALSE,
+          "Pathway"                = pw_name,
+          "EmpiricalCompound"      = eid,
+          "Feature"                = ec_feat$feature_id,
+          "m/z"                    = ec_feat$mz,
+          "RT"                     = ec_feat$retention_time,
+          "Adduct/ion"             = ec_feat$adduct,
+          "Feature p-value"        = ec_feat$p_value,
+          "Feature log2FC (mummichog input)" = ec_feat$statistic,
+          "Original annotation"    = a_name,
+          "Annotation ID"          = a_id,
+          "Annotation confidence"  = a_conf,
+          "Agreement"              = agree
+        )
+      }
 
       ec_acc[[length(ec_acc) + 1L]] <- data.frame(
         check.names = FALSE, stringsAsFactors = FALSE,
@@ -946,6 +1048,16 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
         "n_conflict"                     = sum(agree == "Conflict"),
         "n_not_assessed"                 = sum(agree == "Not assessed")
       )
+      if (own_matches) {
+        # In mixed mode one EC can hold features of both polarities.
+        k <- length(ec_acc)
+        ec_acc[[k]][["Polarities"]] <- .mmc_join_unique(
+          sort(ec_feat$polarity, method = "radix"))
+        nm <- names(ec_acc[[k]])
+        ec_acc[[k]] <- ec_acc[[k]][, c(nm[1:3], "Polarities",
+                                       setdiff(nm[-(1:3)], "Polarities")),
+                                   drop = FALSE]
+      }
     }
 
     if (length(ec_acc) == 0) next

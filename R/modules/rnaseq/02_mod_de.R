@@ -15,6 +15,7 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
 
     # Extract DE configuration
     de_cfg <- config$modes$rna$de
+    batch_cfg <- get_rna_batch_model_config(config$modes$rna)
 
     # Get contrasts (already loaded by load_rna_inputs), auto-generate if missing
     contrasts_df <- inputs$contrasts
@@ -34,14 +35,16 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
             expr = pre$expr_work,
             meta = pre$meta,
             contrasts_df = contrasts_df,
-            de_cfg = de_cfg
+            de_cfg = de_cfg,
+            batch_cfg = batch_cfg
         )
     } else {
         run_deseq2_de(
             counts = pre$de_input,
             meta = pre$meta,
             contrasts_df = contrasts_df,
-            de_cfg = de_cfg
+            de_cfg = de_cfg,
+            batch_cfg = batch_cfg
         )
     }
 }

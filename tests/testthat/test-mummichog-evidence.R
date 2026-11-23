@@ -290,6 +290,36 @@ test_that("row_data with no annotation columns yields no usable annotation", {
   expect_equal(nrow(normalize_metab_annotation(NULL)), 0L)
 })
 
+test_that("evidence annotation is unchanged by KEGG column canonicalization", {
+  # #384: mod_met_raw() now resolves KEGG_ID / "KEGG ID" / ... into `KEGG`
+  # before the evidence layer sees row_data. normalize_metab_annotation() keeps
+  # its own per-row coalescing across those names, so it must read the same
+  # ids either way. Rows: KEGG only, alias only, agreeing, conflicting, none.
+  rd <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                   feature_id = paste0("f", 1:5),
+                   Name       = c("AMP", "dGMP", "Glucose", "Citrate", NA),
+                   KEGG       = c("C00020", NA, "C00031", "C00158", NA),
+                   KEGG_ID    = c(NA, "C00362", "C00031", "C00022", NA),
+                   `KEGG ID`  = c(NA, NA, NA, NA, "C00041"))
+
+  cleaned <- suppressMessages(clean_kegg_chemspider(rd))
+  canon   <- suppressWarnings(suppressMessages(canonicalize_kegg_column(cleaned)))
+
+  before <- normalize_metab_annotation(cleaned)
+  after  <- normalize_metab_annotation(canon)
+  expect_identical(after, before)
+  expect_identical(after$original_annotation_kegg,
+                   c("C00020", "C00362", "C00031", "C00158", "C00041"))
+
+  # Alias-only input, where canonicalization renames the column.
+  rd_alias <- rd[, c("feature_id", "Name", "KEGG_ID")]
+  cleaned_alias <- suppressMessages(clean_kegg_chemspider(rd_alias))
+  expect_identical(
+    normalize_metab_annotation(
+      suppressMessages(canonicalize_kegg_column(cleaned_alias))),
+    normalize_metab_annotation(cleaned_alias))
+})
+
 
 # ---------------------------------------------------------------------------
 # annotation agreement rules

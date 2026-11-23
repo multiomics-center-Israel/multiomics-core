@@ -132,6 +132,20 @@ build_mummichog_pathway_table <- function(pathways) {
     "Enrichment ratio" = round(overlap / pathway_size, 3),
     "p.value"          = pval
   )
+  if (.mmc_is_ma_table(pathways)) {
+    # MetaboAnalyst-compatible engine (06n): p.value is FET, MetaboAnalyst's
+    # plotted p-value; its other statistics follow, and the adjusted columns
+    # are HOLM (MetaboAnalyst's p.adjust default), named so that no reader can
+    # take them for BH/FDR. Rows stay in MetaboAnalyst's own order.
+    num <- function(col) suppressWarnings(as.numeric(pathways[[col]]))
+    out[["p.value EASE"]]      <- num("EASE")
+    out[["p.value Gamma"]]     <- num("Gamma")
+    out[["p.value empirical"]] <- num("Empirical")
+    out[["adj.p Holm FET"]]    <- num("Holm_adj_FET")
+    out[["adj.p Holm EASE"]]   <- num("Holm_adj_EASE")
+    out[["adj.p Holm Gamma"]]  <- num("Holm_adj_Gamma")
+    return(out[order(num("ma_rank")), , drop = FALSE])
+  }
   out[order(out[["p.value"]]), , drop = FALSE]
 }
 
@@ -264,7 +278,18 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #'   the ORA bubble and keeps its meaning; `gsea` is the result list from
 #'   `run_mummichog_gsea()` and `gsea_plot` its scatter, both `NULL` when GSEA
 #'   did not run. `evidence` is the three-frame list from
-#'   `build_mummichog_pathway_evidence()`, or `NULL`. Empty list when there is
+#'   `build_mummichog_pathway_evidence()` (python engine) or
+#'   `build_mummichog_ma_pathway_evidence()` (MetaboAnalyst-compatible engine),
+#'   or `NULL`. `evidence_note` is, for the MetaboAnalyst-compatible engine, the
+#'   reason evidence was not built (NULL when it was, and always NULL for the
+#'   python engine); `evidence_log2fc_note` likewise says why its
+#'   `Feature log2FC (DE)` column is empty or incomplete. The presentation
+#'   fields (06t), which the Shiny payload does not carry: `overview` (every
+#'   pathway, `build_mummichog_overview()`; its first rows are `summary`'s),
+#'   `ora_detail` (`build_mummichog_ora_detail()`), `input_counts`
+#'   (`mmc_input_counts()`), `p_cutoff`, and `candidate_names` (model names of
+#'   the candidates the features matched, `mmc_candidate_name_map()`; NULL for
+#'   the python engine), read by the workbook only. Empty list when there is
 #'   nothing to show.
 build_mummichog_report_sections <- function(pathways_by_contrast, config,
                                             files = NULL, row_data = NULL,
@@ -325,14 +350,31 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     # either there is nothing to trace, and a failure here must not cost the
     # contrast its ORA plot and table.
     cfiles   <- files_by_contrast[[contrast]]
-    evidence <- if (is.null(cfiles) || is.null(model)) NULL else tryCatch(
-      build_mummichog_pathway_evidence(pw, cfiles, model, annot),
-      error = function(e) {
-        warning("mummichog evidence: contrast '", contrast, "' failed: ",
-                conditionMessage(e), call. = FALSE)
-        NULL
-      }
-    )
+    # Each engine's evidence is read from its own result files: the python
+    # engine's EC tables (06f), or the MetaboAnalyst-compatible engine's
+    # matched-feature table (06s). For the latter a missing piece is not
+    # silent: the reason travels with the section and the report shows it.
+    is_ma <- .mmc_is_ma_table(pw)
+    evidence_note <- NULL
+    evidence_log2fc_note <- NULL
+    if (is_ma) {
+      ma_ev <- mmc_ma_section_evidence(
+        pw, cfiles, model, annot,
+        de_table = .mmc_de_table_for_contrast(de_res, de_contrast),
+        contrast = contrast)
+      evidence      <- ma_ev$evidence
+      evidence_note <- ma_ev$note
+      evidence_log2fc_note <- ma_ev$log2fc_note
+    } else {
+      evidence <- if (is.null(cfiles) || is.null(model)) NULL else tryCatch(
+        build_mummichog_pathway_evidence(pw, cfiles, model, annot),
+        error = function(e) {
+          warning("mummichog evidence: contrast '", contrast, "' failed: ",
+                  conditionMessage(e), call. = FALSE)
+          NULL
+        }
+      )
+    }
 
     # -- complementary GSEA (additive, fail-soft) ----------------------------
     # Same preconditions as the evidence layer, plus a DE table for the ranking
@@ -341,8 +383,10 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     # the engine's own message (it ran and found nothing), and an EXECUTION
     # ERROR warns. Conflating them would let an environment failure read as a
     # finding about the data.
+    # Python GSEA reads the python EC tables, so it never runs for the
+    # MetaboAnalyst-compatible engine, whose own GSEA is attached below.
     gsea <- NULL
-    if (gsea_enabled && !is.null(cfiles) && !is.null(model)) {
+    if (!is_ma && gsea_enabled && !is.null(cfiles) && !is.null(model)) {
       de_tbl <- .mmc_de_table_for_contrast(de_res, de_contrast)
       if (is.null(de_tbl)) {
         # Not silent: the stage ran this contrast, so losing GSEA here is a
@@ -382,6 +426,11 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
         )
       }
     }
+    # The MetaboAnalyst-compatible engine ran its GSEA in the stage, on its
+    # own joint-polarity ECs (06o); its result travels with the pathway table.
+    # The python GSEA above never runs for it, so the two engines' results
+    # cannot be mixed in one section.
+    if (is_ma && gsea_enabled) gsea <- attr(pw, "ma_gsea")
     # Same cutoff the ORA plot and the report's figure legends use: the legend
     # states the value from config, so a scatter drawn at the function default
     # would put its dashed line somewhere the caption does not claim.
@@ -389,17 +438,43 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
       plot_mummichog_gsea_scatter(gsea$table, title = ttl$title,
                                   subtitle = ttl$subtitle, p_cutoff = p_cut)
 
+    identified <- mmc_identified_support(enrichment_res, de_contrast)
     summary <- build_mummichog_summary(
       tbl, gsea_table = gsea$table, evidence = evidence,
       pathway_ids = model$pathway_ids,
-      identified  = mmc_identified_support(enrichment_res, de_contrast),
+      identified  = identified,
       library_ids = library_ids, p_cutoff = p_cut)
+    # Reader-facing presentation (06t), beside -- never instead of -- the
+    # Summary and ORA table above, which are the Shiny app's contract. Built
+    # from the same objects and the same Summary builder, so its first rows
+    # are the Summary's rows.
+    overview <- build_mummichog_overview(
+      tbl, gsea_table = gsea$table, evidence = evidence,
+      pathway_ids = model$pathway_ids, identified = identified,
+      library_ids = library_ids, p_cutoff = p_cut,
+      engine = if (is_ma) "metaboanalyst" else "python",
+      evidence_note = evidence_note)
 
     sections[[contrast]] <- list(title = ttl$title, subtitle = ttl$subtitle,
                                  plot = plot, table = tbl,
                                  gsea = gsea, gsea_plot = gsea_plot,
                                  evidence = evidence, summary = summary,
-                                 polarity = lab$polarity)
+                                 evidence_note = evidence_note,
+                                 evidence_log2fc_note = evidence_log2fc_note,
+                                 # Model names of the candidates the features
+                                 # matched, for the workbook (06v) only.
+                                 candidate_names = if (is_ma && !is.null(evidence))
+                                   mmc_candidate_name_map(evidence$feature_table, model),
+                                 overview = overview,
+                                 ora_detail = build_mummichog_ora_detail(pw, tbl),
+                                 input_counts = mmc_input_counts(
+                                   pw, .mmc_de_table_for_contrast(de_res, de_contrast),
+                                   de_res),
+                                 p_cutoff = p_cut,
+                                 de_contrast = de_contrast,
+                                 polarity = lab$polarity,
+                                 engine = if (is_ma) "metaboanalyst" else "python",
+                                 ma_info = if (is_ma) attr(pw, "ma_info") else NULL)
   }
 
   # Assign a de-duplicated, filesystem-safe slug per section (same sanitise +
@@ -411,6 +486,31 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
     for (i in seq_along(sections)) sections[[i]]$slug <- slugs[[i]]
   }
   sections
+}
+
+#' The presentation export paths of one contrast slug
+#'
+#' The single list of the file names `save_mummichog_exports()` writes for a
+#' contrast, used wherever those exports are cleared without a section.
+#'
+#' @param dest_dir The `mummichog_pinned/` directory.
+#' @param slug     The contrast's export slug.
+#' @param all      FALSE for the GSEA and Summary exports only; TRUE adds the
+#'   ORA bubble and pathway table and the evidence tables.
+#' @return Character vector of paths (whether or not they exist).
+#' @noRd
+.mmc_contrast_export_paths <- function(dest_dir, slug, all = FALSE) {
+  stem <- function(s, ext) file.path(dest_dir, paste0(s, slug, ext))
+  c(stem("mummichog_gsea_table_", c(".tsv", ".csv")),
+    stem("mummichog_gsea_scatter_", c(".png", ".pdf")),
+    stem("mummichog_summary_", c(".tsv", ".csv")),
+    if (all) c(
+      stem("mummichog_pathway_bubble_", c(".png", ".pdf")),
+      stem("mummichog_pathway_table_", c(".tsv", ".csv")),
+      stem(rep(c("mummichog_evidence_pathways_",
+                 "mummichog_evidence_empirical_compounds_",
+                 "mummichog_evidence_features_"), each = 2),
+           c(".tsv", ".csv"))))
 }
 
 #' Clear GSEA and Summary exports belonging to contrasts with no report section
@@ -426,6 +526,10 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
 #' section owns. Whether such a
 #' contrast should get a GSEA analysis at all is a separate question about the
 #' section contract, tracked rather than decided here.
+#'
+#' One exception widens it: a contrast the MetaboAnalyst-compatible engine
+#' recorded as failed (`ma_failed.json`, 06n) has no current result at all, so
+#' its ORA bubble and pathway table and its evidence exports are removed too.
 #'
 #' @param files    Flat character vector of every mummichog output file.
 #' @param sections The sections from `build_mummichog_report_sections()`.
@@ -453,13 +557,17 @@ clear_orphan_mummichog_gsea_exports <- function(files, sections, out_dir) {
   all_slugs <- make.unique(gsub("[^A-Za-z0-9]+", "_", names(groups)), sep = "_")
   orphans <- setdiff(all_slugs, live)
   if (length(orphans) == 0) return(character(0))
+  # A contrast the MetaboAnalyst-compatible engine recorded as FAILED this run
+  # (06n) has no current result of any kind, so every export of its slug is
+  # stale -- the ORA bubble and table and the evidence tables too, not only
+  # the GSEA and Summary files every orphan loses.
+  failed_slugs <- all_slugs[vapply(groups, .mmc_ma_contrast_failed, logical(1),
+                                   USE.NAMES = FALSE)]
 
   dest_dir <- file.path(out_dir, "mummichog_pinned")
-  paths <- unlist(lapply(orphans, function(slug) c(
-    file.path(dest_dir, paste0("mummichog_gsea_table_", slug, c(".tsv", ".csv"))),
-    file.path(dest_dir, paste0("mummichog_gsea_scatter_", slug, c(".png", ".pdf"))),
-    file.path(dest_dir, paste0("mummichog_summary_", slug, c(".tsv", ".csv")))
-  )), use.names = FALSE)
+  paths <- unlist(lapply(orphans, function(slug) {
+    .mmc_contrast_export_paths(dest_dir, slug, all = slug %in% failed_slugs)
+  }), use.names = FALSE)
 
   gone <- paths[file.exists(paths)]
   unlink(gone)

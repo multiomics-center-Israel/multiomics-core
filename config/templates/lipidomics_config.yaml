@@ -32,11 +32,25 @@ modes:
       metadata: "lipidomics/sample_metadata.csv"                 # Optional
 
     # ---- Feature ID construction ----
+    # Unlike metabolomics, the lipid feature_id is normally taken from an id or
+    # name column; it is built from m/z and RT only as the last fallback.
+    # "lipidsearch" and "processed_wide" take the first of these that exists:
+    #   1. feature_id_col  values as-is (empty/NA kept); duplicates made unique
+    #                      with "_" + a warning
+    #   2. "Molecule"      (always wins over name_col when the column exists)
+    #   3. name_col
+    #   4. lipid_N, plus _mz<mz> and/or _rt<rt> for each of mz_col / rt_col
+    #      that exists (so lipid_N, lipid_N_mz…, lipid_N_rt… or both)
+    # For 2 and 3, empty names become unknown_N. A configured column that is
+    # absent does NOT stop the run; the next option is used silently.
+    # "translated_csv" uses feature_id_col if set, else name_col, and STOPS if
+    # that column is missing.
+    # With "lipidsearch", a custom feature_id_col must also be listed in
+    # annotation_cols; otherwise, when no metadata restricts the samples, it is
+    # read as a sample column.
     id_columns:
       # If set and exists in data, use this column directly as feature_id
       feature_id_col: null
-      # For LipidSearch format: Molecule column is used by default
-      # For translated CSV: Metabolite column is used by default
       name_col: "Metabolite"
       # LipidSearch annotation columns (used to separate annotation from sample data)
       annotation_cols:

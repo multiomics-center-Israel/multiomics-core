@@ -441,14 +441,27 @@ proteomics_log_offset <- function(config) {
 #' excluded — \code{expr_filt} carries NAs for unobserved measurements, so CV
 #' uses observed values only and a group with <2 observations yields NA.
 #'
+#' No columns are built under vsn normalization: \code{expr_filt} then holds
+#' generalized-log2 values of calibrated intensities, and 2 raised to such a
+#' value is not an intensity, so the back-transform above has no meaning.
+#'
 #' @param pre Proteomics preprocessing results (uses \code{expr_filt}, \code{meta}).
 #' @param contrasts_df Contrasts table (Factor, Numerator, Denominator).
 #' @param config Full pipeline config (feature flag, sample-ID column, log scale).
-#' @return Feature-indexed data.frame of \code{CV.<group>} columns, or NULL.
+#' @return Feature-indexed data.frame of \code{CV.<group>} columns, or NULL
+#'   (feature switched off, vsn normalization, or missing inputs).
 build_group_cv_proteomics <- function(pre, contrasts_df, config = NULL) {
     if (is.null(config)) return(NULL)
     enabled <- config$modes$proteomics$excel$group_cv %||% TRUE
     if (!isTRUE(enabled)) return(NULL)
+    # Leaving the columns out rather than computing a CV on another matrix: a
+    # number under the same CV.<group> name with a different definition would
+    # be read as the one the other normalization methods export.
+    if (proteomics_uses_vsn(config)) {
+        message("CV.<group> columns are not written under vsn normalization: ",
+                "values on the generalized-log2 scale cannot be turned back into intensities.")
+        return(NULL)
+    }
     if (is.null(pre$expr_filt) || is.null(pre$meta)) return(NULL)
 
     prot_cfg <- config$modes$proteomics %||% list()

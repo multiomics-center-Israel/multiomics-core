@@ -50,6 +50,18 @@ test_that("validate_proteomics_config passes with valid config", {
     expect_true(validate_proteomics_config(cfg))
 })
 
+test_that("validate_proteomics_config rejects the removed fdrtool option", {
+    cfg <- create_mock_proteomics_config()
+    cfg$de$fdrtool_correction <- TRUE
+    expect_error(validate_proteomics_config(cfg), "fdrtool_correction was removed")
+})
+
+test_that("validate_proteomics_config accepts a leftover fdrtool_correction: false", {
+    cfg <- create_mock_proteomics_config()
+    cfg$de$fdrtool_correction <- FALSE
+    expect_true(validate_proteomics_config(cfg))
+})
+
 test_that("validate_proteomics_config errors on missing protein_id", {
     cfg <- create_mock_proteomics_config()
     cfg$id_columns$protein_id <- NULL
@@ -291,6 +303,37 @@ test_that("validate_proteomics_config refuses the other modes' spellings, naming
                  "de$use_adjusted_pval is not a proteomics setting", fixed = TRUE)
     expect_error(validate_proteomics_config(with_pass1(use_adj = TRUE)),
                  "de$use_adj_for_pass1", fixed = TRUE)
+})
+
+test_that("validate_proteomics_config refuses de keys the pipeline does not read", {
+    expect_error(validate_proteomics_config(with_pass1(covariatez = "x")),
+                 "modes$proteomics$de has unknown key(s): covariatez", fixed = TRUE)
+    # Every unknown key is named, not just the first.
+    expect_error(validate_proteomics_config(with_pass1(foo = 1, bar = 2)),
+                 "unknown key(s): foo, bar", fixed = TRUE)
+    # The message says what the key would have done to the run, and what to do.
+    expect_error(validate_proteomics_config(with_pass1(covariatez = "x")),
+                 "would not be fitted as configured", fixed = TRUE)
+    # The other modes' pass-1 spellings keep their own, more specific message.
+    expect_error(validate_proteomics_config(with_pass1(use_adj = TRUE)),
+                 "is not a proteomics setting", fixed = TRUE)
+})
+
+test_that("validate_proteomics_config refuses a de block that is not a map", {
+    # A YAML list where a map was meant: no key can be read from it, so every
+    # setting would silently fall back to its default.
+    cfg <- create_mock_proteomics_config()
+    cfg$de <- list("limma", 0.05)
+    expect_error(validate_proteomics_config(cfg),
+                 "modes$proteomics$de must be a map of settings", fixed = TRUE)
+})
+
+test_that("every de key in the proteomics template is a known key", {
+    tpl <- yaml::read_yaml(testthat::test_path(
+        "..", "..", "config", "templates", "proteins_config.yaml"))
+    keys <- names(tpl$modes$proteomics$de)
+    expect_true(length(keys) > 0)
+    expect_identical(setdiff(keys, PROTEOMICS_DE_KEYS), character(0))
 })
 
 test_that("validate_proteomics_config refuses a non-boolean pass-1 value", {

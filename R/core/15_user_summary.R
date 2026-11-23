@@ -167,6 +167,30 @@ generate_project_summary <- function(config) {
 }
 
 
+#' Project Overview HTML from the configured project notes
+#'
+#' The report-side reading of `project.user_notes`, which the config
+#' templates document as "appears in report as Project Overview". Notes are
+#' shown as written: HTML-escaped, with each line break kept.
+#'
+#' @param user_notes The `config$project$user_notes` value (a string, possibly
+#'   spanning several lines, or `NULL`).
+#' @return An HTML string, or `NULL` when there are no notes to show, so the
+#'   caller can leave the section out rather than render it empty.
+#' @examples
+#' project_notes_html("Line one\nLine two")
+#' project_notes_html("   ")  # NULL
+project_notes_html <- function(user_notes) {
+  if (!is.character(user_notes)) return(NULL)
+  user_notes <- user_notes[!is.na(user_notes)]
+  if (length(user_notes) == 0) return(NULL)
+  # A YAML list of lines is one note; Windows line endings would leave a stray
+  # carriage return before every <br>.
+  notes <- trimws(gsub("\r\n?", "\n", paste(user_notes, collapse = "\n")))
+  if (!nzchar(notes)) return(NULL)
+  wrap_notes_html(notes)
+}
+
 #' Wrap plain text notes into styled HTML
 #'
 #' @param text Plain text to wrap

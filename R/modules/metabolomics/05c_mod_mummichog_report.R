@@ -62,7 +62,8 @@ mod_mummichog_sections <- function(pathways, files, pre, de_res, config,
 #' Saves each section's presentation exports into `mummichog_pinned/` (plots as
 #' PNG + PDF, tables as TSV + CSV: the ORA bubble and pathway table, the GSEA
 #' scatter and table, the three evidence tables when they were built, and the
-#' Summary), named
+#' Summary), plus one workbook for every contrast
+#' (`mummichog_results_all_contrasts.xlsx`, 06v), named
 #' by the section's de-duplicated slug so labels that collapse to the same token
 #' cannot overwrite each other. The engine's own mcg_* result files are
 #' untouched.
@@ -96,6 +97,22 @@ mod_mummichog_exports <- function(sections, files, out_dir) {
     # whether they should get a GSEA analysis at all is a section-contract
     # question, tracked separately.
     clear_orphan_mummichog_gsea_exports(files, sections, out_dir)
+
+    # One workbook for every contrast (06v), built from the same sections as
+    # the files above. A run with no section must not leave an earlier
+    # workbook reading as current.
+    workbook <- file.path(out_dir, "mummichog_pinned", .MMC_WORKBOOK_FILE)
+    if (length(sections) == 0L) {
+        if (file.exists(workbook)) unlink(workbook)
+    } else if (!requireNamespace("openxlsx", quietly = TRUE)) {
+        warning("mummichog: openxlsx is not installed, so the mummichog ",
+                "workbook was not written; the CSV/TSV exports are complete.",
+                call. = FALSE)
+        if (file.exists(workbook)) unlink(workbook)
+    } else {
+        written <- c(written, write_mummichog_workbook(
+            build_mummichog_workbook_sheets(sections), workbook))
+    }
 
     # De-duplicated for the same reason the report module did it before the
     # split: a `format = "file"` target should not be handed the same path
