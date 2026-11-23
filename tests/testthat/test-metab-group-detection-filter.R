@@ -1,7 +1,7 @@
 # tests/testthat/test-metab-group-detection-filter.R
 #
 # preprocessing.min_detected_per_group keeps a metabolite only when, in at
-# least one group, at least n samples are detected (non-NA and non-zero).
+# least one group, at least min_samples samples are detected (non-NA and non-zero).
 # All data are synthetic.
 
 make_gd_fixture <- function() {
@@ -64,32 +64,32 @@ test_that("resolver: absent block means off, a valid block resolves", {
   expect_null(resolve_group_detection_cfg(list(feat_missing_threshold = 0.5)))
   expect_null(resolve_group_detection_cfg(NULL))
   gd <- resolve_group_detection_cfg(list(
-    min_detected_per_group = list(n = 3, group_col = "group",
+    min_detected_per_group = list(min_samples = 3, group_col = "group",
                                   ignore_groups = c("Pool"))))
-  expect_identical(gd$n, 3L)
+  expect_identical(gd$min_samples, 3L)
   expect_identical(gd$group_col, "group")
   expect_identical(gd$ignore_groups, "Pool")
   gd2 <- resolve_group_detection_cfg(list(
-    min_detected_per_group = list(n = 2, group_col = "group")))
+    min_detected_per_group = list(min_samples = 2, group_col = "group")))
   expect_identical(gd2$ignore_groups, character(0))
 })
 
 test_that("resolver rejects bad settings", {
   bad <- function(gd) resolve_group_detection_cfg(list(min_detected_per_group = gd))
   expect_error(bad(3), "block of settings")
-  expect_error(bad(list(n = 0, group_col = "group")))
-  expect_error(bad(list(n = 2.5, group_col = "group")), "whole number")
-  expect_error(bad(list(n = 3)))
-  expect_error(bad(list(n = 3, group_col = "group", min_n = 3)), "unknown key")
+  expect_error(bad(list(min_samples = 0, group_col = "group")))
+  expect_error(bad(list(min_samples = 2.5, group_col = "group")), "whole number")
+  expect_error(bad(list(min_samples = 3)))
+  expect_error(bad(list(min_samples = 3, group_col = "group", min_n = 3)), "unknown key")
 })
 
 test_that("validate_metabolomics_config checks the block", {
   base <- list(input = list(format = "processed_wide"),
                files = list(data = "x.xlsx"),
                preprocessing = list(min_detected_per_group =
-                                      list(n = 3, group_col = "group")))
+                                      list(min_samples = 3, group_col = "group")))
   expect_true(validate_metabolomics_config(base))
-  base$preprocessing$min_detected_per_group$n <- "three"
+  base$preprocessing$min_detected_per_group$min_samples <- "three"
   expect_error(validate_metabolomics_config(base))
 })
 
@@ -102,7 +102,7 @@ test_that("mod_met_filtered applies the filter only when configured", {
     feat_missing_threshold = 1.0))))
   cfg_on  <- cfg_off
   cfg_on$modes$metabolomics$preprocessing$min_detected_per_group <-
-    list(n = 3, group_col = "group")
+    list(min_samples = 3, group_col = "group")
 
   off <- suppressMessages(mod_met_filtered(raw, cfg_off))
   on  <- suppressMessages(mod_met_filtered(raw, cfg_on))
@@ -110,4 +110,15 @@ test_that("mod_met_filtered applies the filter only when configured", {
   expect_setequal(rownames(on$mat), c("all_on", "a_three", "b_three"))
   expect_identical(rownames(on$row_data), rownames(on$mat))
   expect_true(all(c("split_two", "zeros") %in% on$dropped_features))
+})
+
+test_that("the block survives a YAML round trip", {
+  # yaml reads a bare `n:` key as FALSE, which is why the key is min_samples.
+  txt <- paste("min_detected_per_group:",
+               "  min_samples: 3",
+               "  group_col: \"group\"",
+               "  ignore_groups: [\"Pool\"]", sep = "\n")
+  gd <- resolve_group_detection_cfg(yaml::yaml.load(txt))
+  expect_identical(gd$min_samples, 3L)
+  expect_identical(gd$ignore_groups, "Pool")
 })

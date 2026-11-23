@@ -213,13 +213,13 @@ validate_metabolomics_config <- function(cfg) {
 #' @param pre_cfg The \code{preprocessing} block of the metabolomics config
 #'   (list or NULL).
 #' @return NULL when the filter is not configured; otherwise a list with
-#'   \code{n} (integer, detections needed in at least one group),
+#'   \code{min_samples} (integer, detections needed in at least one group),
 #'   \code{group_col} (metadata column holding the groups) and
 #'   \code{ignore_groups} (character vector of group labels left out of the
 #'   check, e.g. pooled QC).
 #' @examples
 #' resolve_group_detection_cfg(list(
-#'   min_detected_per_group = list(n = 3, group_col = "group")))
+#'   min_detected_per_group = list(min_samples = 3, group_col = "group")))
 resolve_group_detection_cfg <- function(pre_cfg) {
   gd <- pre_cfg[["min_detected_per_group"]]
   if (is.null(gd)) return(NULL)
@@ -227,20 +227,21 @@ resolve_group_detection_cfg <- function(pre_cfg) {
   if (!is.list(gd)) {
     stop(where, " must be a block of settings, for example:\n",
          "  min_detected_per_group:\n",
-         "    n: 3\n",
+         "    min_samples: 3\n",
          "    group_col: \"group\"")
   }
-  assert_known_keys(gd, c("n", "group_col", "ignore_groups"), at = where)
-  assert_scalar_num(gd[["n"]], paste0(where, "$n"), min_val = 1)
-  if (gd[["n"]] != round(gd[["n"]])) {
-    stop(where, "$n must be a whole number of samples (got ", gd[["n"]], ").")
+  assert_known_keys(gd, c("min_samples", "group_col", "ignore_groups"), at = where)
+  assert_scalar_num(gd[["min_samples"]], paste0(where, "$min_samples"), min_val = 1)
+  if (gd[["min_samples"]] != round(gd[["min_samples"]])) {
+    stop(where, "$min_samples must be a whole number of samples (got ",
+         gd[["min_samples"]], ").")
   }
   assert_scalar_chr(gd[["group_col"]], paste0(where, "$group_col"))
   ignore <- gd[["ignore_groups"]] %||% character(0)
   if (!is.character(ignore) && length(ignore) > 0) {
     stop(where, "$ignore_groups must be a list of group labels, e.g. [\"Pool\"].")
   }
-  list(n             = as.integer(gd[["n"]]),
+  list(min_samples   = as.integer(gd[["min_samples"]]),
        group_col     = gd[["group_col"]],
        ignore_groups = as.character(ignore))
 }

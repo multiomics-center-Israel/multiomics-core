@@ -346,7 +346,7 @@ mod_met_filtered <- function(raw, config) {
       meta          = filt$meta,
       sample_col    = raw$sample_col,
       group_col     = gd$group_col,
-      min_n         = gd$n,
+      min_n         = gd$min_samples,
       ignore_groups = gd$ignore_groups
     )
     filt$mat              <- det$mat
