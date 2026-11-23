@@ -220,14 +220,8 @@ validate_proteomics_config <- function(cfg) {
                            "de$exclude_imputed_above_measured", allow_null = TRUE)
         # The exclusion keeps the other rows' adjusted p-values as computed over
         # all rows, which is only the plain model p-value under BH (p.adjust's
-        # "BH", alias "fdr"). fdrtool replaces the p-values themselves.
+        # "BH", alias "fdr"). (fdrtool_correction: true is refused above.)
         if (de_excludes_imputed_above_measured(cfg$de, "proteomics")) {
-            if (isTRUE(cfg$de[["fdrtool_correction"]])) {
-                stop("de$exclude_imputed_above_measured is true together with ",
-                     "de$fdrtool_correction. The exclusion is defined on the model's own ",
-                     "p-values with BH adjustment.\n",
-                     "  Set de$fdrtool_correction: false.", call. = FALSE)
-            }
             adj <- cfg$de[["p_adjust_method"]] %||% "BH"
             if (!adj %in% c("BH", "fdr")) {
                 stop("de$exclude_imputed_above_measured is true but de$p_adjust_method is '",

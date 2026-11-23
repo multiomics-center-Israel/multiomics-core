@@ -393,7 +393,8 @@ test_that("with the option off the DE result is the object it was before the opt
         method = "limma", imputations = imputations, runs = runs,
         runs_de_tables = runs_de_tables,
         summary_df = summarize_limma_mult_imputation(runs_de_tables, x$config),
-        de_model = runs[[1]]$fit2, batch_design = runs[[1]]$batch_design)
+        de_model = runs[[1]]$fit2, batch_design = runs[[1]]$batch_design,
+        covariate_design = runs[[1]]$covariate_design)
 
     expect_identical(absent, expected)
     expect_identical(off, expected)

@@ -335,7 +335,7 @@ test_that("the returned object keeps its fields and routes each contrast's resul
     expect_identical(names(res),
                      c("qea", "ssgsea", "ora", "gsea", "qea_by_contrast",
                        "ssgsea_by_contrast", "ora_by_contrast", "gsea_by_contrast",
-                       "plots", "files"))
+                       "pathway_members", "plots", "files"))
     for (by in c("qea_by_contrast", "ssgsea_by_contrast", "ora_by_contrast",
                  "gsea_by_contrast")) {
         expect_identical(names(res[[by]]), c("A vs B", "C/D"))

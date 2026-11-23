@@ -3718,10 +3718,12 @@ pathway_methods_text <- if (offline_ran) {
     }
     paste(parts, collapse = " ")
 } else if (length(list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$")) > 0) {
+    # Collections that actually loaded (pathway_collections.tsv), not the config.
+    online_desc <- describe_rna_pathway_collections(enrich_dir, rna_cfg$pathway)
     sprintf(paste0(
         "Pathway enrichment analysis was conducted using %s on %s gene sets.%s ",
         "fGSEA gene sets with adjusted p-value ≤ %s are reported as significant."),
-        pathway_method, pathway_dbs, pathway_missing_note,
+        online_desc$method, online_desc$collections, online_desc$missing_note,
         format(gsea_cut))
 } else {
     ""

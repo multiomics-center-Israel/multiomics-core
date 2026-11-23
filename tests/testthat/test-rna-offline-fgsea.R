@@ -690,6 +690,9 @@ test_that("the RNA report shows the online dotplots only, and opens no empty sec
     dotplots <- function() {
         env <- report_env(d)
         env$render_commentary <- function(...) invisible(NULL)
+        # Set earlier in the report; no contrasts known, so plots fall under "Other".
+        env$de_data <- NULL
+        env$contrast_names <- character(0)
         list(shown = env$has_pathway_plots,
              text = if (env$has_pathway_plots)
                  render_chunks(env, c("pathway-dotplots-heading", "pathway-dotplots")) else "")
