@@ -30,6 +30,11 @@
 # How many pathways each contrast's Summary lists (and exports).
 .MMC_SUMMARY_TOP_N <- 20L
 
+# A pathway GSEA tested but could give no p-value for (standard fgsea: no
+# permutation produced a score of the observed sign). One wording for the
+# Summary and the overview, and never "Not tested".
+.MMC_GSEA_P_UNAVAILABLE <- "Tested; p-value unavailable"
+
 # The Summary columns the report shows; the export carries the rest as well.
 .MMC_SUMMARY_DISPLAY_COLS <- c(
   "Pathway", "Identified-metabolite support", "Mummichog ORA",
@@ -291,8 +296,14 @@ build_mummichog_summary <- function(ora_table, gsea_table = NULL,
 
   fmt <- function(x) formatC(x, digits = 2, format = "g")
   ora_label <- ifelse(is.na(ora_p), "Not tested", paste("p =", fmt(ora_p)))
+  # Three states, kept apart: GSEA did not run; the pathway is not in its
+  # table (not tested); or it is in the table without a p-value, which the
+  # standard fgsea method reports when no permutation gave a score of the
+  # observed sign. The last is a tested pathway and must not read "Not tested".
   gsea_label <- if (!is.data.frame(gsea_table)) rep("Not run", n) else
-    ifelse(is.na(gsea_p), "Not tested",
+    ifelse(is.na(gsea_p),
+           ifelse(pw %in% gsea_table$Pathway, .MMC_GSEA_P_UNAVAILABLE,
+                  "Not tested"),
            sprintf("p = %s; FDR = %s", fmt(gsea_p), fmt(gsea_q)))
 
   data.frame(

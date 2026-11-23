@@ -349,29 +349,49 @@ test_that("min_size is normalised once and reported as the value that ran", {
                             de_method = "limma", min_size = 0)
 
   expect_equal(res$params$min_size, 1)
-  # ... and 0 is not a departure from the reference either: 1 is the reference.
-  expect_false(any(grepl("min_size", res$deviations)))
+
+  # Legacy: 0 is not a departure from the reference either, because 1 is the
+  # reference. (Asserted on the legacy method: only it reports deviations, so
+  # on the default method this could not fail.)
+  old <- with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "c", de_method = "limma",
+    min_size = 0, method = "metaboanalyst_legacy"))
+  expect_equal(old$params$min_size, 1)
+  expect_false(any(grepl("min_size", old$deviations)))
+  # ... while a real override IS reported there, so the check above can fail.
+  three <- with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "c", de_method = "limma",
+    min_size = 3, method = "metaboanalyst_legacy"))
+  expect_true(any(grepl("min_size = 3", three$deviations)))
 
   same <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
                              de_method = "limma", min_size = 1)
   expect_equal(res$table, same$table)
 })
 
-test_that("a non-default rank_metric is recorded as a deviation", {
+test_that("legacy: a non-default rank_metric is recorded as a deviation", {
   skip_if_not_installed("fgsea")
   root <- withr::local_tempdir()
   f    <- build_gsea_fixture(root)
 
   # Merging features that share an m/z by something other than the reference's
   # "mean" changes every EC score, and so every statistic downstream of it.
-  res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
-                            de_method = "limma", rank_metric = "median")
+  res <- with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "c", de_method = "limma",
+    rank_metric = "median", method = "metaboanalyst_legacy"))
   expect_true(any(grepl("rank_metric = 'median'", res$deviations, fixed = TRUE)))
 
-  ref <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
-                            de_method = "limma")
+  ref <- with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "c", de_method = "limma",
+    method = "metaboanalyst_legacy"))
   expect_false(any(grepl("rank_metric", ref$deviations)))
   expect_identical(ref$params$rank_metric, "mean")
+
+  # Under the default method it is a setting, reported as the value that ran.
+  std <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                            de_method = "limma", rank_metric = "median")
+  expect_length(std$deviations, 0L)
+  expect_identical(std$params$rank_metric, "median")
 })
 
 test_that("an abbreviated rank_metric resolves before it is judged or reported", {
@@ -384,20 +404,29 @@ test_that("an abbreviated rank_metric resolves before it is judged or reported",
   # reference "mean" aggregation while being announced as a methodological
   # deviation that never happened, and reported under a name that is not a
   # valid setting.
-  abbrev <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
-                               de_method = "limma", rank_metric = "mea")
+  # Run on the legacy method, the only one that reports deviations: on the
+  # default method the "is not a deviation" check below could not fail.
+  legacy <- function(metric) with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "c", de_method = "limma",
+    rank_metric = metric, method = "metaboanalyst_legacy"))
+  abbrev <- legacy("mea")
 
   expect_identical(abbrev$params$rank_metric, "mean")
   expect_false(any(grepl("rank_metric", abbrev$deviations)))
 
-  full <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
-                             de_method = "limma", rank_metric = "mean")
+  full <- legacy("mean")
   expect_equal(abbrev$table, full$table)
+
+  # The default method resolves the abbreviation the same way.
+  std <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                            de_method = "limma", rank_metric = "mea")
+  expect_identical(std$params$rank_metric, "mean")
 
   # A non-default abbreviation still resolves, and is still a deviation -- the
   # normalisation must not swallow the departure along with the shorthand.
-  med <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
-                            de_method = "limma", rank_metric = "medi")
+  med <- with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "c", de_method = "limma",
+    rank_metric = "medi", method = "metaboanalyst_legacy"))
   expect_identical(med$params$rank_metric, "median")
   expect_true(any(grepl("rank_metric = 'median'", med$deviations, fixed = TRUE)))
 
@@ -407,7 +436,7 @@ test_that("an abbreviated rank_metric resolves before it is judged or reported",
                                   de_method = "limma", rank_metric = "nope"))
 })
 
-test_that("the single-pathway branch is reproducible and declared unvalidated", {
+test_that("legacy: the single-pathway branch is reproducible and declared unvalidated", {
   skip_if_not_installed("fgsea")
   root <- withr::local_tempdir()
   f    <- build_gsea_fixture(root)
@@ -417,10 +446,11 @@ test_that("the single-pathway branch is reproducible and declared unvalidated", 
   # the result has to say so rather than imply parity.
   one <- list(pathways = f$model$pathways["PW_pos"])
 
-  a <- run_mummichog_gsea(f$files, f$de_table, one, contrast = "c",
-                          de_method = "limma")
-  b <- run_mummichog_gsea(f$files, f$de_table, one, contrast = "c",
-                          de_method = "limma")
+  legacy <- function(model) with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, model, contrast = "c", de_method = "limma",
+    method = "metaboanalyst_legacy"))
+  a <- legacy(one)
+  b <- legacy(one)
 
   expect_equal(nrow(a$table), 1L)
   expect_equal(a$table, b$table)          # seeded: identical across runs
@@ -430,8 +460,7 @@ test_that("the single-pathway branch is reproducible and declared unvalidated", 
 
   # More than one permutable pathway goes through the batch call and claims
   # parity.
-  many <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
-                             de_method = "limma")
+  many <- legacy(f$model)
   expect_gt(nrow(many$table), 1L)
   expect_false(any(grepl("one permutable pathway", many$deviations)))
 })
@@ -675,11 +704,12 @@ test_that("an engine failure is not reported as a size-filter miss", {
 
   # Stub by assignment into the function's own environment: these are sourced
   # functions, not a package, so with_mocked_bindings() has nothing to rebind.
+  # The default method's engine is the one stubbed: it is what a run uses.
   target <- environment(run_mummichog_gsea)
-  orig   <- get("mmc_gsea_metaboanalyst", envir = target)
-  assign("mmc_gsea_metaboanalyst",
+  orig   <- get("mmc_gsea_fgsea", envir = target)
+  assign("mmc_gsea_fgsea",
          function(...) stop("synthetic engine failure"), envir = target)
-  withr::defer(assign("mmc_gsea_metaboanalyst", orig, envir = target))
+  withr::defer(assign("mmc_gsea_fgsea", orig, envir = target))
 
   msgs <- capture_messages(
     expect_warning(
@@ -809,8 +839,29 @@ test_that("pathway EC sets are restricted to the ranked universe", {
 # NES interpretation (must NOT be a biological direction)
 # ---------------------------------------------------------------------------
 
-test_that("the NES note is conservative: parity only, no direction claim", {
+test_that("the default NES note describes the ranking, not a per-metabolite direction", {
   note <- mmc_gsea_nes_note()
+  expect_identical(note, mmc_gsea_nes_note("fgsea"))
+
+  # what it MUST say
+  expect_match(note, "concentrated among the highest-scoring ECs", fixed = TRUE)
+  expect_match(note, "largest signed score among its features", fixed = TRUE)
+  expect_match(note, "not a per-metabolite direction of change", fixed = TRUE)
+
+  # what it must NOT say: it is not the legacy method's parity sentence, and it
+  # makes no up/down claim about metabolites or pathways.
+  expect_false(grepl("retained to reproduce", note, fixed = TRUE))
+  expect_false(grepl("MetaboAnalyst", note, fixed = TRUE))
+  for (banned in c("up-regulated", "down-regulated", "upregulated",
+                   "downregulated", "numerator", "denominator")) {
+    expect_false(grepl(banned, note, fixed = TRUE), info = banned)
+  }
+  # an unknown or abbreviated method is refused, never guessed
+  expect_error(mmc_gsea_nes_note("metaboanalyst"), "gsea_method")
+})
+
+test_that("legacy: the NES note is conservative: parity only, no direction claim", {
+  note <- mmc_gsea_nes_note("metaboanalyst_legacy")
 
   # what it MUST say
   expect_match(note, "retained to reproduce the pinned MetaboAnalystR result",
@@ -1043,4 +1094,376 @@ test_that("the GSEA scatter returns NULL on empty / unusable input", {
   expect_null(plot_mummichog_gsea_scatter(data.frame(), title = "T"))
   expect_null(plot_mummichog_gsea_scatter(
     data.frame(Pathway = "x", NES = 1, check.names = FALSE), title = "T"))
+})
+
+
+# ---------------------------------------------------------------------------
+# method selection (gsea_method)
+# ---------------------------------------------------------------------------
+
+test_that("gsea_method resolves to standard fgsea unless legacy is named", {
+  expect_identical(mmc_gsea_method(list()), "fgsea")
+  expect_identical(mmc_gsea_method(list(gsea_enabled = TRUE)), "fgsea")
+  expect_identical(mmc_gsea_method(list(gsea_method = "fgsea")), "fgsea")
+  expect_identical(mmc_gsea_method(list(gsea_method = "metaboanalyst_legacy")),
+                   "metaboanalyst_legacy")
+  # A longer key that merely starts with the name must not be read as it.
+  expect_identical(mmc_gsea_method(list(gsea_method_note = "metaboanalyst_legacy")),
+                   "fgsea")
+})
+
+test_that("an unknown gsea_method stops instead of falling back", {
+  # Exact matching: an abbreviation, the ORA engine's name, another case, a
+  # blank and a non-character value are all refused. The key decides which
+  # statistic runs, so none of them may quietly become the default or legacy.
+  for (bad in list("metaboanalyst", "legacy", "FGSEA", "", NA_character_, 1,
+                   TRUE, c("fgsea", "metaboanalyst_legacy"))) {
+    expect_error(mmc_gsea_method(list(gsea_method = bad)), "gsea_method")
+  }
+  # ... and the functions that take the method validate it the same way.
+  expect_error(mmc_gsea_method_label("metaboanalyst"), "gsea_method")
+  expect_error(run_mummichog_gsea(character(0), data.frame(feature_id = "f", logFC = 1),
+                                  list(pathways = list()), method = "metaboanalyst"),
+               "gsea_method")
+})
+
+test_that("each method is described once, and the descriptions do not overlap", {
+  std <- mmc_gsea_method_label("fgsea", "1.36.2")
+  old <- mmc_gsea_method_label("metaboanalyst_legacy", "1.36.2")
+  expect_match(std, "fgsea::fgseaSimple, fgsea 1.36.2", fixed = TRUE)
+  expect_match(std, "one ranking position per EC", fixed = TRUE)
+  expect_false(grepl("MetaboAnalyst", std, fixed = TRUE))
+  expect_match(old, "legacy MetaboAnalyst-compatible GSEA", fixed = TRUE)
+  expect_match(old, "known defects", fixed = TRUE)
+  expect_match(old, .MMC_GSEA_LEGACY_ISSUE, fixed = TRUE)
+  # an unknown version is left out rather than printed as NA
+  expect_false(grepl("NA", mmc_gsea_method_label("fgsea", NA_character_), fixed = TRUE))
+  expect_false(grepl("fgsea ,", mmc_gsea_method_label("fgsea"), fixed = TRUE))
+})
+
+
+# ---------------------------------------------------------------------------
+# the default method: standard fgsea::fgseaSimple() on the signed EC scores
+# ---------------------------------------------------------------------------
+
+test_that("standard fgsea weights each EC by its own signed score (hand-calculated)", {
+  skip_if_not_installed("fgsea")
+  # signed order: A=+3, B=+1, D=+0.5, E=-2, C=-5 (N = 5), two members each
+  #   P1 = {A, B}: positions 1, 2; weights 3, 1 -> ES = 1, leading edge A, B
+  #   P2 = {A, C}: positions 1, 5; weights 3, 5; NR = 8
+  #                tops 3/8, 0; bottoms 0, -5/8 -> ES = -5/8, leading edge C
+  ec <- c(A = 3, B = 1, D = 0.5, E = -2, C = -5)
+  pw <- list(P1 = c("A", "B"), P2 = c("A", "C"))
+
+  res <- mmc_gsea_fgsea(pw, ec, n_perm = 100)
+  expect_identical(res$pathway, c("P1", "P2"))
+  expect_equal(res$ES, c(1, -5 / 8), tolerance = 1e-9)
+  expect_identical(res$leadingEdge, c("A; B", "C"))
+  expect_identical(res$size, c(2, 2))
+  expect_false(any(res$es_defaulted))
+  expect_true(all(is.na(res$es_reason)))
+  expect_identical(names(res), names(mmc_gsea_metaboanalyst(list(), numeric(0), numeric(0))))
+
+  # Historical compatibility, on the same input: the legacy engine weights P2's
+  # hits by scores that are not theirs, so its ES is positive and its leading
+  # edge names C, the most negative EC.
+  ri  <- mmc_gsea_ranked_inputs(ec)
+  old <- mmc_gsea_metaboanalyst(pw, ri$stats, ri$ranks, n_perm = 100)
+  expect_equal(old$ES, c(1, 10 / 11), tolerance = 1e-9)
+  expect_identical(old$leadingEdge, c("A", "C"))
+})
+
+# 60 synthetic ECs with both signs and tied scores (rounded to one decimal),
+# and 12 random pathway sets. Shared by the tests below.
+gsea_tied_fixture <- function() {
+  ec <- withr::with_seed(11, stats::setNames(round(stats::rnorm(60), 1),
+                                             sprintf("E%02d", sample(60))))
+  sets <- withr::with_seed(12, lapply(1:12, function(i)
+    sample(names(ec), sample(4:15, 1))))
+  names(sets) <- sprintf("S%02d", 1:12)
+  list(ec = ec, sets = sets)
+}
+
+test_that("standard fgsea equals fgsea::calcGseaStat with tied ECs ordered by id", {
+  skip_if_not_installed("fgsea")
+  fx <- gsea_tied_fixture()
+  expect_gt(anyDuplicated(fx$ec), 0L)                  # tied scores are present
+  expect_true(any(fx$ec < 0) && any(fx$ec > 0))        # and both signs
+
+  res <- suppressWarnings(mmc_gsea_fgsea(fx$sets, fx$ec, n_perm = 100))
+
+  # The documented order: score decreasing, equal scores by EC id (C locale).
+  # fgsea's own primitive on that order is the expected value, so this fails
+  # if tied ECs were ever scored in any other order.
+  ordered <- fx$ec[order(-fx$ec, names(fx$ec), method = "radix")]
+  want <- lapply(fx$sets, function(m) fgsea::calcGseaStat(
+    ordered, sort(match(m, names(ordered))), returnLeadingEdge = TRUE))
+
+  expect_identical(res$pathway, names(fx$sets))
+  expect_equal(res$ES, vapply(want, function(x) x$res, numeric(1),
+                              USE.NAMES = FALSE), tolerance = 1e-6)
+  expect_identical(res$size, as.numeric(lengths(fx$sets)))
+  for (i in seq_along(fx$sets)) {
+    got <- strsplit(res$leadingEdge[i], "; ", fixed = TRUE)[[1]]
+    # leading-edge ids are the pathway's own ECs, and the ones fgsea reports
+    expect_true(all(got %in% fx$sets[[i]]), info = names(fx$sets)[i])
+    expect_setequal(got, names(ordered)[want[[i]]$leadingEdge])
+  }
+  # BH over the tested pathways, as fgsea computes it
+  expect_equal(res$padj, stats::p.adjust(res$pval, method = "BH"))
+})
+
+test_that("standard fgsea is reproducible and does not depend on input order", {
+  skip_if_not_installed("fgsea")
+  fx <- gsea_tied_fixture()
+  run <- function(sets, ec, seed = 5) {
+    suppressWarnings(mmc_gsea_fgsea(sets, ec, n_perm = 100, seed = seed))
+  }
+  a <- run(fx$sets, fx$ec)
+  expect_identical(a, run(fx$sets, fx$ec))             # same seed, same result
+
+  # Shuffling the score vector and each pathway's members changes nothing:
+  # the order of tied ECs comes from their ids, not from how they arrived.
+  shuffled <- withr::with_seed(99, fx$ec[sample(length(fx$ec))])
+  expect_equal(a, run(lapply(fx$sets, rev), shuffled))
+
+  # A single pathway takes fgsea's own seeded loop: reproducible too.
+  one <- run(fx$sets[1], fx$ec)
+  expect_identical(nrow(one), 1L)
+  expect_identical(one, run(fx$sets[1], fx$ec))
+
+  # The scores are passed unchanged: no jitter, so tied ECs stay tied.
+  ties <- attr(a, "mmc_ties")
+  expect_identical(ties$n_tied_ec,
+                   sum(duplicated(fx$ec) | duplicated(fx$ec, fromLast = TRUE)))
+})
+
+test_that("tied ECs keep their own positions: scored, counted and flagged exactly", {
+  skip_if_not_installed("fgsea")
+  ec <- c(E1 = 3, E2 = 2, E3 = 2, E4 = 1, E5 = -1, E6 = -1, E7 = -4)
+  pw <- list(within = c("E2", "E3"),   # both ECs of one tie group
+             mixed  = c("E1", "E2"),   # E2 is tied with the non-member E3
+             clean  = c("E1", "E7"),   # no tied member
+             neg    = c("E5", "E7"))   # E5 is tied with the non-member E6
+
+  expect_warning(res <- mmc_gsea_fgsea(pw, ec, n_perm = 100),
+                 "can depend on the order")
+  expect_identical(res$pathway, names(pw))
+
+  # "within": positions 2 and 3 of 7, weights 2 and 2 (NR = 4)
+  #   tops 0.5 - 1/5, 1 - 1/5 = 0.3, 0.8 -> ES = 0.8, a real score, not a fallback
+  expect_equal(res$ES[res$pathway == "within"], 0.8, tolerance = 1e-9)
+  expect_identical(res$leadingEdge[res$pathway == "within"], "E2; E3")
+  expect_false(any(res$es_defaulted))
+
+  ties <- attr(res, "mmc_ties")
+  expect_identical(ties$n_ec, 7L)
+  expect_identical(ties$n_tied_ec, 4L)
+  expect_equal(ties$prop_tied_ec, 4 / 7)
+  expect_identical(ties$n_tie_groups, 2L)
+  # Exactly the pathways with a tie group holding members AND non-members.
+  # "within" holds its whole tie group, so the order inside it cannot matter.
+  expect_identical(ties$tie_sensitive_pathways, c("mixed", "neg"))
+
+  # Historical compatibility: the legacy engine puts E2 and E3 at ONE ranked
+  # position, cannot score "within" and falls back to ES = 0.
+  ri  <- mmc_gsea_ranked_inputs(ec)
+  old <- mmc_gsea_metaboanalyst(pw["within"], ri$stats, ri$ranks, n_perm = 100)
+  expect_true(old$es_defaulted)
+  expect_equal(old$ES, 0)
+  expect_lt(length(ri$stats), length(ec))   # 5 ranked positions for 7 ECs
+})
+
+test_that("the tie summary counts ties exactly and needs no threshold", {
+  # No fgsea needed: this is pure bookkeeping on the scores and the sets.
+  none <- mmc_gsea_tie_summary(c(E1 = 3, E2 = 1, E3 = -2), list(P = c("E1", "E2")))
+  expect_identical(none$n_tied_ec, 0L)
+  expect_identical(none$n_tie_groups, 0L)
+  expect_identical(none$tie_sensitive_pathways, character(0))
+  expect_equal(none$prop_tied_ec, 0)
+
+  # Doubles that differ only beyond 15 significant digits are NOT a tie.
+  near <- c(E1 = 1, E2 = 1 + 2e-16 * 4, E3 = 0)
+  expect_identical(mmc_gsea_tie_summary(near, list())$n_tied_ec, 0L)
+
+  # A pathway with no ranked member, and a zero-score tie, are both handled.
+  z <- mmc_gsea_tie_summary(c(E1 = 0, E2 = 0, E3 = 1),
+                            list(absent = "EX", zero = "E1", both = c("E1", "E2")))
+  expect_identical(z$n_tied_ec, 2L)
+  expect_identical(z$tie_sensitive_pathways, "zero")
+
+  # Empty inputs give an empty summary, not an error.
+  e <- mmc_gsea_tie_summary(stats::setNames(numeric(0), character(0)), list())
+  expect_identical(e$n_ec, 0L)
+  expect_identical(e$tie_sensitive_pathways, character(0))
+
+  # The sentence states the same counts, and nothing for the legacy method.
+  expect_null(mmc_gsea_tie_sentence(NULL))
+  expect_match(mmc_gsea_tie_sentence(none),
+               "None of the 3 ranked EmpiricalCompounds share a score", fixed = TRUE)
+  expect_match(mmc_gsea_tie_sentence(z),
+               "2 of the 3 ranked EmpiricalCompounds (66.7%)", fixed = TRUE)
+  expect_match(mmc_gsea_tie_sentence(z), "1 tested pathway(s) can depend",
+               fixed = TRUE)
+})
+
+test_that("fgsea's own warnings reach the caller, except the tie warning it replaces", {
+  skip_if_not_installed("fgsea")
+  # All scores positive: fgsea's scoreType advice has nothing to do with ties
+  # and must not be swallowed.
+  pos <- c(E1 = 4, E2 = 3, E3 = 2, E4 = 1, E5 = 0.5)
+  expect_warning(mmc_gsea_fgsea(list(P = c("E1", "E2")), pos, n_perm = 100),
+                 "greater than zero")
+
+  # Tied scores: fgsea would say their order is arbitrary. It is not here, so
+  # that one warning is replaced by ours, which says what the order is.
+  tied <- c(E1 = 3, E2 = 2, E3 = 2, E4 = -1, E5 = -2)
+  w <- testthat::capture_warnings(
+    mmc_gsea_fgsea(list(P = c("E1", "E2")), tied, n_perm = 100))
+  expect_false(any(grepl("arbitrary", w, fixed = TRUE)))
+  expect_true(any(grepl("can depend on the order", w, fixed = TRUE)))
+
+  # No ties, both signs: nothing to warn about.
+  quiet <- c(E1 = 3, E2 = 2, E3 = 1, E4 = -1, E5 = -2)
+  expect_warning(mmc_gsea_fgsea(list(P = c("E1", "E2")), quiet, n_perm = 100), NA)
+})
+
+test_that("standard fgsea validates its settings and returns one shape when empty", {
+  skip_if_not_installed("fgsea")
+  ec <- c(E1 = 3, E2 = 1, E3 = -1, E4 = -2)
+  pw <- list(P = c("E1", "E2"))
+  expect_error(mmc_gsea_fgsea(pw, ec, n_perm = 1.5), "n_perm")
+  expect_error(mmc_gsea_fgsea(pw, ec, n_perm = 0), "at least 1")
+  expect_error(mmc_gsea_fgsea(pw, ec, seed = "7"), "seed")
+  expect_error(mmc_gsea_fgsea(pw, ec, min_size = NA), "min_size")
+  expect_error(mmc_gsea_fgsea(pw, ec, max_size = NA), "max_size")
+  expect_error(mmc_gsea_fgsea(pw, c(E1 = 3, E1 = 1, E2 = -1)), "one score per EC id")
+
+  cols <- names(mmc_gsea_fgsea(pw, ec, n_perm = 100))
+  expect_identical(names(mmc_gsea_fgsea(list(), ec)), cols)
+  expect_identical(names(mmc_gsea_fgsea(pw, ec, min_size = 3)), cols)   # filtered out
+  expect_identical(nrow(mmc_gsea_fgsea(pw, ec, min_size = 3)), 0L)
+
+  # ECs without a finite score are not ranked, as in the legacy method; a
+  # pathway holding every ranked EC is not tested (fgsea's size cap).
+  with_na <- c(ec, E5 = NA_real_)
+  expect_equal(mmc_gsea_fgsea(pw, with_na, n_perm = 100)$ES,
+               mmc_gsea_fgsea(pw, ec, n_perm = 100)$ES)
+  expect_identical(nrow(mmc_gsea_fgsea(list(all = names(ec)), ec)), 0L)
+})
+
+
+# ---------------------------------------------------------------------------
+# the python adapter: default method, legacy method, missing p-values
+# ---------------------------------------------------------------------------
+
+test_that("the python adapter runs standard fgsea by default and records it", {
+  skip_if_not_installed("fgsea")
+  f   <- build_gsea_fixture(withr::local_tempdir())
+  res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                            de_method = "limma")
+
+  expect_identical(res$method, "fgsea")
+  expect_match(res$method_label, "fgsea::fgseaSimple", fixed = TRUE)
+  expect_identical(res$reference$method, "fgsea::fgseaSimple")
+  expect_null(res$reference$commit)              # no MetaboAnalystR pin claimed
+  expect_length(res$deviations, 0L)
+  expect_identical(res$nes_note, mmc_gsea_nes_note("fgsea"))
+  expect_null(res$stats)
+  expect_null(res$tie_ranks)
+  expect_identical(res$n_positions, res$n_ec)    # one ranked position per EC
+  expect_identical(res$ties$n_ec, 24L)
+  expect_identical(res$ties$n_tied_ec, 0L)
+  expect_identical(res$n_p_unavailable, 0L)
+
+  # It is mmc_gsea_fgsea() on the adapter's own EC scores and pathway sets.
+  sets <- mmc_pathway_ec_sets(f$model$pathways,
+                              read_mummichog_ec_candidates(f$files),
+                              names(res$ranks))
+  direct <- mmc_gsea_fgsea(sets, res$ranks)
+  k <- match(res$table$Pathway, direct$pathway)
+  expect_equal(res$table[["P.Value"]], direct$pval[k])
+  expect_equal(res$table$ES, round(direct$ES[k], 4))
+
+  # The fixture's three disjoint pathways hold the 8 highest, the 8 middle and
+  # the 8 lowest scores, so the signed ranking gives +1 and -1 at the ends and
+  # the leading edge names the pathway's own ECs.
+  es <- stats::setNames(res$table$ES, res$table$Pathway)
+  expect_equal(es[["PW_pos"]], 1)
+  expect_equal(es[["PW_neg"]], -1)
+  le <- stats::setNames(res$table[["Leading-edge EmpiricalCompounds"]],
+                        res$table$Pathway)
+  expect_identical(le[["PW_pos"]], paste(sprintf("E%03d", 1:8), collapse = "; "))
+  expect_setequal(strsplit(le[["PW_neg"]], "; ", fixed = TRUE)[[1]],
+                  sprintf("E%03d", 17:24))
+
+  # The table schema is the one the legacy method writes.
+  expect_true(all(c("ES defaulted by reference implementation",
+                    "ES fallback reason") %in% names(res$table)))
+  expect_false(any(res$table[["ES defaulted by reference implementation"]]))
+})
+
+test_that("the legacy method stays reachable, warns, and is recorded as legacy", {
+  skip_if_not_installed("fgsea")
+  f <- build_gsea_fixture(withr::local_tempdir())
+
+  expect_warning(
+    res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                              de_method = "limma",
+                              method = "metaboanalyst_legacy"),
+    "known defects")
+  expect_identical(res$method, "metaboanalyst_legacy")
+  expect_match(res$method_label, "legacy MetaboAnalyst-compatible", fixed = TRUE)
+  expect_identical(res$reference$commit, .MMC_GSEA_REF_COMMIT)
+  expect_identical(res$nes_note, mmc_gsea_nes_note("metaboanalyst_legacy"))
+  expect_null(res$ties)
+  expect_identical(res$n_p_unavailable, 0L)
+
+  # It is the engine the parity fixture pins, on the adapter's own inputs.
+  ri <- mmc_gsea_ranked_inputs(res$ranks)
+  expect_identical(res$stats, ri$stats)
+  # (values only: fastmatch leaves a lookup-table attribute on the names of
+  # the vector the engine was given)
+  expect_equal(as.numeric(res$tie_ranks), as.numeric(ri$ranks))
+  expect_identical(res$n_positions, length(ri$stats))
+
+  # The default run gives no such warning, and both test the same pathways on
+  # the same EC scores.
+  expect_warning(
+    std <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                              de_method = "limma"), NA)
+  expect_identical(std$ranks, res$ranks)
+  expect_setequal(std$table$Pathway, res$table$Pathway)
+})
+
+test_that("a tested pathway without a p-value is counted and kept, with NA", {
+  skip_if_not_installed("fgsea")
+  f <- build_gsea_fixture(withr::local_tempdir())
+
+  # fgsea gives no p-value when no permutation produced a score of the observed
+  # sign. That cannot be arranged reliably from inputs, so the engine is
+  # stubbed to return one such row, in the shape mmc_gsea_fgsea() returns.
+  target <- environment(run_mummichog_gsea)
+  orig   <- get("mmc_gsea_fgsea", envir = target)
+  assign("mmc_gsea_fgsea", function(pathways, ec_scores, ...) {
+    out <- data.frame(
+      pathway = c("PW_pos", "PW_mid", "PW_neg"), pval = c(0.01, NA, 0.02),
+      padj = c(0.03, NA, 0.03), ES = c(1, 0.2, -1), NES = c(2, NA, -2),
+      nMoreExtreme = c(0, 0, 0), size = c(8, 8, 8),
+      leadingEdge = c("E001", NA, "E024"), es_defaulted = FALSE,
+      es_reason = NA_character_, stringsAsFactors = FALSE)
+    attr(out, "mmc_ties") <- mmc_gsea_tie_summary(ec_scores, pathways)
+    out
+  }, envir = target)
+  withr::defer(assign("mmc_gsea_fgsea", orig, envir = target))
+
+  msgs <- capture_messages(
+    res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "c",
+                              de_method = "limma"))
+  expect_identical(res$n_p_unavailable, 1L)
+  expect_true(any(grepl("have no p-value", msgs, fixed = TRUE)))
+  # kept as a tested pathway, sorted after the pathways that have a p-value
+  expect_identical(res$table$Pathway, c("PW_pos", "PW_neg", "PW_mid"))
+  expect_true(is.na(res$table[["P.Value"]][3]))
+  expect_identical(res$n_pathways, 3L)
 })

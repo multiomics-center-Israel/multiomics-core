@@ -1,8 +1,10 @@
 # tests/testthat/test-mummichog-ma-gsea.R
 #
-# MetaboAnalyst-compatible GSEA on the engine's own joint-polarity ECs (06o).
-# Unit tests on a small synthetic EC set, plus parity against the pinned
-# MetaboAnalystR peaks GSEA run end to end
+# GSEA on the MetaboAnalyst-compatible engine's own joint-polarity ECs (06o).
+# The default method is standard fgsea (mmc_gsea_fgsea(), shared with the
+# python engine). The LEGACY method (gsea_method = "metaboanalyst_legacy") is
+# tested for historical compatibility: unit tests on a small synthetic EC set,
+# plus parity against the pinned MetaboAnalystR peaks GSEA run end to end
 # (fixtures/mummichog_ma_parity/generate_gsea_reference.R). All data synthetic.
 
 skip_if_not_installed("fgsea")
@@ -26,8 +28,63 @@ gs_pathways <- list(
                   sprintf("E%02d", c(3, 6, 9, 12)), "E01"),
   id = c("p1", "p2", "p3", "p4"))
 
-test_that("GSEA runs on the ECs' scores and the ORA's pathway EC sets", {
-  g <- suppressWarnings(mmc_ma_gsea(gs_ecs(), gs_pathways, n_perm = 100))
+test_that("the default GSEA is standard fgsea on the ECs' scores and the ORA's pathway EC sets", {
+  ecs <- gs_ecs()
+  g <- mmc_ma_gsea(ecs, gs_pathways, n_perm = 100)
+  expect_identical(g$method, "fgsea")
+  expect_match(g$method_label, "fgsea::fgseaSimple", fixed = TRUE)
+  expect_identical(g$reference$method, "fgsea::fgseaSimple")
+  expect_null(g$reference$commit)
+  expect_null(g$resmat)                       # MetaboAnalyst's matrix is legacy-only
+  expect_length(g$deviations, 0L)
+  expect_identical(g$nes_note, mmc_gsea_nes_note("fgsea"))
+  expect_identical(g$n_positions, 12L)        # one ranked position per EC
+  expect_identical(g$ties$n_tied_ec, 0L)
+  expect_identical(g$n_p_unavailable, 0L)
+
+  # The same function the python adapter calls, on this engine's own inputs.
+  direct <- mmc_gsea_fgsea(stats::setNames(gs_pathways$emp_cpds, gs_pathways$name),
+                           ecs$ec_exp, n_perm = 100)
+  k <- match(g$table$Pathway, direct$pathway)
+  expect_setequal(g$table$Pathway, gs_pathways$name)
+  expect_equal(g$table[["P.Value"]], direct$pval[k])
+  expect_equal(g$table$padj, direct$padj[k])
+  expect_equal(g$table$ES, round(direct$ES[k], 4))
+  expect_false(is.unsorted(g$table[["P.Value"]], na.rm = TRUE))
+
+  # signed ranking: the five highest-scoring ECs give +1, the five lowest -1
+  es <- stats::setNames(g$table$ES, g$table$Pathway)
+  expect_equal(es[["top"]], 1)
+  expect_equal(es[["bottom"]], -1)
+  row <- function(p) g$table[g$table$Pathway == p, , drop = FALSE]
+  expect_identical(row("top")[["Leading-edge EmpiricalCompounds"]],
+                   "E01; E02; E03; E04; E05")
+  # the size columns and each row's own ECs, as the legacy table has them
+  expect_identical(row("small")[["Pathway size (model compounds)"]], 2)
+  expect_identical(row("small")[["Matched compounds"]], 1)
+  expect_identical(row("spread")$EmpiricalCompounds, "E03;E06;E09;E12")
+  # one schema for both methods
+  legacy <- suppressWarnings(mmc_ma_gsea(ecs, gs_pathways, n_perm = 100,
+                                         method = "metaboanalyst_legacy"))
+  expect_identical(names(g$table), names(legacy$table))
+  expect_false(any(g$table[["ES defaulted by reference implementation"]]))
+})
+
+test_that("legacy: the method warns, is recorded, and is never selected by a partial name", {
+  expect_warning(g <- mmc_ma_gsea(gs_ecs(), gs_pathways, n_perm = 100,
+                                  method = "metaboanalyst_legacy"),
+                 "known defects")
+  expect_identical(g$method, "metaboanalyst_legacy")
+  expect_identical(g$reference$commit, .MMC_GSEA_REF_COMMIT)
+  expect_identical(g$nes_note, mmc_gsea_nes_note("metaboanalyst_legacy"))
+  expect_null(g$ties)
+  expect_error(mmc_ma_gsea(gs_ecs(), gs_pathways, method = "metaboanalyst"),
+               "gsea_method")
+})
+
+test_that("legacy: GSEA runs on the ECs' scores and the ORA's pathway EC sets", {
+  g <- suppressWarnings(mmc_ma_gsea(gs_ecs(), gs_pathways, n_perm = 100,
+                                    method = "metaboanalyst_legacy"))
   expect_setequal(g$table$Pathway, gs_pathways$name)
   expect_identical(g$table$Pathway, rownames(g$resmat))
   expect_identical(colnames(g$resmat), c("Pathway_Total", "Hits", "P_val", "P_adj", "NES"))
@@ -45,10 +102,17 @@ test_that("GSEA runs on the ECs' scores and the ORA's pathway EC sets", {
   expect_length(g$deviations, 0L)
 })
 
-test_that("non-default GSEA settings are reported as deviations", {
-  g <- suppressWarnings(mmc_ma_gsea(gs_ecs(), gs_pathways, n_perm = 50, seed = 7))
+test_that("legacy: non-default GSEA settings are reported as deviations", {
+  g <- suppressWarnings(mmc_ma_gsea(gs_ecs(), gs_pathways, n_perm = 50, seed = 7,
+                                    method = "metaboanalyst_legacy"))
   expect_true(any(grepl("^n_perm = 50", g$deviations)))
   expect_true(any(grepl("^seed = 7", g$deviations)))
+
+  # Under the default method the same values are settings, not deviations.
+  std <- mmc_ma_gsea(gs_ecs(), gs_pathways, n_perm = 50, seed = 7)
+  expect_length(std$deviations, 0L)
+  expect_identical(std$params$n_perm, 50)
+  expect_identical(std$params$seed, 7)
 })
 
 test_that("GSEA does not change the ORA, and travels through the result files", {
@@ -79,6 +143,51 @@ test_that("GSEA does not change the ORA, and travels through the result files", 
   expect_equal(g$table$P.Value, with$gsea$table$P.Value)
   expect_equal(g$table$padj, with$gsea$table$padj)
   expect_identical(g$engine, "metaboanalyst")
+
+  # The method that produced the table travels with it: the default here.
+  expect_identical(with$gsea$method, "fgsea")
+  expect_identical(g$method, "fgsea")
+  expect_identical(g$method_label, with$gsea$method_label)
+  expect_identical(g$nes_note, mmc_gsea_nes_note("fgsea"))
+  expect_identical(attr(tbl, "ma_info")$gsea$method, "fgsea")
+  # ... with its tie summary and its count of tested pathways without a p.
+  expect_equal(g$ties$n_ec, with$gsea$ties$n_ec)
+  expect_equal(g$ties$n_tied_ec, with$gsea$ties$n_tied_ec)
+  expect_identical(g$ties$tie_sensitive_pathways,
+                   with$gsea$ties$tie_sensitive_pathways)
+  expect_equal(g$n_p_unavailable, with$gsea$n_p_unavailable)
+
+  # Legacy, when asked for by name, is recorded and read back as legacy.
+  old <- suppressWarnings(do.call(mmc_ma_run_contrast, c(args, list(gsea = list(
+    metric_label = "x", method = "metaboanalyst_legacy")))))
+  expect_identical(old$stats, without$stats)          # the ORA is still untouched
+  old_dir <- tempfile("ma_gsea_legacy_")
+  old_files <- write_mummichog_ma_results(old, inp$peaks, old_dir, info = list(),
+                                          pathway_ids = NULL)
+  og <- attr(read_mummichog_ma_pathways(old_files), "ma_gsea")
+  expect_identical(og$method, "metaboanalyst_legacy")
+  expect_identical(og$nes_note, mmc_gsea_nes_note("metaboanalyst_legacy"))
+  expect_null(og$ties)
+
+  # A run record written before the method was recorded names no method. It
+  # can only be the legacy method, and must be described as such, whatever the
+  # current default is.
+  info_file <- old_files[basename(old_files) == "ma_run_info.json"]
+  info <- jsonlite::fromJSON(info_file, simplifyVector = FALSE)
+  info$gsea$method <- NULL
+  info$gsea$method_label <- NULL
+  jsonlite::write_json(info, info_file, auto_unbox = TRUE, pretty = TRUE,
+                       digits = NA, null = "null")
+  pre <- attr(read_mummichog_ma_pathways(old_files), "ma_gsea")
+  expect_identical(pre$method, "metaboanalyst_legacy")
+  expect_identical(pre$nes_note, mmc_gsea_nes_note("metaboanalyst_legacy"))
+  expect_match(pre$method_label, "legacy MetaboAnalyst-compatible", fixed = TRUE)
+
+  # An unknown recorded method is an error, not a silent default.
+  info$gsea$method <- "something_else"
+  jsonlite::write_json(info, info_file, auto_unbox = TRUE, pretty = TRUE,
+                       digits = NA, null = "null")
+  expect_error(read_mummichog_ma_pathways(old_files), "unknown GSEA method")
 })
 
 # ---- parity with the pinned MetaboAnalystR peaks GSEA --------------------------
@@ -97,7 +206,7 @@ ma_gsea_ref <- function() {
 }
 
 for (case in c("mixed", "positive", "negative", "mixed_no_primary")) {
-  test_that(sprintf("GSEA matches MetaboAnalystR end to end (%s)", case), {
+  test_that(sprintf("legacy: GSEA matches MetaboAnalystR end to end (%s)", case), {
     ref <- ma_gsea_ref()
     up <- ref$cases[[case]]
     inp <- ref$inputs
@@ -114,7 +223,10 @@ for (case in c("mixed", "positive", "negative", "mixed_no_primary")) {
     expect_identical(pw$emp_cpds, up$emp_cpds)
     expect_identical(pw$name, up$pathway_names)
 
-    g <- suppressWarnings(mmc_ma_gsea(ecs, pw, n_perm = ref$perm_num))
+    # Historical compatibility: the reference is MetaboAnalystR's own output,
+    # so it is compared with the legacy method, named explicitly.
+    g <- suppressWarnings(mmc_ma_gsea(ecs, pw, n_perm = ref$perm_num,
+                                      method = "metaboanalyst_legacy"))
     f <- g$fgsea
     e <- up$fgsea
     # tested universe, order and sizes: exact

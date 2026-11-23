@@ -306,6 +306,10 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
   # keep working and gain it. The stage's own `enabled` still gates everything:
   # without it there are no files to read.
   gsea_enabled <- isTRUE(mummi_cfg$gsea_enabled %||% TRUE)
+  # Resolved once, outside the per-contrast tryCatch below: an invalid
+  # gsea_method is a config error and must stop, not turn into "GSEA failed"
+  # for every contrast.
+  gsea_method <- mmc_gsea_method(mummi_cfg)
 
   nms <- names(pathways_by_contrast)
   if (is.null(nms)) nms <- paste0("contrast_", seq_along(pathways_by_contrast))
@@ -411,12 +415,13 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
             # honest answer and the safe one -- the engine then ranks on logFC
             # and says why.
             de_method = if (is.data.frame(de_res)) NULL else de_res$method,
-            # MetaboAnalyst-equivalent defaults unless the config overrides
-            # them, in which case run_mummichog_gsea() records the deviation.
+            # Default settings unless the config overrides them; for the
+            # legacy method run_mummichog_gsea() records that as a deviation.
             n_perm   = mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm,
             seed     = mummi_cfg$gsea_seed         %||% .MMC_GSEA_DEFAULTS$seed,
             min_size = mummi_cfg$gsea_min_size     %||% .MMC_GSEA_DEFAULTS$min_size,
-            max_size = mummi_cfg$gsea_max_size     %||% .MMC_GSEA_DEFAULTS$max_size
+            max_size = mummi_cfg$gsea_max_size     %||% .MMC_GSEA_DEFAULTS$max_size,
+            method   = gsea_method
           ),
           error = function(e) {
             warning("mummichog GSEA: contrast '", contrast, "' failed: ",

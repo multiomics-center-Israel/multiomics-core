@@ -35,7 +35,10 @@ extract_chunk <- function(lines, label) {
 # returns, so the harness exercises the template's rendering contract without
 # needing fgsea or a mummichog run.
 render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE,
-                                    nominal = TRUE, gsea_only = FALSE) {
+                                    nominal = TRUE, gsea_only = FALSE,
+                                    gsea_method = "fgsea",
+                                    tie_sensitive = character(0),
+                                    n_p_unavailable = 0L) {
   pw <- data.frame(
     check.names = FALSE, stringsAsFactors = FALSE,
     pathway      = c("Fatty acid degradation", "Glycolysis"),
@@ -65,18 +68,28 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE,
       "ES defaulted by reference implementation" = c(FALSE, FALSE),
       "ES fallback reason"                       = c(NA_character_, NA_character_)
     )
+    # The fields run_mummichog_gsea() returns for the method that ran.
+    legacy <- identical(gsea_method, "metaboanalyst_legacy")
     gsea <- list(
       table = gtab, n_ec = 24L, n_pathways = 2L,
       n_es_defaulted = 0L, es_fallback_reasons = character(0),
       metric = "t_statistic",
       metric_label = "signed t statistic (DE method 'limma', column 'statistic')",
       de_method = "limma",
-      nes_note = mmc_gsea_nes_note(),
+      method = gsea_method,
+      method_label = mmc_gsea_method_label(gsea_method, "1.36.2"),
+      nes_note = mmc_gsea_nes_note(gsea_method),
       deviations = character(0),
+      ties = if (legacy) NULL else list(
+        n_ec = 24L, n_tied_ec = 6L, prop_tied_ec = 0.25, n_tie_groups = 3L,
+        tie_sensitive_pathways = tie_sensitive),
+      n_p_unavailable = n_p_unavailable,
       params = list(n_perm = 100L, min_size = 1, max_size = Inf,
                     gsea_param = 1, seed = 123L),
-      reference = list(repo = "xia-lab/MetaboAnalystR",
-                       commit = .MMC_GSEA_REF_COMMIT))
+      reference = if (legacy) list(repo = "xia-lab/MetaboAnalystR",
+                                   commit = .MMC_GSEA_REF_COMMIT) else
+        list(method = "fgsea::fgseaSimple", package = "fgsea",
+             version = "1.36.2"))
     gsea_plot <- plot_mummichog_gsea_scatter(gtab, title = "GSEA",
                                              p_cutoff = 0.05)
   }
@@ -330,15 +343,65 @@ test_that("the mummichog section renders with GSEA and evidence", {
   # Methodology: both analyses named, NES described conservatively.
   expect_match(html, "complete ranked EC list, without a significance cutoff")
   expect_match(html, "unadjusted DE p-value below the configured Mummichog cutoff")
-  expect_match(html, "retained to reproduce the pinned MetaboAnalystR result")
-  expect_match(html, "should not be interpreted as biological up/down direction")
+  # The default method: standard fgsea, named as such, with its own NES note
+  # and its tie statistics. It is not described as MetaboAnalyst's GSEA.
+  expect_match(html, "fgsea::fgseaSimple", fixed = TRUE)
+  expect_match(html, "concentrated among the highest-scoring ECs", fixed = TRUE)
+  expect_match(html, "not a per-metabolite direction of change", fixed = TRUE)
+  expect_match(html, "6 of the 24 ranked EmpiricalCompounds (25.0%)", fixed = TRUE)
+  # (asserted without its apostrophe: pandoc typesets quotes)
+  expect_match(html, "enrichment score depends on that order", fixed = TRUE)
+  expect_match(html, "permutations are drawn over ECs", fixed = TRUE)
+  expect_false(grepl("retained to reproduce the pinned MetaboAnalystR result",
+                     html, fixed = TRUE))
+  expect_false(grepl("legacy MetaboAnalyst-compatible", html, fixed = TRUE))
+  expect_false(grepl("have no GSEA p-value", html, fixed = TRUE))
   expect_false(grepl("toward one end", html, fixed = TRUE))
 
   # Provenance and the evidence rules survive, in the collapsed block.
   expect_match(html, "Technical details / Reproducibility", fixed = TRUE)
-  expect_match(html, "MetaboAnalystR")
-  expect_match(html, substr(.MMC_GSEA_REF_COMMIT, 1, 12))
+  # The provenance is the method that ran: fgsea and its version, and no
+  # MetaboAnalystR commit, which only a legacy result may claim.
+  expect_match(html, "fgsea 1.36.2", fixed = TRUE)
+  expect_false(grepl(substr(.MMC_GSEA_REF_COMMIT, 1, 10), html, fixed = TRUE))
   expect_match(html, "not.{0,40}Best guess", perl = TRUE)
+})
+
+test_that("a legacy-method GSEA is named as legacy, with its defects, in visible text", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(
+    render_fixture_sections(gsea_method = "metaboanalyst_legacy"),
+    withr::local_tempdir())
+
+  expect_match(html, "used the legacy MetaboAnalyst-compatible method", fixed = TRUE)
+  expect_match(html, "known defects", fixed = TRUE)
+  expect_match(html, "MetaboAnalystR/issues/381", fixed = TRUE)
+  expect_match(html, "retained to reproduce the pinned MetaboAnalystR result",
+               fixed = TRUE)
+  expect_match(html, "should not be interpreted as biological up/down direction",
+               fixed = TRUE)
+  # The pinned upstream commit is the legacy method's provenance.
+  expect_match(html, substr(.MMC_GSEA_REF_COMMIT, 1, 10), fixed = TRUE)
+  # None of the default method's statements may appear for a legacy result.
+  expect_false(grepl("concentrated among the highest-scoring ECs", html, fixed = TRUE))
+  expect_false(grepl("ranked EmpiricalCompounds share", html, fixed = TRUE))
+  expect_false(grepl("permutations are drawn over ECs", html, fixed = TRUE))
+})
+
+test_that("tie-sensitive pathways and missing GSEA p-values are stated where they occur", {
+  skip_unless_renderable()
+
+  html <- render_mummichog_section(
+    render_fixture_sections(tie_sensitive = "Glycolysis", n_p_unavailable = 1L),
+    withr::local_tempdir())
+
+  expect_match(html, "The enrichment score of 1 tested pathway(s) can depend on that order",
+               fixed = TRUE)
+  expect_match(html, "Pathways whose enrichment score can depend on the order of tied ECs (1):",
+               fixed = TRUE)
+  expect_match(html, "1 tested pathway(s) have no GSEA p-value", fixed = TRUE)
+  expect_match(html, "they are not untested pathways", fixed = TRUE)
 })
 
 test_that("every EC's feature table shows annotation and agreement, not only Mixed ECs", {

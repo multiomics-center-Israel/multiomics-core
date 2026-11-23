@@ -164,9 +164,12 @@ mmc_candidate_name_map <- function(feature_table, model) {
 #' @param engine   `"metaboanalyst"` or `"python"`.
 #' @param p_cutoff Nominal threshold.
 #' @param fdr      Adjusted-p threshold.
+#' @param gsea     One contrast's GSEA result (for its `method_label` and
+#'   `nes_note`), or NULL when no contrast has one.
 #' @return A data.frame with `Topic` and `Explanation`.
 #' @noRd
-.mmc_workbook_guide <- function(engine, p_cutoff, fdr = .MMC_SUMMARY_FDR) {
+.mmc_workbook_guide <- function(engine, p_cutoff, fdr = .MMC_SUMMARY_FDR,
+                                gsea = NULL) {
   ma <- identical(engine, "metaboanalyst")
   rows <- c(
     "What this is" = paste0(
@@ -207,9 +210,14 @@ mmc_candidate_name_map <- function(feature_table, model) {
       "Uses every EC, ranked by a signed statistic (an EC's score is the maximum of ",
       "its features'), with no significance cutoff. 'GSEA raw p' is the permutation ",
       "p-value and 'GSEA BH FDR' its Benjamini-Hochberg adjustment over the pathways ",
-      "GSEA tested. The sign of NES is not a biological direction. A pathway can have ",
-      "a GSEA signal without an ORA signal; its ORA evidence is then not shown as ",
-      "support."),
+      "GSEA tested that have a p-value. ",
+      # Method and NES wording come from the result itself (06g), so the
+      # workbook says what the report says.
+      if (!is.null(gsea$method_label)) paste0("Method: ", gsea$method_label, ". ") else "",
+      if (!is.null(gsea$nes_note)) paste0(gsea$nes_note, " ") else "",
+      "A pathway can have a GSEA signal without an ORA signal; its ORA evidence is ",
+      "then not shown as support. A pathway in the GSEA sheet with an empty p-value ",
+      "was tested, but no p-value could be computed for it."),
     "Evidence levels" = paste0(
       "'Adjusted': ORA Holm-adjusted p or GSEA BH FDR < ", fdr, ". 'Nominal': raw p < ",
       p_cutoff, " without adjusted significance -- a hypothesis, not a finding. ORA ",
@@ -274,7 +282,9 @@ build_mummichog_workbook_sheets <- function(sections) {
 
   across <- build_mummichog_across_contrasts(sections)
   list(
-    "README"           = .mmc_workbook_guide(engine, p_cut),
+    "README"           = .mmc_workbook_guide(
+      engine, p_cut,
+      gsea = Find(Negate(is.null), lapply(sections, `[[`, "gsea"))),
     "README_input"     = input,
     "Across Contrasts" = if (is.null(across)) data.frame() else across$wide,
     "Pathway Overview" = overview,

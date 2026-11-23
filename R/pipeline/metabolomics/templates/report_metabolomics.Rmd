@@ -2689,11 +2689,20 @@ if (identical(mummi_engine, "metaboanalyst")) {
   if (length(ma_gseas) > 0) {
     g1 <- ma_gseas[[1]]
     labels <- unique(vapply(ma_gseas, function(g) g$metric_label %||% "?", character(1)))
+    # The method is read from each result, never assumed from the engine.
+    gsea_method_labels <- unique(vapply(ma_gseas, function(g) g$method_label %||% "method not recorded", character(1)))
+    gsea_methods <- unique(vapply(ma_gseas, function(g) g$method %||% NA_character_, character(1)))
+    # Essential, so visible text rather than inside the panel.
+    if ("metaboanalyst_legacy" %in% gsea_methods) {
+      cat(sprintf("**This GSEA used the legacy MetaboAnalyst-compatible method** (`gsea_method: metaboanalyst_legacy`), kept to reproduce earlier results. It has known defects: a pathway's hits are weighted by scores that are not their own, and a pathway holding ECs with equal scores gets ES = 0 ([upstream report](%s)). The default method is standard fgsea.\n\n", .MMC_GSEA_LEGACY_ISSUE))
+    }
     info_panel("GSEA and its interpretation", sprintf(
-      "MetaboAnalyst's peaks GSEA, on the **same** EmpiricalCompounds and pathway sets as the ORA, using the **complete ranked EC list without a significance cutoff**. Each feature is scored by the %s; an EC's score is the **maximum** over its member features, which in mixed mode can come from both polarities. The test is MetaboAnalyst's fixed-permutation fgsea variant (%s permutations, minimum set size %s, seed %s). It reports a raw permutation p-value and its **Benjamini–Hochberg FDR**, computed over the pathways tested — GSEA is BH-adjusted, ORA Holm-adjusted, as in MetaboAnalyst; the two control different error rates. A pathway can have a GSEA signal without an ORA signal; ORA evidence is then never shown as its support. %s\n\n",
+      "GSEA on the **same** EmpiricalCompounds and pathway sets as the ORA, using the **complete ranked EC list without a significance cutoff**. Each feature is scored by the %s; an EC's score is the **maximum** over its member features, which in mixed mode can come from both polarities. Method: %s (%s permutations, minimum set size %s, seed %s). It reports a raw permutation p-value and its **Benjamini–Hochberg FDR**, computed over the tested pathways that have a p-value; the ORA is Holm-adjusted, and the two control different error rates. A pathway can have a GSEA signal without an ORA signal; ORA evidence is then never shown as its support. %s%s\n\n",
       if (length(labels) == 1L) labels else paste0("statistic chosen per contrast (", paste(labels, collapse = "; "), ")"),
+      paste(gsea_method_labels, collapse = "; "),
       g1$params$n_perm %||% "?", g1$params$min_size %||% "?", g1$params$seed %||% "?",
-      g1$nes_note %||% ""))
+      g1$nes_note %||% "",
+      if ("fgsea" %in% gsea_methods) " The ORA is the MetaboAnalyst-compatible one; this GSEA is not MetaboAnalyst's. Every EC has its own ranking position, including ECs with equal scores, so permutations are drawn over ECs. The earlier MetaboAnalyst-compatible GSEA ranked distinct scores instead, so its results are not comparable pathway for pathway." else ""))
   } else {
     cat("**GSEA** has no results in this report: either it was switched off (`gsea_enabled`), `fgsea` was unavailable, or no pathway passed its size filter. The console log for the run distinguishes them.\n\n")
   }
@@ -2714,7 +2723,7 @@ if (identical(mummi_engine, "metaboanalyst")) {
   }, character(1))
   devs <- if (length(ma_gseas) > 0) unique(unlist(lapply(ma_gseas, `[[`, "deviations"), use.names = FALSE)) else character(0)
   info_panel("Parameters and reproducibility", c(
-    sprintf("- Engine: native R reimplementation of MetaboAnalyst's MS Peaks-to-Pathways mummichog, MetaboAnalystR `%s`; each step checked against that version's own output on synthetic reference data\n", substr(ma1$reference$commit %||% "398476ae2a0c996e390925fa62adc46b5ecde334", 1, 10)),
+    sprintf("- Engine: native R reimplementation of MetaboAnalyst's MS Peaks-to-Pathways mummichog (matching, EmpiricalCompounds and ORA), MetaboAnalystR `%s`; each of those steps checked against that version's own output on synthetic reference data. The GSEA method is stated separately below\n", substr(ma1$reference$commit %||% "398476ae2a0c996e390925fa62adc46b5ecde334", 1, 10)),
     sprintf("- Ionization mode: %s\n", ma_mode),
     sprintf("- ORA significant features: raw DE p ≤ %s\n", ma_cut),
     sprintf("- Mass tolerance: %s ppm\n", ma_p$tolerance_ppm %||% ppm),
@@ -2723,9 +2732,9 @@ if (identical(mummi_engine, "metaboanalyst")) {
     sprintf("- Permutations: %s (permutation i seeded 123 + i, MetaboAnalyst's seeds)\n", ma_p$n_permutations %||% n_perm),
     sprintf("- Metabolic model: %s (version %s)\n", ma1$model$id %||% "?", ma1$model$version %||% "?"),
     sprintf("- Gamma fit per contrast: %s\n", paste(gamma_state, collapse = "; ")),
-    if (length(ma_gseas) > 0) sprintf("- GSEA engine: MetaboAnalystR peaks GSEA (%s @ `%s`), fgsea %s; adjustment %s\n",
-                                      g1$reference$repo %||% "?", substr(g1$reference$commit %||% "?", 1, 10),
-                                      g1$params$fgsea_version %||% "?", g1$adjustment %||% "BH"),
+    if (length(ma_gseas) > 0) sprintf("- GSEA method: %s; adjustment %s\n",
+                                      paste(gsea_method_labels, collapse = "; "),
+                                      g1$adjustment %||% "BH"),
     if (length(devs) > 0) sprintf("- **GSEA deviations from the reference implementation:** %s\n", paste(devs, collapse = "; ")),
     "- Gamma parameterization: MetaboAnalyst fits (scale, shape) and evaluates `1 - pgamma(1 - FET, shape, rate = <scale estimate>)`; this engine reproduces that exactly. fitdistrplus may warn about the standard errors of the fit; they are not used.\n",
     sprintf("- fitdistrplus %s\n", ma1$fitdistrplus_version %||% "?"),
@@ -2787,7 +2796,13 @@ if (has_gsea) {
               varying(distinct_of(function(g) g$metric_label))))
   cat(sprintf("- GSEA permutations: %s\n",
               varying(distinct_of(function(g) g$params$n_perm))))
+  cat(sprintf("- GSEA method: %s\n",
+              varying(distinct_of(function(g) g$method_label %||% "method not recorded"))))
   cat("\n")
+  # Essential, so visible text: the legacy method is never the silent default.
+  if ("metaboanalyst_legacy" %in% distinct_of(function(g) g$method)) {
+    cat(sprintf("**This GSEA used the legacy MetaboAnalyst-compatible method** (`gsea_method: metaboanalyst_legacy`), kept to reproduce earlier results. It has known defects: a pathway's hits are weighted by scores that are not their own, and a pathway holding ECs with equal scores gets ES = 0 ([upstream report](%s)). The default method is standard fgsea.\n\n", .MMC_GSEA_LEGACY_ISSUE))
+  }
   cat("**GSEA direction.** ", mummi_gsea[[1]]$nes_note,
       " Judge pathway evidence using the reported p-value and FDR.\n\n", sep = "")
 } else {
@@ -2796,7 +2811,7 @@ if (has_gsea) {
 
 cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123.*\n\n")
 if (has_gsea) {
-  cat("*GSEA reference: Pang Z, Chong J, Zhou G, et al. MetaboAnalyst 5.0. Nucleic Acids Res. 2021;49(W1):W388-W396 (MS Peaks-to-Pathways).*\n\n")
+  cat("*GSEA references: Korotkevich G, Sukhov V, Budin N, et al. Fast gene set enrichment analysis. bioRxiv. 2021. doi:10.1101/060012 (fgsea). Pang Z, Chong J, Zhou G, et al. MetaboAnalyst 5.0. Nucleic Acids Res. 2021;49(W1):W388-W396 (GSEA on EmpiricalCompounds, MS Peaks-to-Pathways).*\n\n")
 }
 
 # ---- Technical details / Reproducibility (collapsed) -----------------------
@@ -2804,8 +2819,11 @@ cat("<details><summary><strong>Technical details / Reproducibility</strong></sum
 cat(sprintf("**Mummichog ORA p-values.** Each pathway's p-value is the empirical p-value mummichog reports from its own permutations (%s here). No p-value adjusted across pathways is reported.\n\n", n_perm))
 if (has_gsea) {
   g1 <- mummi_gsea[[1]]
-  cat(sprintf("- GSEA engine: MetaboAnalystR Peaks-to-Pathways semantics (%s @ `%s`), EmpiricalCompound-space gene sets\n",
-              g1$reference$repo, g1$reference$commit))
+  cat(sprintf("- GSEA method: %s; EmpiricalCompound-space gene sets\n",
+              varying(distinct_of(function(g) g$method_label %||% "method not recorded"))))
+  if ("fgsea" %in% distinct_of(function(g) g$method)) {
+    cat("- Every EC has its own ranking position, including ECs with equal scores, so permutations are drawn over ECs. The earlier MetaboAnalyst-compatible GSEA ranked distinct scores instead, so its results are not comparable pathway for pathway.\n")
+  }
   # Settings come from one config, so they are shared -- but say so from the
   # results rather than assuming it.
   settings <- distinct_of(function(g) sprintf(
@@ -2983,6 +3001,13 @@ for (contrast in names(mummi_sections)) {
                              padj = s$gsea$table[["padj"]]), "\n\n")
     cat(sprintf("GSEA over the complete ranked list of %d EmpiricalCompounds (no significance cutoff), ranked by the %s.\n\n",
                 s$gsea$n_ec, s$gsea$metric_label))
+    # Tied scores and missing p-values are stated where the result is read.
+    tie_sentence <- mmc_gsea_tie_sentence(s$gsea$ties)
+    if (!is.null(tie_sentence)) cat(tie_sentence, "\n\n")
+    if (isTRUE(s$gsea$n_p_unavailable > 0)) {
+      cat(sprintf("%d tested pathway(s) have no GSEA p-value: no permutation gave an enrichment score of the observed sign, so NES, p and adjusted p are missing. They were tested and are listed with empty p-values; they are not untested pathways.\n\n",
+                  as.integer(s$gsea$n_p_unavailable)))
+    }
     if (!is.null(s$gsea_plot)) {
       safe_print_plot(s$gsea_plot)
       figure_legend(sprintf("Mummichog GSEA over the full ranked EmpiricalCompound list (%s), in the style of MetaboAnalyst's MS Peaks-to-Pathways summary. Each point is a pathway: x = NES, y = -log10(raw GSEA p-value), colour = NES on a diverging scale centred at 0, point size = sqrt(-log10 p) — the same quantity as the y axis, which is MetaboAnalyst's own size mapping and carries no additional information. The dashed line marks p = %g, the vertical line marks NES = 0, and the most significant pathways are labelled. %s", label, p_cut, s$gsea$nes_note))
@@ -3095,9 +3120,18 @@ for (contrast in names(mummi_sections)) {
 
   if (!is.null(s$gsea)) {
     advanced_block("Full Mummichog GSEA table", function() {
-      cat(sprintf("`P.Value` is the raw permutation p-value and `padj` its Benjamini-Hochberg adjustment over the %d tested pathways.\n\n",
-                  s$gsea$n_pathways))
+      # BH is taken over the tested pathways that have a p-value: a pathway
+      # without one has no adjusted value and is not in the family.
+      gsea_no_p <- as.integer(s$gsea$n_p_unavailable %||% 0L)
+      cat(sprintf("`P.Value` is the raw permutation p-value and `padj` its Benjamini-Hochberg adjustment over the %d tested pathways%s.\n\n",
+                  as.integer(s$gsea$n_pathways) - gsea_no_p,
+                  if (gsea_no_p > 0L) sprintf(" that have a p-value (%d of the %d tested pathways have none)", gsea_no_p, as.integer(s$gsea$n_pathways)) else ""))
       cat("**GSEA direction.** ", s$gsea$nes_note, "\n\n", sep = "")
+      if (length(s$gsea$ties$tie_sensitive_pathways) > 0) {
+        cat(sprintf("**Pathways whose enrichment score can depend on the order of tied ECs (%d):** %s\n\n",
+                    length(s$gsea$ties$tie_sensitive_pathways),
+                    paste(htmltools::htmlEscape(s$gsea$ties$tie_sensitive_pathways), collapse = "; ")))
+      }
       # This contrast's own departures from the reference defaults; some are
       # data-dependent, so they can differ between contrasts of one run.
       if (length(s$gsea$deviations) > 0) {

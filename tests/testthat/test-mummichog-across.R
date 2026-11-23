@@ -123,3 +123,14 @@ test_that("sections without an overview give no across-contrast view", {
   expect_null(build_mummichog_across_contrasts(list()))
   expect_null(build_mummichog_across_contrasts(list(A = list(table = data.frame()))))
 })
+
+test_that("a pathway GSEA tested without a p-value is not 'No result' across contrasts", {
+  # Its GSEA level is "absent" because there is no p-value to grade, but it was
+  # tested, so the cell must say it has a result without nominal evidence.
+  expect_identical(.mmc_across_cell("absent", "absent"), "No result")
+  expect_identical(.mmc_across_cell("absent", "absent", gsea_p_unavailable = TRUE), "—")
+  # The flag changes nothing where there is evidence to show.
+  expect_identical(.mmc_across_cell(c("nominal", "absent"), c("absent", "nominal"),
+                                    gsea_p_unavailable = c(TRUE, FALSE)),
+                   c("ORA nominal", "GSEA nominal"))
+})

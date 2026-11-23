@@ -121,7 +121,7 @@ What differs from the python engine:
 | adjusted p-values | none | **Holm** (`adj.p Holm *` columns), MetaboAnalyst's `p.adjust()` default — **not BH/FDR** |
 | permutation seeds | `params.seed` | `123 + i` for permutation `i` (MetaboAnalyst's own) |
 | model | built-in `human_mfn` or a custom JSON | a custom JSON (`model_ref` / `model_json`) is required |
-| GSEA | on python mummichog's ECs (m/z-merged scores) | MetaboAnalyst's peaks GSEA on the **same joint-polarity ECs and pathway sets as the ORA**; EC score = max of its features' signed DE statistic; `padj` is **BH** |
+| GSEA | standard fgsea on python mummichog's ECs (m/z-merged scores) | standard fgsea on the **same joint-polarity ECs and pathway sets as the ORA**; EC score = max of its features' signed DE statistic; `padj` is **BH**. Not MetaboAnalyst's GSEA unless `gsea_method: metaboanalyst_legacy` (see [GSEA method](#gsea-method)) |
 | Pathway Evidence | from python mummichog's EC tables; each feature's annotation compared with all of its EC's pathway candidates | from the engine's matched-feature table; each feature's annotation compared only with the pathway candidates it matched itself ([below](#pathway-evidence-with-this-engine)) |
 
 Reproduced on purpose, because MetaboAnalyst does it:
@@ -138,14 +138,14 @@ Outputs, per contrast, in `mummichog_pinned/<contrast>/metaboanalyst/`:
 - `mummichog_pathway_enrichment_mummichog.csv`: MetaboAnalyst's own result table, verbatim.
 - `ma_matched_features.tsv`: every match with its EC, feature id and polarity.
 - `ma_input.tsv`: the peak list the analysis was given.
-- `ma_gsea_results.tsv`: the GSEA table in MetaboAnalyst's order (raw p, BH `padj`, NES, leading edge, each pathway's ECs).
-- `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts.
+- `ma_gsea_results.tsv`: the GSEA table ordered by p-value (raw p, BH `padj`, NES, leading edge, each pathway's ECs). The default method writes NES, p and `padj` unrounded; the legacy method writes them at MetaboAnalyst's 4 significant digits.
+- `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts. Its `gsea` block names the `method` that produced the table and, for the default method, the tie summary (`ties`) and the number of tested pathways without a p-value. A record with no `method` was written before the method was recorded and is read as `metaboanalyst_legacy`.
 
 GSEA is optional: if it fails, the stage warns, the contrast's ORA is still written, and `ma_run_info.json` records the GSEA error. If a whole contrast fails, the stage warns and its earlier result files are replaced by `ma_failed.json`, which holds the error. That contrast gets no report section, and all of its earlier exports are cleared. If every contrast fails, the stage first clears every contrast's earlier exports and then stops.
 
 The report, its exports and the Shiny payload read these through the same targets as before. The report's ORA table adds the EASE, Gamma, empirical and Holm columns; its GSEA tab, scatter and GSEA table export show this engine's GSEA. Python GSEA never runs with this engine, so the two engines' results are never mixed in one report.
 
-GSEA reproduces `.compute.mummichog.RT.fgsea()` at the pinned commit, with two documented exceptions that change no statistic: MetaboAnalyst's result CSV attaches EC hits in library order to rows sorted by p-value (here each row carries its own pathway's ECs), and a single tested pathway stays a row. Validated end to end against that commit on the synthetic fixtures (`generate_gsea_reference.R`).
+By default the GSEA is standard fgsea and is **not** MetaboAnalyst's (see [GSEA method](#gsea-method)); the ORA above remains MetaboAnalyst-compatible. With `gsea_method: metaboanalyst_legacy` the GSEA reproduces `.compute.mummichog.RT.fgsea()` at the pinned commit, with two documented exceptions that change no statistic: MetaboAnalyst's result CSV attaches EC hits in library order to rows sorted by p-value (here each row carries its own pathway's ECs), and a single tested pathway stays a row. That legacy path is validated end to end against that commit on the synthetic fixtures (`generate_gsea_reference.R`).
 
 Limits:
 
@@ -274,7 +274,34 @@ Identified-metabolite support reads `Not comparable` (not joinable), `Not tested
 
 ## Complementary GSEA (MS peaks-to-pathways)
 
-Alongside the ORA above, the pipeline runs a MetaboAnalyst-style GSEA over the same mapped EmpiricalCompound universe. It is **additive computationally**: the pinned mummichog engine, its statistics and its outputs are untouched, and the ORA bubble plot and table are still produced and still exported.
+Alongside the ORA above, the pipeline runs a GSEA over the same mapped EmpiricalCompound universe, an analysis MetaboAnalyst introduced for MS peaks. It is **additive computationally**: the mummichog engine, its ORA statistics and its outputs are untouched, and the ORA bubble plot and table are still produced and still exported.
+
+### GSEA method
+
+`gsea_method` under the `mummichog:` block chooses how the EC scores and pathway EC sets are tested. Both engines use it the same way, and both methods are given the same EC scores, the same ranking statistic and the same pathway sets.
+
+| `gsea_method` | What runs |
+| --- | --- |
+| unset, or `fgsea` (default) | `fgsea::fgseaSimple()` on the named, signed EC-score vector (`mmc_gsea_fgsea()`). The enrichment score, permutation null, p-value, NES, BH adjustment and leading edge are fgsea's. |
+| `metaboanalyst_legacy` | The reproduction of MetaboAnalystR's vendored peaks GSEA (`mmc_gsea_metaboanalyst()`). Kept only to reproduce results reported with it. It warns when used, and the report says so. |
+
+Any other value stops the run, including when `gsea_enabled` is `false`: the key is validated whenever mummichog runs. The method that ran is recorded in the result, the report, the workbook guide and, for the MetaboAnalyst-compatible engine, `ma_run_info.json`.
+
+**Why the default is not MetaboAnalyst's GSEA.** MetaboAnalystR's implementation has two defects, reported upstream as [xia-lab/MetaboAnalystR#381](https://github.com/xia-lab/MetaboAnalystR/issues/381):
+
+1. It takes the absolute value of the ranked scores and then re-sorts them, while pathway positions still refer to the signed order. A hit is therefore weighted by a score that is not its own, and the leading edge is read back through the wrong names.
+2. ECs with equal scores are collapsed into one ranked position. A pathway holding two of them cannot be scored and gets ES = 0 and p = 1.
+
+**What changes with the default method, beyond those two points.**
+
+- **The permutation universe.** Every EC has its own ranking position, including ECs with equal scores, so permutations are drawn over ECs. The legacy method ranks distinct scores, so its universe is smaller whenever scores are tied. The GSEA method itself is the same standard fixed-permutation test; the two results are still not comparable pathway for pathway.
+- **Tied scores.** ECs with equal scores are ordered by EC id, in a locale-independent order, and no score is altered. The result reports how many ECs are tied and their proportion, and names the pathways whose enrichment score can depend on that order: those for which a group of equal-scored ECs holds both members and non-members. A warning is given when there is at least one such pathway. There is no threshold.
+- **Missing p-values.** fgsea gives no p-value when no permutation produced an enrichment score of the observed sign. Such a pathway is kept in the table with empty NES, p and `padj`, counted in the result, and shown as `Tested; p-value unavailable`, never as `Not tested`. It is not part of the BH family: `padj` is adjusted over the tested pathways that have a p-value.
+- **A pathway holding every ranked EC** is not tested (fgsea caps the size at one less than the list).
+- **NES sign** is the ordinary GSEA one: which end of the ranked list the pathway's ECs are concentrated at. An EC takes the largest signed score among its features, so it is still not a per-metabolite direction of change.
+- **The table schema is unchanged.** `ES defaulted by reference implementation` and `ES fallback reason` stay, as `FALSE` and empty, because the default method has no fallback.
+
+The number of permutations is unchanged (100 by default).
 
 In the HTML report each contrast has five tabs: **Summary → ORA plot → GSEA plot → Pathway Evidence → Advanced / Downloads** (see [The report section](#the-report-section)). The ORA bubble and the GSEA scatter each keep their own tab under their own name; the ORA bubble is never shown under a GSEA heading. A contrast without GSEA gets the explanation in its GSEA plot tab instead of a plot — see [When GSEA has no results](#when-gsea-has-no-results).
 
@@ -298,7 +325,7 @@ A signed ranking is the premise of GSEA, and W is non-negative, so ranking on it
 
 GSEA needs `fgsea` and a **readable** metabolic model — the built-in `human_mfn` model ships inside the Python package, so its pathway membership cannot be read and both GSEA and the supporting-evidence section are skipped with a message. Use `model_ref` or `model_json`.
 
-`gsea_enabled: true` under the `mummichog:` block is the switch; it defaults to on wherever mummichog is enabled, so configs written before GSEA existed keep working. Four optional keys (`gsea_permutations`, `gsea_seed`, `gsea_min_size`, `gsea_max_size`) carry the pinned MetaboAnalystR defaults. Overriding any of them is a methodological deviation, and the result records it as one. Note `gsea_seed` is **not** the project `seed:`: 123 is upstream's own value.
+`gsea_enabled: true` under the `mummichog:` block is the switch; it defaults to on wherever mummichog is enabled, so configs written before GSEA existed keep working. Four optional keys (`gsea_permutations`, `gsea_seed`, `gsea_min_size`, `gsea_max_size`) carry MetaboAnalystR's defaults, for both methods. With `gsea_method: metaboanalyst_legacy`, overriding any of them is a deviation from the reference and the result records it as one; with the default method they are plain settings, reported with the result. Note `gsea_seed` is **not** the project `seed:`: 123 is upstream's own value. `gsea_method` is described [above](#gsea-method).
 
 ### When GSEA has no results
 
@@ -320,12 +347,14 @@ Per contrast, under `mummichog_pinned/`: `mummichog_gsea_scatter_<contrast>.{png
 
 ### What is verified, and what is not
 
-The engine reproduces the pinned `xia-lab/MetaboAnalystR` Peaks-to-Pathways implementation at **two different strengths**, and the result says which is which:
+**Default method (`fgsea`).** The statistic is fgsea's own: nothing in it is reimplemented here. The tests check what this pipeline adds around the call: that the enrichment score and leading edge equal `fgsea::calcGseaStat()` on the documented ordering of tied ECs, that a hand-calculated example with negative scores gives the expected values, that results are reproducible for a seed and independent of input order, and that both engines call the same function. How the EC scores are built is unchanged and is covered by the point about ranked inputs below.
+
+**Legacy method (`metaboanalyst_legacy`).** It reproduces the pinned `xia-lab/MetaboAnalystR` Peaks-to-Pathways implementation at **two different strengths**, and the result says which is which:
 
 -   the **GSEA calculation given ranked EC inputs** is checked against a reference generated by running upstream's own code (`tests/testthat/fixtures/mummichog_gsea_parity/`);
 -   the **construction of those ranked inputs** — notably how features sharing an m/z are merged — is matched by reading the pinned source and is covered by no fixture. Independent validation is tracked in issue #302.
 
-NES sign is retained for parity only. The reference transforms and reorders the score vector *after* pathway positions are built, so the sign is not a biological direction; the report states this wherever NES appears.
+For the legacy method, NES sign is retained for parity only. The reference transforms and reorders the score vector *after* pathway positions are built, so the sign is not a biological direction. For the default method the sign is the ordinary GSEA one (see [GSEA method](#gsea-method)). The report states the note that applies to the method that ran wherever NES appears.
 
 ## Stochasticity caveat
 

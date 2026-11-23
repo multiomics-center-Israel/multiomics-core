@@ -196,7 +196,7 @@ write_mummichog_ma_failure <- function(dir, contrast, error) {
 #' @param rt_frac Retention-time tolerance fraction (default 0.02).
 #' @param min_lib Smallest pathway kept, in compounds (default 3).
 #' @param gsea NULL to skip GSEA, or a list of `mmc_ma_gsea()` settings
-#'   (`n_perm`, `min_size`, `max_size`, `seed`, `metric_label`). It runs on the
+#'   (`n_perm`, `min_size`, `max_size`, `seed`, `method`, `metric_label`). It runs on the
 #'   same ECs and pathway sets as the ORA, after it, and changes nothing in it.
 #'   GSEA is optional: an error in it is caught and returned as `gsea_error`,
 #'   so the ORA result is kept.
@@ -319,7 +319,12 @@ write_mummichog_ma_results <- function(run, peaks, dir, info, pathway_ids) {
   gs <- run$gsea
   if (!is.null(gs)) {
     readr::write_tsv(gs$table, gsea_path, na = "NA")
-    info$gsea <- list(ran = TRUE, metric_label = gs$metric_label,
+    # The method is recorded with the result it produced: a reader of this
+    # directory must describe the run that wrote it, not the current default.
+    info$gsea <- list(ran = TRUE, method = gs$method,
+                      method_label = gs$method_label,
+                      metric_label = gs$metric_label,
+                      ties = gs$ties, n_p_unavailable = gs$n_p_unavailable,
                       params = gs$params, deviations = gs$deviations,
                       reference = gs$reference, adjustment = "BH (p.adjust 'fdr')",
                       n_ec = gs$n_ec, n_positions = gs$n_positions,
@@ -382,11 +387,31 @@ read_mummichog_ma_pathways <- function(files) {
         "ES defaulted by reference implementation" = "l", .default = "d")),
       check.names = FALSE)
     gi <- info$gsea %||% list()
+    # The method comes from the run record, never from the current default. A
+    # record written before the method was recorded can only be the legacy
+    # one: it was the only GSEA this engine had.
+    g_method <- gi$method %||% "metaboanalyst_legacy"
+    if (!is.character(g_method) || length(g_method) != 1L ||
+        !g_method %in% .MMC_GSEA_METHODS) {
+      .mmc_stop("the run record (", .MMC_MA_INFO_FILE, ") names an unknown ",
+                "GSEA method '", paste(format(g_method), collapse = ", "),
+                "'; expected one of: ",
+                paste(.MMC_GSEA_METHODS, collapse = ", "), ".")
+    }
+    g_ties <- gi$ties
+    if (is.list(g_ties)) {
+      g_ties$tie_sensitive_pathways <-
+        as.character(unlist(g_ties$tie_sensitive_pathways))
+    }
     # The shape the report's GSEA tab and Summary read (as for python GSEA).
     attr(tbl, "ma_gsea") <- list(
-      table = g, metric_label = gi$metric_label, params = gi$params,
+      table = g, method = g_method,
+      method_label = gi$method_label %||%
+        mmc_gsea_method_label(g_method, gi$params$fgsea_version),
+      metric_label = gi$metric_label, params = gi$params,
       deviations = as.character(unlist(gi$deviations)),
-      reference = gi$reference, nes_note = mmc_gsea_nes_note(),
+      reference = gi$reference, nes_note = mmc_gsea_nes_note(g_method),
+      ties = g_ties, n_p_unavailable = gi$n_p_unavailable %||% 0L,
       n_ec = gi$n_ec, n_positions = gi$n_positions, n_pathways = nrow(g),
       adjustment = gi$adjustment, engine = "metaboanalyst")
   }
