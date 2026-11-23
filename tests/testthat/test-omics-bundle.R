@@ -237,6 +237,22 @@ test_that("a missing part file is reported by name", {
     expect_error(read_omics_bundle(path), "part 'expr' is missing")
 })
 
+test_that("an invalid part name in the manifest is refused before any path is built", {
+    root <- withr::local_tempdir()
+    path <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())
+    # Self-consistent: the file matches the name, and the manifest checksum is
+    # refreshed, so only the part-name check can stop it.
+    rewrite_manifest(path, function(m) {
+        m$parts[["../../outside"]] <- list(file = "parts/../../outside.rds",
+                                           sha256 = strrep("0", 64), class = "character")
+        m
+    })
+
+    expect_error(validate_omics_bundle(path), "invalid part name")
+    # Checked for every part, even when the caller asks only for a valid one.
+    expect_error(read_omics_bundle(path, parts = "meta"), "invalid part name")
+})
+
 test_that("a manifest cannot point a reader outside the bundle", {
     root <- withr::local_tempdir()
     path <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())
@@ -319,6 +335,17 @@ test_that("a failed write leaves no bundle behind", {
     expect_equal(nrow(list_omics_bundles(root)), 0L)
 })
 
+test_that("a bundle moved under another omics folder is not listed", {
+    root <- withr::local_tempdir()
+    path <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())
+    wrong <- file.path(root, "bundles", "rnaseq")
+    dir.create(wrong)
+    expect_true(file.rename(path, file.path(wrong, basename(path))))
+
+    expect_equal(nrow(list_omics_bundles(root)), 0L)
+    expect_equal(nrow(list_omics_bundles(root, omics = "rnaseq")), 0L)
+})
+
 test_that("listing filters by omics and is empty for a root with no bundles", {
     root <- withr::local_tempdir()
     empty <- list_omics_bundles(root)
@@ -375,4 +402,32 @@ test_that("provenance is captured without failing outside a git repository", {
     # An unknown commit is JSON null in the manifest; read back it is NULL or NA.
     commit <- read_omics_bundle(path, parts = "meta")$manifest$provenance$git_commit
     expect_true(is.null(commit) || isTRUE(is.na(commit)))
+})
+
+test_that("git_dirty is FALSE or TRUE when git answers, and NA when git status fails", {
+    skip_if(!nzchar(Sys.which("git")), "git is not installed")
+    # Everything happens in a throw-away repository; identity and signing are
+    # set per command with -c, so no global git configuration is read or changed.
+    repo <- withr::local_tempdir()
+    git <- function(...) {
+        system2("git", c("-C", shQuote(repo), "-c", "user.name=test",
+                         "-c", "user.email=test@example.com",
+                         "-c", "commit.gpgsign=false", ...),
+                stdout = FALSE, stderr = FALSE)
+    }
+    expect_equal(git("init", "-q"), 0L)
+    writeLines("a", file.path(repo, "tracked.txt"))
+    expect_equal(git("add", "tracked.txt"), 0L)
+    expect_equal(git("commit", "-q", "-m", "init"), 0L)
+
+    expect_false(bundle_provenance(repo)$git_dirty)
+    writeLines("b", file.path(repo, "tracked.txt"))
+    expect_true(bundle_provenance(repo)$git_dirty)
+
+    # A corrupt index: HEAD still resolves, but git status cannot run, so the
+    # state is unknown rather than clean.
+    writeLines("not an index", file.path(repo, ".git", "index"))
+    p <- bundle_provenance(repo)
+    expect_false(is.na(p$git_commit))
+    expect_true(is.na(p$git_dirty))
 })

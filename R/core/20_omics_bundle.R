@@ -73,8 +73,11 @@ bundle_provenance <- function(repo_dir = ".") {
     }
     commit <- git(c("rev-parse", "HEAD"))
     commit <- if (length(commit) == 1 && nzchar(commit)) commit else NA_character_
-    dirty <- if (is.na(commit)) NA else length(git(c("status", "--porcelain",
-                                                     "--untracked-files=no"))) > 0
+    status <- if (is.na(commit)) NULL else git(c("status", "--porcelain",
+                                                 "--untracked-files=no"))
+    # NULL means git status failed, so the state is unknown; character(0) means
+    # it ran and found no changes.
+    dirty <- if (is.null(status)) NA else length(status) > 0
 
     lock <- file.path(repo_dir, "renv.lock")
     pkgs <- sort(loadedNamespaces())
@@ -278,10 +281,12 @@ write_omics_bundle <- function(parts, info, root, provenance) {
 #'
 #' Fails on: a hidden (\code{.partial_*}) or missing directory, no manifest, a
 #' missing or malformed \code{checksums.sha256}, a manifest whose sha256 differs
-#' from it (checked before the manifest is used), a status other than complete, an unsupported contract version, a directory
-#' renamed away from its bundle ID, an unknown part, a missing part file, or a
-#' part whose sha256 differs from the manifest. Messages name the bundle, the
-#' part and the file, never a value from inside a part.
+#' from it (checked before the manifest is used), a status other than
+#' complete, an unsupported contract version, a directory renamed away from its
+#' bundle ID, any manifest part name not matching the part-name rule (checked
+#' for all parts, before any path is built), an unknown part, a missing part
+#' file, or a part whose sha256 differs from the manifest. Messages name the
+#' bundle, the part and the file, never a value from inside a part.
 #'
 #' @param path Bundle directory.
 #' @param parts Names of the parts to verify; NULL verifies all of them.
@@ -334,6 +339,15 @@ validate_omics_bundle <- function(path, parts = NULL) {
     }
 
     available <- names(m$parts)
+    # Every part name in the manifest is checked, not only the requested ones,
+    # and before any path is built from one: a name such as "../x" would
+    # otherwise produce an "expected" path outside the bundle.
+    bad <- available[is.na(available) | !grepl(.BUNDLE_NAME_PATTERN, available)]
+    if (length(available) == 0 || length(bad) > 0) {
+        stop("Bundle '", m$bundle_id, "': the manifest has no parts or invalid part ",
+             "name(s) (", paste(bad, collapse = ", "), "); part names must be lowercase ",
+             "letters, digits and '_'.", call. = FALSE)
+    }
     if (is.null(parts)) parts <- available
     unknown <- setdiff(parts, available)
     if (length(unknown) > 0) {
@@ -383,10 +397,11 @@ read_omics_bundle <- function(path, parts = NULL) {
 #' Reads manifests only, so it is cheap; checksums are verified when a bundle
 #' is read. Hidden \code{.partial_*} directories, directories without
 #' \code{checksums.sha256} (checked before any manifest is parsed),
-#' directories without a complete manifest, and directories renamed away from
-#' their bundle ID (which could never be read) are left out. Rows are ordered
-#' by omics, then creation time, then ID; the order is for display, and
-#' integration still names the bundles it uses.
+#' directories without a complete manifest, directories renamed away from their
+#' bundle ID (which could never be read), and bundles sitting under another
+#' omics' folder are left out. Rows are ordered by omics, then creation time,
+#' then ID; the order is for display, and integration still names the bundles
+#' it uses.
 #'
 #' @param root Output root, as passed to \code{write_omics_bundle()}.
 #' @param omics Optional omics name to restrict the listing to.
@@ -412,9 +427,11 @@ list_omics_bundles <- function(root, omics = NULL) {
         # written is never parsed.
         if (!file.exists(file.path(d, "checksums.sha256"))) return(NULL)
         m <- .read_bundle_manifest(d)
-        # A renamed folder would always fail validation, so it is not offered.
+        # A folder renamed away from its ID would always fail validation, and one
+        # moved under another omics folder would be listed under the wrong omics.
         if (is.null(m) || !identical(m$status, "complete") ||
-            !identical(m$bundle_id, basename(d))) return(NULL)
+            !identical(m$bundle_id, basename(d)) ||
+            !identical(m$omics, basename(dirname(d)))) return(NULL)
         data.frame(bundle_id = m$bundle_id, omics = m$omics, project = m$project,
                    analysis_round = m$analysis_round, created_at_utc = m$created_at_utc,
                    path = d, stringsAsFactors = FALSE)
