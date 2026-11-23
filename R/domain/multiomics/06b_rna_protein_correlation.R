@@ -225,7 +225,17 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
         # Also save a combined summary plot to the main plots dir
         if (length(de_concordance_list) > 0 && !is.null(out_dir)) {
             .save_combined_de_scatter(de_concordance_list, out_dir)
-            .write_log2fc_pairs_table(de_concordance_list, out_dir)
+            pairs_file <- .write_log2fc_pairs_table(de_concordance_list, out_dir)
+            # Read back the written table so the pathway view is built from
+            # exactly the pairs a reader can check.
+            if (!is.null(pairs_file)) {
+                tryCatch(
+                    write_pathway_rna_protein_correlation(
+                        read.csv(pairs_file, stringsAsFactors = FALSE), config, out_dir),
+                    error = function(e) warning("Pathway RNA-protein correlation failed: ",
+                                                conditionMessage(e), call. = FALSE)
+                )
+            }
         }
     } else {
         message("  Skipping DE concordance: missing DE tables or gene mapping")
@@ -258,7 +268,7 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 #' @param out_dir Directory whose tables/ subdirectory receives the file.
 #' @return Invisibly the path written, or NULL when there is nothing to write.
 .write_log2fc_pairs_table <- function(de_concordance_list, out_dir) {
-    cols <- c("gene_id", "protein_id", "rna_log2FC", "rna_padj",
+    cols <- c("gene_id", "protein_id", "gene_symbol", "rna_log2FC", "rna_padj",
               "protein_log2FC", "protein_padj", "concordant")
     parts <- lapply(names(de_concordance_list), function(cname) {
         d <- de_concordance_list[[cname]]
