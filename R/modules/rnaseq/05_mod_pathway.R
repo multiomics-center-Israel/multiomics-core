@@ -81,6 +81,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # one left by an earlier run must not outlive a run that disables, skips or
     # reroutes enrichment. Only .run_local_enrichment() writes it again.
     unlink(file.path(out_dir, "Enrichment", "enrichment_manifest.csv"))
+    # Written below by the online route only; a copy from an earlier run must
+    # not describe this one.
+    collections_file <- file.path(out_dir, "Enrichment", "pathway_collections.tsv")
+    unlink(collections_file)
 
     # Decide whether to run enrichment. Skip when either switch is explicitly
     # false (`pathway.enabled: false` or `enrichment.enabled: false`), OR when the
@@ -215,6 +219,17 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         gmt_file         = gmt_file,
         annotation       = annotation_df
     )
+
+    # load_gene_sets() only warns when a collection fails to load, so record
+    # what loaded for the report to state (describe_rna_pathway_collections()).
+    dir.create(dirname(collections_file), recursive = TRUE, showWarnings = FALSE)
+    collections <- summarise_pathway_collections(databases, gene_sets)
+    utils::write.table(collections, collections_file, sep = "\t", quote = FALSE, row.names = FALSE)
+    if (any(collections$status != "loaded")) {
+        warning("Pathway collection(s) requested but not loaded: ",
+                paste(collections$collection[collections$status != "loaded"], collapse = ", "),
+                ". The report states this; invalidate the pathway target and rerun to retry.", call. = FALSE)
+    }
 
     if (length(gene_sets) == 0) {
         message("No gene sets loaded. Skipping pathway analysis.")
