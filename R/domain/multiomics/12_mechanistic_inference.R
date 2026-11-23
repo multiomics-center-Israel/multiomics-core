@@ -2,7 +2,7 @@
 # Mechanistic Inference and Regulatory Network Analysis
 # =============================================================================
 # This script provides deep mechanistic insights from multi-omics data:
-#   1. RNA-Protein regulatory analysis (translation efficiency, protein stability)
+#   1. RNA-Protein regulatory analysis (post-transcriptional regulation, protein stability)
 #   2. Transcription factor activity inference
 #   3. Gene regulatory network inference
 #   4. Causal mediation analysis (RNA -> Protein -> Phenotype)
@@ -239,17 +239,12 @@ analyze_rna_protein_regulation <- function(harmonized, gene_mapping, mc, config,
         rna_matched, prot_matched, gene_symbols
     )
 
-    # 2. Translation efficiency inference
-    results$translation_efficiency <- compute_translation_efficiency(
-        rna_matched, prot_matched, gene_symbols
-    )
-
-    # 3. Post-transcriptional regulation detection
+    # 2. Post-transcriptional regulation detection
     results$post_transcriptional <- detect_post_transcriptional_regulation(
         rna_matched, prot_matched, gene_symbols, mc
     )
 
-    # 4. Protein stability inference
+    # 3. Protein stability inference
     results$protein_stability <- infer_protein_stability(
         rna_matched, prot_matched, gene_symbols
     )
@@ -367,67 +362,6 @@ compute_rna_protein_correlations <- function(rna_mat, prot_mat, gene_symbols) {
     list(
         correlations = correlations,
         cor_df = cor_df,
-        summary = summary_stats
-    )
-}
-
-#' Compute translation efficiency scores
-compute_translation_efficiency <- function(rna_mat, prot_mat, gene_symbols) {
-    # Translation efficiency = log2(protein) - log2(RNA)
-    # Higher values indicate more efficient translation
-
-    n_genes <- length(gene_symbols)
-
-    # Compute mean expression
-    rna_mean <- rowMeans(rna_mat, na.rm = TRUE)
-    prot_mean <- rowMeans(prot_mat, na.rm = TRUE)
-
-    # Add small value to avoid log(0)
-    rna_mean <- rna_mean + 1
-    prot_mean <- prot_mean + 1
-
-    # Translation efficiency (mean across samples)
-    te_scores <- log2(prot_mean) - log2(rna_mean)
-    names(te_scores) <- gene_symbols
-
-    # Per-sample TE
-    te_matrix <- log2(prot_mat + 1) - log2(rna_mat + 1)
-
-    # TE variability across samples
-    te_cv <- apply(te_matrix, 1, function(x) {
-        sd(x, na.rm = TRUE) / abs(mean(x, na.rm = TRUE))
-    })
-
-    te_df <- data.frame(
-        gene_symbol = gene_symbols,
-        translation_efficiency = te_scores,
-        te_cv = te_cv,
-        rna_mean = log2(rna_mean),
-        protein_mean = log2(prot_mean),
-        stringsAsFactors = FALSE
-    )
-
-    # Classify genes by TE
-    te_df$te_class <- cut(te_df$translation_efficiency,
-                          breaks = c(-Inf, -1, 1, Inf),
-                          labels = c("low_TE", "moderate_TE", "high_TE"))
-
-    # Summary
-    summary_stats <- list(
-        mean_te = mean(te_scores, na.rm = TRUE),
-        sd_te = sd(te_scores, na.rm = TRUE),
-        n_high_te = sum(te_df$te_class == "high_TE", na.rm = TRUE),
-        n_low_te = sum(te_df$te_class == "low_TE", na.rm = TRUE)
-    )
-
-    message("  Translation efficiency: mean=", round(summary_stats$mean_te, 3),
-            ", ", summary_stats$n_high_te, " high TE, ",
-            summary_stats$n_low_te, " low TE")
-
-    list(
-        te_scores = te_scores,
-        te_matrix = te_matrix,
-        te_df = te_df,
         summary = summary_stats
     )
 }
@@ -553,12 +487,6 @@ save_rna_protein_results <- function(results, out_dir) {
                   row.names = FALSE)
     }
 
-    if (!is.null(results$translation_efficiency)) {
-        write.csv(results$translation_efficiency$te_df,
-                  file.path(out_dir, "tables", "mech_translation_efficiency.csv"),
-                  row.names = FALSE)
-    }
-
     if (!is.null(results$post_transcriptional)) {
         write.csv(results$post_transcriptional$ptr_df,
                   file.path(out_dir, "tables", "mech_post_transcriptional_regulation.csv"),
@@ -595,46 +523,7 @@ plot_rna_protein_regulation <- function(results, out_dir) {
                         p1, width = 8, height = 5)
     }
 
-    # Plot 2: Translation efficiency
-    if (!is.null(results$translation_efficiency)) {
-        te_df <- results$translation_efficiency$te_df
-
-        te_r <- cor(te_df$rna_mean, te_df$protein_mean, use = "pairwise.complete.obs")
-
-        p2 <- ggplot2::ggplot(te_df, ggplot2::aes(x = rna_mean, y = protein_mean)) +
-            ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
-            ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
-            ggplot2::geom_point(alpha = 0.6, size = 1.5, color = "gray40") +
-            ggplot2::geom_smooth(method = "lm", se = TRUE, color = "black",
-                                 linetype = "dotted", linewidth = 0.5) +
-            ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
-            ggplot2::theme_minimal() +
-            ggplot2::labs(
-                title = "RNA vs Protein Expression (Translation Efficiency)",
-                subtitle = paste0("Pearson r = ", round(te_r, 3), ", n = ", nrow(te_df), " genes"),
-                x = "log2(RNA)",
-                y = "log2(Protein)"
-            )
-
-        ggplot2::ggsave(file.path(out_dir, "plots", "mech_translation_efficiency_scatter.png"),
-                        p2, width = 8, height = 6)
-
-        # TE distribution
-        p2b <- ggplot2::ggplot(te_df, ggplot2::aes(x = translation_efficiency)) +
-            ggplot2::geom_histogram(bins = 50, fill = "steelblue", color = "white") +
-            ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
-            ggplot2::theme_minimal() +
-            ggplot2::labs(
-                title = "Translation Efficiency Distribution",
-                x = "Translation Efficiency (log2 Protein - log2 RNA)",
-                y = "Count"
-            )
-
-        ggplot2::ggsave(file.path(out_dir, "plots", "mech_translation_efficiency_dist.png"),
-                        p2b, width = 8, height = 5)
-    }
-
-    # Plot 3: Protein stability
+    # Plot 2: Protein stability
     if (!is.null(results$protein_stability)) {
         stab_df <- results$protein_stability$stability_df
 
@@ -2309,8 +2198,6 @@ summarize_mechanistic_results <- function(results, out_dir = NULL) {
         rp <- results$rna_protein
         summary_list$rna_protein <- list(
             mean_correlation = rp$correlations$summary$mean_cor,
-            n_high_te = rp$translation_efficiency$summary$n_high_te,
-            n_low_te = rp$translation_efficiency$summary$n_low_te,
             n_ptr_genes = rp$post_transcriptional$n_ptr
         )
     }
