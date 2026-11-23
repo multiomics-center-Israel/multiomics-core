@@ -119,7 +119,14 @@ plot_sample_distance_heatmap <- function(expr_mat,
 #' @param main Optional plot title.
 #' @param colors Optional color palette for the heatmap.
 #' @param fontsize Numeric font size for row/column labels.
+#' @param center_features Logical; subtract each feature's mean across samples
+#'        before correlating. Without it, correlations of log intensities sit
+#'        close to 1 and mostly reflect the shared abundance profile.
+#' @param limits Optional length-2 numeric range for a fixed colour scale
+#'        (e.g. \code{c(-1, 1)}); overrides \code{adjust_scale}.
 #' @param annotation_colors Optional pheatmap \code{annotation_colors} list.
+#' @param base_fontsize pheatmap \code{fontsize}: legend, annotation and title
+#'        text (pheatmap's own default, 10, unless set).
 #'
 #' @return pheatmap object.
 #'
@@ -135,8 +142,14 @@ plot_sample_correlation_heatmap <- function(expr_mat,
                                             cluster_rows = TRUE,
                                             cluster_cols = TRUE,
                                             adjust_scale = FALSE,
-                                            annotation_colors = NULL) {
+                                            center_features = FALSE,
+                                            limits = NULL,
+                                            annotation_colors = NULL,
+                                            base_fontsize = 10) {
   expr_mat <- as.matrix(expr_mat)
+  if (isTRUE(center_features)) {
+    expr_mat <- expr_mat - rowMeans(expr_mat, na.rm = TRUE)
+  }
   
   cor_mat <- stats::cor(
     expr_mat,
@@ -173,6 +186,12 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     }
   }
   
+  legend_breaks <- NA
+  if (!is.null(limits)) {
+    breaks <- seq(limits[1], limits[2], length.out = length(colors) + 1)
+    legend_breaks <- pretty(limits)
+  }
+
   # Issue 1, 2, 5 FIX: Hide labels, add row annotations, make clustering configurable
   pheatmap::pheatmap(
     cor_mat,
@@ -183,7 +202,9 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     main = main,
     col = colors,
     breaks = breaks, # Issue 4 FIX: Adjusted scale
+    legend_breaks = legend_breaks,
     annotation_colors = if (is.null(annotation_colors)) NA else annotation_colors,
+    fontsize = base_fontsize,
     show_rownames = show_labels, # Issue 1 FIX
     show_colnames = show_labels, # Issue 1 FIX
     fontsize_row = fontsize,
@@ -265,6 +286,66 @@ plot_heatmap_core <- function(expr_mat,
   if (is.null(args$border_color)) args$border_color <- NA
   
   do.call(pheatmap::pheatmap, args)
+}
+
+#' Row z-score heatmap with a clipped, symmetric colour scale
+#'
+#' Rows are z-scored (\code{zscore_rows()}), both axes are clustered on the
+#' unclipped z-scores, and only the colours are clipped at \code{+/- zlim}, so
+#' a few extreme cells neither stretch the scale nor change the trees.
+#'
+#' @param expr_mat Numeric matrix (features x samples).
+#' @param annotation_col,annotation_row Optional pheatmap annotations.
+#' @param annotation_colors Optional pheatmap \code{annotation_colors} list.
+#' @param cluster_rows,cluster_cols \code{TRUE} to cluster here, \code{FALSE}
+#'   to keep the input order, or an \code{hclust} object built on the rows /
+#'   columns of \code{zscore_rows(expr_mat)} in their input order.
+#' @param distance,linkage \code{stats::dist()} method and
+#'   \code{stats::hclust()} linkage used when clustering here.
+#' @param zlim Colour-scale clip, in z units.
+#' @param fontsize Base font size (pt) passed to pheatmap.
+#' @param title Plot title.
+#' @return A pheatmap object.
+plot_zscore_heatmap <- function(expr_mat,
+                                annotation_col = NULL,
+                                annotation_row = NULL,
+                                annotation_colors = NULL,
+                                cluster_rows = TRUE,
+                                cluster_cols = TRUE,
+                                distance = "euclidean",
+                                linkage = "complete",
+                                zlim = 3,
+                                fontsize = 16,
+                                title = NULL) {
+  z <- zscore_rows(expr_mat)
+  as_tree <- function(spec, m) {
+    if (inherits(spec, "hclust")) return(spec)
+    if (isTRUE(spec) && nrow(m) >= 2) {
+      return(stats::hclust(stats::dist(m, method = distance), method = linkage))
+    }
+    FALSE
+  }
+  row_tree <- as_tree(cluster_rows, z)
+  col_tree <- as_tree(cluster_cols, t(z))
+
+  z_clipped <- pmin(pmax(z, -zlim), zlim)
+  colors <- grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(11, "RdBu")))(100)
+
+  plot_heatmap_core(
+    expr_mat          = z_clipped,
+    annotation_col    = annotation_col,
+    annotation_row    = annotation_row,
+    annotation_colors = if (is.null(annotation_colors)) NA else annotation_colors,
+    title             = title,
+    scale_rows        = FALSE,
+    cluster_rows      = row_tree,
+    cluster_cols      = col_tree,
+    max_rows          = NULL,
+    breaks            = seq(-zlim, zlim, length.out = length(colors) + 1),
+    color             = colors,
+    legend_breaks     = seq(-floor(zlim), floor(zlim)),
+    fontsize          = fontsize
+  )
 }
 
 #' Build an imputed histograms/density summary plot (legacy "imputed_histograms_summary")
@@ -1008,6 +1089,28 @@ save_heatmap_to_file <- function(pheatmap_obj, out_file,
   grid::grid.draw(pheatmap_obj$gtable)
   
   out_file
+}
+
+#' Save a pheatmap object as PNG and PDF at a fixed print size
+#'
+#' Sizes are in inches, so a pheatmap \code{fontsize} of 16 is 16 pt in both
+#' files at this size.
+#'
+#' @param pheatmap_obj Object returned by \code{pheatmap::pheatmap()}.
+#' @param out_png PNG path; the PDF is written next to it with a .pdf extension.
+#' @param width_in,height_in Figure size in inches.
+#' @param dpi PNG resolution.
+#' @return Character vector with the PNG and PDF paths.
+save_heatmap_png_pdf <- function(pheatmap_obj, out_png, width_in, height_in, dpi = 300) {
+  png_file <- save_heatmap_to_file(pheatmap_obj, out_png,
+                                   width = round(width_in * dpi),
+                                   height = round(height_in * dpi), res = dpi)
+  pdf_file <- sub("\\.png$", ".pdf", png_file, ignore.case = TRUE)
+  grDevices::pdf(pdf_file, width = width_in, height = height_in)
+  on.exit(grDevices::dev.off(), add = TRUE)
+  grid::grid.newpage()
+  grid::grid.draw(pheatmap_obj$gtable)
+  c(png_file, pdf_file)
 }
 
 #' Save per-cluster heatmaps from partition clustering

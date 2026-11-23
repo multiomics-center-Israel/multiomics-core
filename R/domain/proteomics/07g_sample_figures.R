@@ -1,10 +1,11 @@
 # R/domain/proteomics/07g_sample_figures.R
 #
-# Sample annotation shared by every proteomics heatmap (QC, top-DE and the
-# DE clustering heatmap): which metadata columns annotate the samples, the
-# order of their levels and their colours.
+# Inputs shared by the whole-matrix sample figures (correlation and z-score
+# heatmaps, PCA before/after covariate removal) and the DE clustering heatmap:
+# which metadata columns annotate the samples, their colours, and which
+# proteins enter a top-N-by-variance set.
 
-#' Metadata columns that annotate samples in the proteomics heatmaps
+#' Metadata columns that annotate samples in the proteomics heatmaps and PCA
 #'
 #' The single reader of \code{effects$heatmap_annotations}, the key the RNA-seq
 #' and metabolomics modes already use for the same purpose. Every proteomics
@@ -123,7 +124,8 @@ build_sample_annotation_colors <- function(annot) {
 #' and lists it last in the legend. Reversing the columns at the pheatmap
 #' boundary puts the first configured column (e.g. time) on top and first in
 #' the legend. Only when \code{effects$heatmap_annotations} is set, so the
-#' default annotation of other projects is drawn exactly as before.
+#' default annotation of other projects is drawn exactly as before; the PCA
+#' keeps the configured order (colour = first column, shape = second).
 #'
 #' @param annot Annotation data.frame from [build_proteomics_sample_annotation()].
 #' @param p_cfg The \code{modes$proteomics} config branch.
@@ -155,4 +157,36 @@ proteomics_heatmap_annotation <- function(meta, p_cfg, sample_ids) {
     annot <- annot[intersect(sample_ids, rownames(annot)), , drop = FALSE]
     annot <- annotation_for_pheatmap(annot, p_cfg)
     list(annot = annot, colors = build_sample_annotation_colors(annot))
+}
+
+#' Proteins for a whole-matrix sample figure
+#'
+#' Only fully measured proteins are eligible (observed in every sample, so no
+#' imputed value enters the set or its ranking). With \code{n} given, the
+#' \code{n} with the largest variance across samples, ranked on
+#' \code{expr_mat}; ties keep their input order.
+#'
+#' @param expr_mat Numeric matrix, features x samples (the matrix drawn).
+#' @param observed Logical matrix of the same shape, TRUE where measured.
+#' @param n Number of proteins, or NULL for every fully measured protein.
+#' @return Character vector of feature IDs: in decreasing variance for a
+#'   top-N set, in matrix order for the full set.
+#' @examples
+#' x <- matrix(c(1, 2, 3, 1, 5, 9, 2, 2, 3), nrow = 3, byrow = TRUE,
+#'             dimnames = list(c("a", "b", "c"), c("s1", "s2", "s3")))
+#' obs <- x > 0
+#' obs["b", "s2"] <- FALSE
+#' select_top_variable_measured(x, obs, n = 1)  # "a": "b" is not fully measured
+select_top_variable_measured <- function(expr_mat, observed, n = NULL) {
+    expr_mat <- as.matrix(expr_mat)
+    observed <- as.matrix(observed)
+    if (!identical(dim(expr_mat), dim(observed))) {
+        stop("select_top_variable_measured(): expr_mat and observed must have the same shape.",
+             call. = FALSE)
+    }
+    complete <- select_complete_case_features(!observed)
+    ids <- rownames(expr_mat)[complete]
+    if (is.null(n)) return(ids)
+    v <- apply(expr_mat[complete, , drop = FALSE], 1, stats::var)
+    ids[order(-v, seq_along(v))][seq_len(min(n, length(ids)))]
 }

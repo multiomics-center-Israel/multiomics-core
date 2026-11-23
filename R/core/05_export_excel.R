@@ -245,11 +245,17 @@ cutoffs_vsn_note <- function() {
 #'   rows flagged in \code{imputed_above_measured.<contrast>} untested
 #'   (\code{\link{de_excludes_imputed_above_measured}}). Changes that column's
 #'   glossary entry only. Ignored for other modes.
+#' @param de_covariates Character vector of continuous covariates the DE model
+#'   fitted (proteomics \code{de$covariates}), or NULL. When given, the notes
+#'   say which columns are adjusted for them and describe \code{Mean.adj.<group>}.
+#' @param de_design One-line description of that model, e.g.
+#'   \code{"~ 0 + group + depth"}; used only with \code{de_covariates}.
 #' @return List with \code{glossary} (data.frame: Column, Meaning) and
 #'   \code{notes} (character vector, one paragraph per element).
 build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE, vsn = FALSE,
                                    precomputed_de = FALSE,
-                                   exclude_imputed_above_measured = FALSE) {
+                                   exclude_imputed_above_measured = FALSE,
+                                   de_covariates = NULL, de_design = NULL) {
     fc_rule <- paste(
         "linearFC = 2^log2FC when log2FC is at least 0, and -1 / 2^log2FC when it is negative.",
         "It is a signed linear fold change, not a log: linearFC = -1.61 means 1.61-fold lower in the numerator group."
@@ -393,6 +399,52 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE, vsn = 
         # "where two or more runs were actually pooled" for the case this
         # function cannot see -- multi_imputation: true with no_repetitions: 1
         # produces one run, so the sheet is absent although the flag is on.
+
+        if (length(de_covariates) > 0) {
+            cov_txt <- paste(de_covariates, collapse = ", ")
+            i_mean <- which(glossary$Column == "Mean.<group>")
+            glossary$Meaning[i_mean] <- paste0(
+                "Arithmetic mean of the .norm values in this row across the replicates of that group. ",
+                "Not adjusted for the DE covariate(s) (", cov_txt, "), so Mean.<numerator> minus ",
+                "Mean.<denominator> can differ from log2FC.imputs, in size and in sign; see Mean.adj.<group>.")
+            adj_row <- data.frame(
+                Column = "Mean.adj.<group>",
+                Meaning = paste0(
+                    "Group mean after removing the fitted covariate term (", cov_txt, ") from the .norm ",
+                    "values, with the group effect kept (limma::removeBatchEffect, design ~ 0 + group, ",
+                    "covariates centred as in the DE model). ",
+                    if (multi_imp) {
+                        "Computed per imputation run and averaged over the runs, so Mean.adj.<numerator> minus Mean.adj.<denominator> is the mean of the per-run log2FC; log2FC.imputs (log2 of the mean ratio) differs from it by the jensen_gap of the DE_reconciliation sheet, and is equal for fully measured features."
+                    } else {
+                        "Mean.adj.<numerator> minus Mean.adj.<denominator> reproduces log2FC.imputs."
+                    }),
+                stringsAsFactors = FALSE)
+            glossary <- rbind(glossary[seq_len(i_mean), , drop = FALSE], adj_row,
+                              glossary[-seq_len(i_mean), , drop = FALSE])
+            rownames(glossary) <- NULL
+
+            notes <- c(
+                "DE model and covariates:",
+                paste0("The DE model was ", de_design %||% paste("~ 0 + condition +", cov_txt),
+                       ". The covariate(s) ", cov_txt, " entered it as centred continuous terms, so ",
+                       "log2FC.imputs, linearFC.imputs, pvalue.imputs, padj.imputs and upDown.imputs ",
+                       "are adjusted for them."),
+                paste0("Mean.adj.<group> is the only adjusted mean. Mean.<group>, Mean.raw.<group>, ",
+                       "the <sample> and <sample>.norm values, log2FC_from_raw, linearFC_from_raw and ",
+                       "log2FC_from_means are not adjusted. Where the covariate differs between the two ",
+                       "groups of a contrast they can disagree with log2FC.imputs, in size and in sign."),
+                if (multi_imp) {
+                    paste("Steps 1 and 3 below compare log2FC.imputs with the unadjusted Mean. columns;",
+                          "with covariates in the model they also differ because of the covariate term.",
+                          "Mean.adj.<group> is the comparison that accounts for it.")
+                } else {
+                    paste("In step 1 below, read Mean.adj.<group> in place of Mean.<group>: with covariates",
+                          "in the model, that is the difference that reproduces log2FC.imputs.")
+                },
+                "",
+                notes
+            )
+        }
     } else {
         glossary <- data.frame(
             Column = c("<sample>", "Mean.<group>", "CV.<group>",
@@ -478,17 +530,20 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE, vsn = 
 #'   so the reconciliation notes match how many times this run imputed.
 #' @param vsn,precomputed_de,exclude_imputed_above_measured Logicals; passed
 #'   to \code{\link{build_provenance_notes}}.
+#' @param de_covariates,de_design Passed to \code{\link{build_provenance_notes}}.
 #' @return TRUE, invisibly.
 add_provenance_sheet <- function(wb, mode = "rna", sheet = "How to read",
                                  multi_imputation = TRUE, vsn = FALSE,
                                  precomputed_de = FALSE,
-                                 exclude_imputed_above_measured = FALSE) {
+                                 exclude_imputed_above_measured = FALSE,
+                                 de_covariates = NULL, de_design = NULL) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
 
     info <- build_provenance_notes(
         mode, multi_imputation = multi_imputation, vsn = vsn,
         precomputed_de = precomputed_de,
-        exclude_imputed_above_measured = exclude_imputed_above_measured)
+        exclude_imputed_above_measured = exclude_imputed_above_measured,
+        de_covariates = de_covariates, de_design = de_design)
 
     if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)
     openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = FALSE)
@@ -609,6 +664,9 @@ p_tag_generic <- function(config, mode, default = "NA") {
 #'   provenance note then says the scale of the supplied fold changes is not
 #'   known here, and the Cutoffs sheet gets no vsn note, because nothing can be
 #'   said here about the scale of the linearFC it compares against.
+#' @param de_covariates,de_design Continuous covariates the DE model fitted and
+#'   a one-line description of that model, for the "How to read" sheet. NULL
+#'   for every mode and run without them.
 write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col,
                                                        expr_for_de, with_cutoffs = TRUE,
                                                        clustering_res = NULL,
@@ -619,7 +677,9 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                                                        provenance_sheet = FALSE,
                                                        de_reconciliation = NULL,
                                                        vsn = FALSE,
-                                                       precomputed_de = FALSE) {
+                                                       precomputed_de = FALSE,
+                                                       de_covariates = NULL,
+                                                       de_design = NULL) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
     # Validate inputs
     if (is.null(final_results)) {
@@ -870,7 +930,9 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                 multi_imputation = config$modes[[mode]]$imputation$multi_imputation %||% TRUE,
                 vsn = vsn, precomputed_de = precomputed_de,
                 exclude_imputed_above_measured = de_excludes_imputed_above_measured(
-                    config$modes[[mode]]$de, mode)
+                    config$modes[[mode]]$de, mode),
+                de_covariates = de_covariates,
+                de_design = de_design
             )
         }
         if (!is.null(de_reconciliation) && is.data.frame(de_reconciliation) &&

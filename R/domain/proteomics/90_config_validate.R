@@ -458,10 +458,17 @@ validate_proteomics_config <- function(cfg) {
     }
 
     # 9b. Report display keys read outside the report template
-    #     (05c_mod_enrichment_heatmaps.R)
+    #     (07g_sample_figures.R, 03b_mod_sample_figures.R, 05c_mod_enrichment_heatmaps.R)
     if (!is.null(cfg$report)) {
         rp <- cfg$report
+        assert_scalar_bool(rp$show_sample_heatmaps, "report$show_sample_heatmaps", allow_null = TRUE)
         assert_scalar_bool(rp$show_enrichment_heatmaps, "report$show_enrichment_heatmaps", allow_null = TRUE)
+        tn <- rp[["sample_heatmap_top_n"]]
+        if (!is.null(tn) && !(is.numeric(unlist(tn)) && length(unlist(tn)) > 0 &&
+                              all(unlist(tn) >= 2))) {
+            stop("report$sample_heatmap_top_n must be a list of protein counts of at least 2, ",
+                 "for example [500, 1000, 2000].", call. = FALSE)
+        }
         assert_scalar_num(rp$enrichment_heatmap_fdr, "report$enrichment_heatmap_fdr",
                           allow_null = TRUE, min_val = 0, max_val = 1)
         assert_scalar_num(rp$enrichment_heatmap_max_terms, "report$enrichment_heatmap_max_terms",
@@ -488,6 +495,12 @@ validate_clustering_config <- function(clust_cfg) {
     assert_named_list(clust_cfg, "modes$proteomics$clustering")
     assert_scalar_bool(clust_cfg$enabled, "modes$proteomics$clustering$enabled")
 
+
+    # Row rule of the clustering heatmap (get_clustering_de_cutoffs()).
+    assert_scalar_num(clust_cfg$de_padj_cutoff, "clustering$de_padj_cutoff",
+                      allow_null = TRUE, min_val = 0, max_val = 1)
+    assert_scalar_num(clust_cfg$de_log2fc_cutoff, "clustering$de_log2fc_cutoff",
+                      allow_null = TRUE, min_val = 0)
 
     if (!is.null(clust_cfg$de_source)) {
         assert_one_of(clust_cfg$de_source, "modes$proteomics$clustering$de_source", c("any_contrast"), allow_null = TRUE)
@@ -533,6 +546,8 @@ validate_clustering_config <- function(clust_cfg) {
             assert_named_list(clust_cfg$heatmap, "clustering$heatmap")
             assert_scalar_num(clust_cfg$heatmap$max_rows, "clustering$heatmap$max_rows", allow_null = TRUE, min_val = 1)
             assert_scalar_bool(clust_cfg$heatmap$cluster_cols, "clustering$heatmap$cluster_cols", allow_null = TRUE)
+            assert_scalar_num(clust_cfg$heatmap$zscore_limit, "clustering$heatmap$zscore_limit",
+                              allow_null = TRUE, min_val = 0.5)
         }
         return(invisible(TRUE))
     }
