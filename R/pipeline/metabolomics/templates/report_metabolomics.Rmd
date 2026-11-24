@@ -1665,14 +1665,19 @@ explorer_json_str <- "{}"
 explorer_expr <- pre$expr_log %||% pre$expr_work
 
 # Describe the explorer's values for the text above it. expr_log is the
-# filtered table after preprocessing.transform only (mod_met_log(): same key,
-# same "log2" default), with no sample normalization or scaling; the text
-# used to say "glog10" whatever the configured transform was.
+# filtered table after the transform only, with no sample normalization or
+# scaling; mod_met_log() records which transform it applied
+# (pre$expr_log_transform), so the text names what ran rather than re-reading
+# the config. It used to say "glog10" whatever the transform was. Without
+# expr_log the explorer shows expr_work, which is normalized and, when scaling
+# is configured, feature-scaled (DE uses the unscaled matrix).
 explorer_value_desc <- if (is.null(pre$expr_log)) {
-  "values as used for differential testing"
+  "normalized values (feature-scaled when scaling is configured)"
 } else {
-  .tf_ex <- tolower(metab_cfg$preprocessing$transform %||% "log2")
-  paste0(if (.tf_ex == "none") "untransformed intensities" else paste0(.tf_ex, "-transformed intensities"),
+  .tf_ex <- tolower(pre$expr_log_transform %||% "")
+  paste0(if (.tf_ex == "none") "untransformed intensities"
+         else if (nzchar(.tf_ex)) paste0(.tf_ex, "-transformed intensities")
+         else "transformed intensities",
          " (before sample normalization and scaling)")
 }
 

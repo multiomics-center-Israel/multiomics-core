@@ -333,6 +333,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
           expr_raw         = met_raw$expr_raw,
           expr_filt        = met_filtered$mat,
           expr_log         = met_log$mat,
+          # Transform applied to expr_log, as mod_met_log() resolved it.
+          expr_log_transform = met_log$transform,
           expr_work        = met_corrected$mat,
           # Normalized, transformed, not feature-scaled: the DE matrix (#287).
           expr_unscaled    = met_corrected$mat_unscaled,
