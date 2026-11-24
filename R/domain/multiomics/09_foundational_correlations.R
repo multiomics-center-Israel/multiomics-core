@@ -67,7 +67,8 @@ run_foundational_analysis <- function(mae, de_results = NULL,
 
     # 3. Pathway overlap analysis
     results$pathway_overlap <- tryCatch(
-        analyze_pathway_overlap(harmonized, mae_data$gene_mapping, fc, out_dir),
+        analyze_pathway_overlap(harmonized, mae_data$gene_mapping, fc, out_dir,
+                                organism = config$global$organism),
         error = function(e) {
             message("WARNING: Pathway overlap analysis failed: ", conditionMessage(e))
             NULL
@@ -1162,6 +1163,17 @@ compute_foundational_consensus_clustering <- function(harmonized, common_samples
 
     if (length(embeddings) < 2) return(NULL)
 
+    # ConsensusClusterPlus aborts with "argument of length 0" when maxK is 2,
+    # and n / 3 falls to 2 below 9 samples, so maxK is floored at 3. Below 6
+    # samples an 80% subsample cannot hold three clusters, so the step skips.
+    n_samples <- length(common_samples)
+    if (n_samples < 6) {
+        message("  Consensus clustering skipped: it needs at least 6 common ",
+                "samples, and this run has ", n_samples, ".")
+        return(NULL)
+    }
+    max_k <- max(3L, min(6L, n_samples %/% 3L))
+
     # Combine embeddings
     combined <- do.call(cbind, embeddings)
     combined <- scale(combined)
@@ -1170,7 +1182,7 @@ compute_foundational_consensus_clustering <- function(harmonized, common_samples
     result <- tryCatch({
         ConsensusClusterPlus::ConsensusClusterPlus(
             t(combined),
-            maxK = min(6, floor(length(common_samples) / 3)),
+            maxK = max_k,
             reps = 100,
             pItem = 0.8,
             pFeature = 1,
@@ -1528,7 +1540,12 @@ plot_sample_concordance <- function(results, metadata, out_dir) {
 #' @param gene_mapping Gene mapping table
 #' @param fc Foundational config
 #' @param out_dir Output directory
-analyze_pathway_overlap <- function(harmonized, gene_mapping, fc, out_dir = NULL) {
+#' @param organism Organism name from \code{config$global$organism}; picks the
+#'   OrgDb for the fallback GO enrichment.
+#' @return List of overlap results, or NULL when fewer than two omics have
+#'   pathway results.
+analyze_pathway_overlap <- function(harmonized, gene_mapping, fc, out_dir = NULL,
+                                    organism = NULL) {
     message("Analyzing pathway overlap across omics...")
 
     omics_names <- names(harmonized)
@@ -1541,7 +1558,8 @@ analyze_pathway_overlap <- function(harmonized, gene_mapping, fc, out_dir = NULL
     if (!any(enrichment_available)) {
         message("  No pre-computed pathway results available.")
         message("  Running basic enrichment on DE/DA results...")
-        pathway_results <- run_basic_enrichment(harmonized, gene_mapping, fc)
+        pathway_results <- run_basic_enrichment(harmonized, gene_mapping, fc,
+                                                organism = organism)
     } else {
         pathway_results <- lapply(names(enrichment_available)[enrichment_available], function(on) {
             h <- harmonized[[on]]
@@ -1579,9 +1597,28 @@ analyze_pathway_overlap <- function(harmonized, gene_mapping, fc, out_dir = NULL
 }
 
 #' Run basic enrichment for omics with DE/DA results
-run_basic_enrichment <- function(harmonized, gene_mapping, fc) {
+#'
+#' GO BP over-representation on each layer's significant gene symbols, using
+#' the organism's OrgDb. Skips (returns an empty list) when the organism has no
+#' OrgDb, and skips a layer whose DE result is not one table -- the pipeline
+#' passes per-contrast lists, and this step has no rule for picking a contrast.
+#'
+#' @param harmonized List of harmonized omics data.
+#' @param gene_mapping Gene mapping table (unused; kept for the caller's shape).
+#' @param fc Foundational config.
+#' @param organism Organism name, as in \code{config$global$organism}.
+#' @return Named list of per-omics results (omics, pathways, sig_genes); empty
+#'   when nothing could be enriched.
+run_basic_enrichment <- function(harmonized, gene_mapping, fc, organism = NULL) {
     if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
         message("  clusterProfiler not available. Skipping enrichment.")
+        return(list())
+    }
+
+    orgdb <- if (nzchar(organism %||% "")) get_orgdb_package(organism) else NULL
+    if (is.null(orgdb) || !requireNamespace(orgdb, quietly = TRUE)) {
+        message("  No OrgDb for organism '", organism %||% "", "'; ",
+                "skipping the fallback GO enrichment.")
         return(list())
     }
 
@@ -1592,6 +1629,11 @@ run_basic_enrichment <- function(harmonized, gene_mapping, fc) {
         de_table <- h$de_table %||% h$da_table
 
         if (is.null(de_table)) return(NULL)
+        if (!is.data.frame(de_table)) {
+            message("  ", omics_name, ": DE results are per contrast, not a ",
+                    "single table; skipped for pathway overlap.")
+            return(NULL)
+        }
 
         # Get significant genes
         padj_col <- intersect(c("padj", "adj.P.Val", "FDR"), colnames(de_table))[1]
@@ -1606,7 +1648,7 @@ run_basic_enrichment <- function(harmonized, gene_mapping, fc) {
         enrich_result <- tryCatch({
             clusterProfiler::enrichGO(
                 gene = sig_genes,
-                OrgDb = "org.Hs.eg.db",
+                OrgDb = orgdb,
                 keyType = "SYMBOL",
                 ont = "BP",
                 pvalueCutoff = 0.05,
