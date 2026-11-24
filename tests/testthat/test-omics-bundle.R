@@ -335,6 +335,24 @@ test_that("a failed write leaves no bundle behind", {
     expect_equal(nrow(list_omics_bundles(root)), 0L)
 })
 
+test_that("an unreadable manifest is skipped by the listing but still refused on read", {
+    root <- withr::local_tempdir()
+    good <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())
+    bad <- write_omics_bundle(example_parts(), example_info(), root,
+                              fixed_provenance("2026-02-01T10:00:00Z"))
+    # Malformed JSON with a matching checksum, so only the parse can fail.
+    manifest <- file.path(bad, "manifest.json")
+    make_writable(manifest)
+    writeLines('{"bundle_contract_version": "1.0', manifest)
+    sums <- file.path(bad, "checksums.sha256")
+    make_writable(sums)
+    writeLines(paste0(.bundle_sha256_file(manifest), "  manifest.json"), sums)
+
+    expect_identical(list_omics_bundles(root)$bundle_id, basename(good))
+    expect_error(validate_omics_bundle(bad), "not readable JSON")
+    expect_error(read_omics_bundle(bad), "not readable JSON")
+})
+
 test_that("a bundle moved under another omics folder is not listed", {
     root <- withr::local_tempdir()
     path <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())

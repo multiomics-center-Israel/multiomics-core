@@ -397,9 +397,9 @@ read_omics_bundle <- function(path, parts = NULL) {
 #' Reads manifests only, so it is cheap; checksums are verified when a bundle
 #' is read. Hidden \code{.partial_*} directories, directories without
 #' \code{checksums.sha256} (checked before any manifest is parsed),
-#' directories without a complete manifest, directories renamed away from their
-#' bundle ID (which could never be read), and bundles sitting under another
-#' omics' folder are left out. Rows are ordered by omics, then creation time,
+#' directories without a complete or readable manifest, directories renamed
+#' away from their bundle ID (which could never be read), and bundles sitting
+#' under another omics' folder are left out. Rows are ordered by omics, then creation time,
 #' then ID; the order is for display, and integration still names the bundles
 #' it uses.
 #'
@@ -426,7 +426,9 @@ list_omics_bundles <- function(root, omics = NULL) {
         # The completion marker is checked first, so a manifest still being
         # written is never parsed.
         if (!file.exists(file.path(d, "checksums.sha256"))) return(NULL)
-        m <- .read_bundle_manifest(d)
+        # One unreadable manifest must not hide every other bundle; it is
+        # skipped here, and validate_omics_bundle() still refuses it.
+        m <- tryCatch(.read_bundle_manifest(d), error = function(e) NULL)
         # A folder renamed away from its ID would always fail validation, and one
         # moved under another omics folder would be listed under the wrong omics.
         if (is.null(m) || !identical(m$status, "complete") ||
