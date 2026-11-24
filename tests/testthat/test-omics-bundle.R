@@ -353,6 +353,25 @@ test_that("an unreadable manifest is skipped by the listing but still refused on
     expect_error(read_omics_bundle(bad), "not readable JSON")
 })
 
+test_that("valid JSON that is not a manifest is skipped by the listing", {
+    root <- withr::local_tempdir()
+    good <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())
+    # A scalar and an array, each with a matching checksum, so only the shape
+    # of the parsed manifest is wrong.
+    for (i in 1:2) {
+        bad <- write_omics_bundle(example_parts(), example_info(), root,
+                                  fixed_provenance(sprintf("2026-02-0%dT10:00:00Z", i)))
+        manifest <- file.path(bad, "manifest.json")
+        make_writable(manifest)
+        writeLines(c('"corrupt"', "[1, 2]")[i], manifest)
+        sums <- file.path(bad, "checksums.sha256")
+        make_writable(sums)
+        writeLines(paste0(.bundle_sha256_file(manifest), "  manifest.json"), sums)
+    }
+
+    expect_identical(list_omics_bundles(root)$bundle_id, basename(good))
+})
+
 test_that("a bundle moved under another omics folder is not listed", {
     root <- withr::local_tempdir()
     path <- write_omics_bundle(example_parts(), example_info(), root, fixed_provenance())

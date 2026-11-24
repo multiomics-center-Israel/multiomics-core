@@ -13,6 +13,12 @@
 # file, so a run that dies half way leaves nothing a reader will pick up.
 # Readers verify the manifest and every part they load before returning it.
 #
+# Trust assumption: bundles are pipeline-generated artefacts read by the same
+# team. The checks guard data integrity -- accidental edits, damaged files and
+# interrupted writes -- not deliberate tampering. In particular, symbolic links
+# inside a bundle are not resolved or checked, so a link under parts/ is
+# followed when a part is read.
+#
 # What goes into the parts is the caller's business (one assembler per omics);
 # this file knows nothing about any omics.
 
@@ -286,7 +292,9 @@ write_omics_bundle <- function(parts, info, root, provenance) {
 #' bundle ID, any manifest part name not matching the part-name rule (checked
 #' for all parts, before any path is built), an unknown part, a missing part
 #' file, or a part whose sha256 differs from the manifest. Messages name the
-#' bundle, the part and the file, never a value from inside a part.
+#' bundle, the part and the file, never a value from inside a part. These checks
+#' assume a trusted, pipeline-generated bundle: symbolic links are not checked
+#' (see the note at the top of this file).
 #'
 #' @param path Bundle directory.
 #' @param parts Names of the parts to verify; NULL verifies all of them.
@@ -429,9 +437,16 @@ list_omics_bundles <- function(root, omics = NULL) {
         # One unreadable manifest must not hide every other bundle; it is
         # skipped here, and validate_omics_bundle() still refuses it.
         m <- tryCatch(.read_bundle_manifest(d), error = function(e) NULL)
+        # Valid JSON that is not a manifest (a scalar, an array, or fields that
+        # are not single strings) is skipped too, before any field is used.
+        fields <- c("bundle_id", "omics", "project", "analysis_round",
+                    "created_at_utc", "status")
+        if (!is.list(m) || !all(vapply(fields, function(f) {
+            is.character(m[[f]]) && length(m[[f]]) == 1
+        }, logical(1)))) return(NULL)
         # A folder renamed away from its ID would always fail validation, and one
         # moved under another omics folder would be listed under the wrong omics.
-        if (is.null(m) || !identical(m$status, "complete") ||
+        if (!identical(m$status, "complete") ||
             !identical(m$bundle_id, basename(d)) ||
             !identical(m$omics, basename(dirname(d)))) return(NULL)
         data.frame(bundle_id = m$bundle_id, omics = m$omics, project = m$project,
