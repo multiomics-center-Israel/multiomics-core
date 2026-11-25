@@ -169,6 +169,8 @@ write_execution_info <- function(config, run_dir, config_path = NULL, manifest_d
         error = function(e) warning("Could not copy pipeline files")
     )
 
+    written_files <- c(written_files, write_contrasts_used(config, exec_dir))
+
     # Git commit hash
     tryCatch(
         {
@@ -182,6 +184,46 @@ write_execution_info <- function(config, run_dir, config_path = NULL, manifest_d
     )
 
     written_files
+}
+
+#' Snapshot each mode's contrasts file into execution_info
+#'
+#' \code{config_used.yaml} records only the path of \code{files$contrasts}, so a
+#' results folder that leaves the machine (zipped, uploaded) loses which groups
+#' each contrast compares: contrast names are free text, and only the file's
+#' Factor / Numerator / Denominator columns say what the arms are. This copies
+#' the file verbatim, as the snapshot of the run's inputs it is, to
+#' \code{contrasts_used_<mode>.<ext>}. One file per mode, because a multi-mode
+#' config gives each mode its own contrasts.
+#'
+#' A mode without \code{files$contrasts}, or whose file is missing, is skipped
+#' with a warning for the missing case: the snapshot must never fail a run.
+#'
+#' @param config Full pipeline config.
+#' @param exec_dir The run's \code{execution_info} directory (must exist).
+#' @return Character vector of the files written (possibly empty).
+#' @examples
+#' \dontrun{
+#' write_contrasts_used(config, file.path(run_dir, "execution_info"))
+#' # -> ".../execution_info/contrasts_used_proteomics.csv"
+#' }
+write_contrasts_used <- function(config, exec_dir) {
+    written <- character(0)
+    for (mode in names(config$modes)) {
+        rel <- config$modes[[mode]]$files$contrasts
+        if (!is.character(rel) || length(rel) != 1L || is.na(rel) || !nzchar(rel)) next
+        src <- resolve_input_path(config, rel)
+        if (!file.exists(src)) {
+            warning("[execution_info] contrasts file for mode '", mode,
+                    "' not found, not snapshotted: ", src, call. = FALSE)
+            next
+        }
+        ext <- tolower(tools::file_ext(src))
+        dest <- file.path(exec_dir, paste0("contrasts_used_", mode,
+                                           if (nzchar(ext)) paste0(".", ext) else ""))
+        if (isTRUE(file.copy(src, dest, overwrite = TRUE))) written <- c(written, dest)
+    }
+    written
 }
 
 # Helper for %||%
