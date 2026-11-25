@@ -1370,8 +1370,9 @@ test_that("the default method is the pipeline's shared fgsea::fgsea() multilevel
   expect_identical(.MMC_GSEA_NPERM_SIMPLE, formals(run_fgsea_core)$n_perm_simple)
   # The call sets no eps, so fgsea's own default is the p-value floor. The
   # report and the docs state it as 1e-50; this fails if fgsea's default is,
-  # or becomes, anything else.
-  expect_equal(eval(formals(fgsea::fgseaMultilevel)$eps), 1e-50)
+  # or becomes, anything else. Identical, not equal: no tolerance may hide a
+  # different floor.
+  expect_identical(eval(formals(fgsea::fgseaMultilevel)$eps), 1e-50)
 
   fx  <- gsea_tied_fixture()
   res <- suppressWarnings(mmc_gsea_fgsea(fx$sets, fx$ec, seed = 7))
