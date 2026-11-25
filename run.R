@@ -2527,8 +2527,10 @@ wizard_multiomics <- function(project_dir, project_name, analyst, round) {
 #'
 #' @param errored Names of the errored targets, as \code{targets::tar_errored()}
 #'   returns them.
+#' @param store The run's own targets store. Named in the suggested command
+#'   because the default \code{_targets/} store is not the one this run used.
 #' @return Character vector of lines to print.
-pipeline_completion_lines <- function(errored) {
+pipeline_completion_lines <- function(errored, store) {
   errored <- sort(unique(as.character(errored)))
   if (length(errored) == 0) return("  Pipeline complete.")
   lines <- character(0)
@@ -2540,7 +2542,8 @@ pipeline_completion_lines <- function(errored) {
   }
   c(lines,
     sprintf("  Pipeline finished with errored targets: %s", paste(errored, collapse = ", ")),
-    "  Error messages: targets::tar_meta(fields = error, complete_only = TRUE)")
+    sprintf("  Error messages: targets::tar_meta(fields = error, complete_only = TRUE, store = \"%s\")",
+            store))
 }
 
 run_pipeline <- function(config_path, fresh = FALSE) {
@@ -2640,7 +2643,7 @@ run_pipeline <- function(config_path, fresh = FALSE) {
   }
   # Read from this run's own store, the one tar_make() just built in.
   errored <- targets::tar_errored(store = store)
-  cat("\n", paste(pipeline_completion_lines(errored), collapse = "\n"), "\n", sep = "")
+  cat("\n", paste(pipeline_completion_lines(errored, store), collapse = "\n"), "\n", sep = "")
 }
 # --- Main Entry Point ---------------------------------------------------------
 main <- function() {

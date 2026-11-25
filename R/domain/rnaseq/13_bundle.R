@@ -12,7 +12,8 @@
 #' @param pre Preprocessed RNA object (\code{rna_pre}): raw, filtered and
 #'   working matrices, the DE input, sample metadata, feature annotation, the
 #'   record of what ran (\code{info}) and the contrasts.
-#' @param de_res DE result (\code{rna_de_res}), with \code{tables}.
+#' @param de_res DE result (\code{rna_de_res}), with at least one table in
+#'   \code{tables}.
 #' @param pathway_res Enrichment result (\code{rna_pathway_res}), or NULL.
 #' @param annot Gene annotation (\code{rna_annot}), or NULL when not configured.
 #' @param trinotate Trinotate annotation (\code{rna_trinotate_main}), or NULL.
@@ -22,9 +23,14 @@
 build_rnaseq_bundle_parts <- function(pre, de_res, pathway_res = NULL, annot = NULL,
                                       trinotate = NULL, config) {
     assert_pre_contract(pre, stage = "rna")
-    if (!is.list(de_res) || is.null(de_res$tables)) {
-        stop("RNA bundle: de_res has no DE tables; expected the output of ",
-             "mod_rnaseq_de().", call. = FALSE)
+    # An empty list counts as missing: run_deseq2_de() returns tables = list()
+    # when every contrast was skipped, and a bundle with no contrast results
+    # would be advertised as complete while holding nothing to integrate.
+    if (!is.list(de_res) || length(de_res$tables) == 0) {
+        stop("RNA bundle: de_res has no DE tables, so there is nothing to ",
+             "integrate. Check the warnings from the DE step (a contrast whose ",
+             "levels are not in the metadata is skipped); expected the output ",
+             "of mod_rnaseq_de() with at least one contrast.", call. = FALSE)
     }
     assert_named_list(config, "config")
 

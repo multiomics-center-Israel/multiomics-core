@@ -21,15 +21,17 @@ run_r_function <- function(name) {
   get(name, envir = env, inherits = FALSE)
 }
 
+store <- "_targets_demo_r1_abc123"
+
 
 test_that("a clean run ends on 'Pipeline complete.'", {
   lines <- run_r_function("pipeline_completion_lines")
-  expect_identical(lines(character(0)), "  Pipeline complete.")
+  expect_identical(lines(character(0), store), "  Pipeline complete.")
 })
 
 test_that("a failed RNA bundle is reported even when the reports were written", {
   lines <- run_r_function("pipeline_completion_lines")
-  out <- paste(lines("rna_bundle"), collapse = "\n")
+  out <- paste(lines("rna_bundle", store), collapse = "\n")
   expect_match(out, "WARNING: RNA bundle export failed", fixed = TRUE)
   expect_match(out, "No RNA bundle is", fixed = TRUE)
   expect_match(out, "errored targets: rna_bundle", fixed = TRUE)
@@ -38,15 +40,21 @@ test_that("a failed RNA bundle is reported even when the reports were written", 
 
 test_that("other errored targets are listed without the bundle warning", {
   lines <- run_r_function("pipeline_completion_lines")
-  out <- paste(lines(c("b_target", "a_target", "a_target")), collapse = "\n")
+  out <- paste(lines(c("b_target", "a_target", "a_target"), store), collapse = "\n")
   expect_match(out, "errored targets: a_target, b_target", fixed = TRUE)
   expect_false(grepl("RNA bundle", out, fixed = TRUE))
   expect_false(grepl("Pipeline complete.", out, fixed = TRUE))
 })
 
+test_that("the suggested inspection command reads the run's own store", {
+  lines <- run_r_function("pipeline_completion_lines")
+  out <- paste(lines("rna_bundle", store), collapse = "\n")
+  expect_match(out, sprintf('store = "%s"', store), fixed = TRUE)
+})
+
 test_that("run_pipeline() ends on the errored-target check, not a fixed message", {
   body_text <- paste(deparse(body(run_r_function("run_pipeline"))), collapse = "\n")
   expect_match(body_text, "tar_errored(store = store)", fixed = TRUE)
-  expect_match(body_text, "pipeline_completion_lines(errored)", fixed = TRUE)
+  expect_match(body_text, "pipeline_completion_lines(errored, store)", fixed = TRUE)
   expect_false(grepl("Pipeline complete.", body_text, fixed = TRUE))
 })

@@ -70,6 +70,11 @@ test_that("objects that are not RNA results are refused", {
     expect_error(build_rnaseq_bundle_parts(pre = x$pre, de_res = list(dds = NULL),
                                            config = x$config),
                  "no DE tables")
+    # Every contrast skipped: run_deseq2_de() returns an empty list of tables.
+    expect_error(build_rnaseq_bundle_parts(pre = x$pre,
+                                           de_res = list(dds = NULL, tables = list()),
+                                           config = x$config),
+                 "no DE tables")
     expect_error(build_rnaseq_bundle_parts(pre = list(meta = x$pre$meta),
                                            de_res = x$de_res, config = x$config))
 })
