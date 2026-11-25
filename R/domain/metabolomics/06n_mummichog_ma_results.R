@@ -196,7 +196,8 @@ write_mummichog_ma_failure <- function(dir, contrast, error) {
 #' @param rt_frac Retention-time tolerance fraction (default 0.02).
 #' @param min_lib Smallest pathway kept, in compounds (default 3).
 #' @param gsea NULL to skip GSEA, or a list of `mmc_ma_gsea()` settings
-#'   (`n_perm`, `min_size`, `max_size`, `seed`, `method`, `metric_label`). It runs on the
+#'   (`min_size`, `max_size`, `seed`, `method`, `metric_label`, and `n_perm`
+#'   for the legacy method only). It runs on the
 #'   same ECs and pathway sets as the ORA, after it, and changes nothing in it.
 #'   GSEA is optional: an error in it is caught and returned as `gsea_error`,
 #'   so the ORA result is kept.
@@ -325,6 +326,7 @@ write_mummichog_ma_results <- function(run, peaks, dir, info, pathway_ids) {
                       method_label = gs$method_label,
                       metric_label = gs$metric_label,
                       ties = gs$ties, n_p_unavailable = gs$n_p_unavailable,
+                      log2err = gs$log2err_summary,
                       params = gs$params, deviations = gs$deviations,
                       reference = gs$reference, adjustment = "BH (p.adjust 'fdr')",
                       n_ec = gs$n_ec, n_positions = gs$n_positions,
@@ -406,12 +408,23 @@ read_mummichog_ma_pathways <- function(files) {
     # The shape the report's GSEA tab and Summary read (as for python GSEA).
     attr(tbl, "ma_gsea") <- list(
       table = g, method = g_method,
+      # A stored label is the record's own account of what ran and is never
+      # recomputed: "fgsea" has meant fgseaSimple (briefly) and then
+      # multilevel. Without one, today's label is used only where the record
+      # still shows which of the two it was.
       method_label = gi$method_label %||%
-        mmc_gsea_method_label(g_method, gi$params$fgsea_version),
+        if (identical(g_method, "fgsea") && is.null(gi$params[["nperm_simple"]])) {
+          paste0("standard preranked GSEA (",
+                 gi$reference$method %||% "fgsea; p-value algorithm not recorded",
+                 ")")
+        } else {
+          mmc_gsea_method_label(g_method, gi$params$fgsea_version)
+        },
       metric_label = gi$metric_label, params = gi$params,
       deviations = as.character(unlist(gi$deviations)),
       reference = gi$reference, nes_note = mmc_gsea_nes_note(g_method),
       ties = g_ties, n_p_unavailable = gi$n_p_unavailable %||% 0L,
+      log2err_summary = gi$log2err,
       n_ec = gi$n_ec, n_positions = gi$n_positions, n_pathways = nrow(g),
       adjustment = gi$adjustment, engine = "metaboanalyst")
   }

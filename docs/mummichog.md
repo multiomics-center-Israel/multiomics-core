@@ -139,7 +139,7 @@ Outputs, per contrast, in `mummichog_pinned/<contrast>/metaboanalyst/`:
 - `ma_matched_features.tsv`: every match with its EC, feature id and polarity.
 - `ma_input.tsv`: the peak list the analysis was given.
 - `ma_gsea_results.tsv`: the GSEA table ordered by p-value (raw p, BH `padj`, NES, leading edge, each pathway's ECs). The default method writes NES, p and `padj` unrounded; the legacy method writes them at MetaboAnalyst's 4 significant digits.
-- `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts. Its `gsea` block names the `method` that produced the table and, for the default method, the tie summary (`ties`) and the number of tested pathways without a p-value. A record with no `method` was written before the method was recorded and is read as `metaboanalyst_legacy`.
+- `ma_run_info.json`: parameters, model, Gamma fit, GSEA settings and provenance, and counts. Its `gsea` block names the `method` that produced the table, how its p-values were estimated (`reference.method`, and `params.nperm_simple` or `params.n_perm`) and, for the default method, the tie summary (`ties`), the number of tested pathways without a p-value and a summary of fgsea's error estimate (`log2err`). A record with no `method` was written before the method was recorded and is read as `metaboanalyst_legacy`. A record is always described by what it stores, never by the current default (see [Earlier results](#earlier-results)).
 
 GSEA is optional: if it fails, the stage warns, the contrast's ORA is still written, and `ma_run_info.json` records the GSEA error. If a whole contrast fails, the stage warns and its earlier result files are replaced by `ma_failed.json`, which holds the error. That contrast gets no report section, and all of its earlier exports are cleared. If every contrast fails, the stage first clears every contrast's earlier exports and then stops.
 
@@ -282,10 +282,10 @@ Alongside the ORA above, the pipeline runs a GSEA over the same mapped Empirical
 
 | `gsea_method` | What runs |
 | --- | --- |
-| unset, or `fgsea` (default) | `fgsea::fgseaSimple()` on the named, signed EC-score vector (`mmc_gsea_fgsea()`). The enrichment score, permutation null, p-value, NES, BH adjustment and leading edge are fgsea's. |
+| unset, or `fgsea` (default) | `fgsea::fgsea()`, fgsea's adaptive multilevel method, on the named, signed EC-score vector (`mmc_gsea_fgsea()`, through the pipeline's shared `run_fgsea_core()`: the same call, with the same `nPermSimple = 10000`, as the GSEA of the other omics). The enrichment score, p-value, NES, BH adjustment and leading edge are fgsea's. |
 | `metaboanalyst_legacy` | The reproduction of MetaboAnalystR's vendored peaks GSEA (`mmc_gsea_metaboanalyst()`). Kept only to reproduce results reported with it. It warns when used, and the report says so. |
 
-Any other value stops the run, including when `gsea_enabled` is `false`: the key is validated whenever mummichog runs. The method that ran is recorded in the result, the report, the workbook guide and, for the MetaboAnalyst-compatible engine, `ma_run_info.json`.
+Any other value stops the run, including when `gsea_enabled` is `false`: the key is validated whenever mummichog runs. So does `gsea_permutations` together with the default method (see [P-value estimation](#p-value-estimation)). The method that ran is recorded in the result, the report, the workbook guide and, for the MetaboAnalyst-compatible engine, `ma_run_info.json`.
 
 **Why the default is not MetaboAnalyst's GSEA.** MetaboAnalystR's implementation has two defects, reported upstream as [xia-lab/MetaboAnalystR#381](https://github.com/xia-lab/MetaboAnalystR/issues/381):
 
@@ -294,10 +294,22 @@ Any other value stops the run, including when `gsea_enabled` is `false`: the key
 
 **What changes with the default method, beyond those two points.**
 
-- **The permutation universe.** Every EC has its own ranking position, including ECs with equal scores, so permutations are drawn over ECs. The legacy method ranks distinct scores, so its universe is smaller whenever scores are tied. The GSEA method itself is the same standard fixed-permutation test; the two results are still not comparable pathway for pathway.
+- **The permutation universe.** Every EC has its own ranking position, including ECs with equal scores, so permutations are drawn over ECs. The legacy method ranks distinct scores, so its universe is smaller whenever scores are tied. The two results are not comparable pathway for pathway.
 - **Tied scores.** ECs with equal scores are ordered by EC id, in a locale-independent order, and no score is altered. The result reports how many ECs are tied and their proportion, and names the pathways whose enrichment score can depend on that order: those for which a group of equal-scored ECs holds both members and non-members. A warning is given when there is at least one such pathway. There is no threshold.
-- **Missing p-values.** fgsea gives no p-value when no permutation produced an enrichment score of the observed sign. Such a pathway is kept in the table with empty NES, p and `padj`, counted in the result, and shown as `Tested; p-value unavailable`, never as `Not tested`. It is not part of the BH family: `padj` is adjusted over the tested pathways that have a p-value.
+- **Missing p-values.** fgsea gives no p-value when fewer than 10 of its 10,000 initial permutations produced an enrichment score of the observed sign. Such a pathway is kept in the table with empty NES, p and `padj`, counted in the result, and shown as `Tested; p-value unavailable`, never as `Not tested`. It is not part of the BH family: `padj` is adjusted over the tested pathways that have a p-value.
 - **A pathway holding every ranked EC** is not tested (fgsea caps the size at one less than the list).
+
+#### P-value estimation
+
+The default method estimates p-values with fgsea's adaptive multilevel scheme rather than from a fixed number of permutations, so a p-value is not bounded below by one over a permutation count. `nPermSimple` — the permutations of its initial step — is fixed at 10,000, the value every other GSEA in the pipeline uses, and is not a config key.
+
+- **`gsea_permutations` is the legacy method's setting only.** With the default method the key has nothing to set. A config that carries it stops the run with a message, rather than having the value ignored or read as something else; remove the key, or set `gsea_method: metaboanalyst_legacy` to run the analysis the key was written for.
+- **Reproducibility.** The call runs serially under `gsea_seed`, so the same inputs and seed give the same result.
+- **`log2err`.** fgsea reports the expected error of each log2 p-value. The per-pathway values stay in the engine result; the report (Advanced / Downloads) and `ma_run_info.json` carry their maximum and the number of pathways that have a p-value but no error estimate. fgsea withholds the estimate for a p-value it flags as likely overestimated, and for one below its floor of 1e-50, which it reports as 1e-50. The GSEA table itself has the same columns as before.
+
+#### Earlier results
+
+`gsea_method: fgsea` has named two calculations. For a short period the default ran `fgsea::fgseaSimple()` with a fixed number of permutations (100 unless `gsea_permutations` said otherwise); it now runs `fgsea::fgsea()` as above. The earlier calculation can no longer be run. Results it produced are not relabeled: a result or run record states its own method label, `reference.method` (`fgsea::fgseaSimple`) and `params.n_perm`, and the report and workbook describe it from those stored fields. A multilevel result stores `reference.method` `fgsea::fgsea (fgseaMultilevel)` and `params.nperm_simple` instead, and no `n_perm`.
 - **NES sign** is the ordinary GSEA one: which end of the ranked list the pathway's ECs are concentrated at. An EC takes the largest signed score among its features, so it is still not a per-metabolite direction of change.
 - **The table schema is unchanged.** `ES defaulted by reference implementation` and `ES fallback reason` stay, as `FALSE` and empty, because the default method has no fallback.
 
@@ -325,7 +337,7 @@ A signed ranking is the premise of GSEA, and W is non-negative, so ranking on it
 
 GSEA needs `fgsea` and a **readable** metabolic model — the built-in `human_mfn` model ships inside the Python package, so its pathway membership cannot be read and both GSEA and the supporting-evidence section are skipped with a message. Use `model_ref` or `model_json`.
 
-`gsea_enabled: true` under the `mummichog:` block is the switch; it defaults to on wherever mummichog is enabled, so configs written before GSEA existed keep working. Four optional keys (`gsea_permutations`, `gsea_seed`, `gsea_min_size`, `gsea_max_size`) carry MetaboAnalystR's defaults, for both methods. With `gsea_method: metaboanalyst_legacy`, overriding any of them is a deviation from the reference and the result records it as one; with the default method they are plain settings, reported with the result. Note `gsea_seed` is **not** the project `seed:`: 123 is upstream's own value. `gsea_method` is described [above](#gsea-method).
+`gsea_enabled: true` under the `mummichog:` block is the switch; it defaults to on wherever mummichog is enabled, so configs written before GSEA existed keep working. Three optional keys (`gsea_seed`, `gsea_min_size`, `gsea_max_size`) carry MetaboAnalystR's defaults, for both methods; a fourth, `gsea_permutations` (default 100), belongs to the legacy method only and stops the run if set with the default one. With `gsea_method: metaboanalyst_legacy`, overriding any of them is a deviation from the reference and the result records it as one; with the default method the three are plain settings, reported with the result. Note `gsea_seed` is **not** the project `seed:`: 123 is upstream's own value. `gsea_method` is described [above](#gsea-method).
 
 ### When GSEA has no results
 
@@ -347,7 +359,7 @@ Per contrast, under `mummichog_pinned/`: `mummichog_gsea_scatter_<contrast>.{png
 
 ### What is verified, and what is not
 
-**Default method (`fgsea`).** The statistic is fgsea's own: nothing in it is reimplemented here. The tests check what this pipeline adds around the call: that the enrichment score and leading edge equal `fgsea::calcGseaStat()` on the documented ordering of tied ECs, that a hand-calculated example with negative scores gives the expected values, that results are reproducible for a seed and independent of input order, and that both engines call the same function. How the EC scores are built is unchanged and is covered by the point about ranked inputs below.
+**Default method (`fgsea`).** The statistic is fgsea's own: nothing in it is reimplemented here. The tests check what this pipeline adds around the call: that the result equals a direct `fgsea::fgsea(nPermSimple = 10000)` call on the same ordered scores under the same seed, that the enrichment score and leading edge equal `fgsea::calcGseaStat()` on the documented ordering of tied ECs, that a hand-calculated example with negative scores gives the expected values, that results are reproducible for a seed and independent of input order, that both engines call the same function, and that a result recorded by the earlier fixed-permutation default is read back as such. How the EC scores are built is unchanged and is covered by the point about ranked inputs below.
 
 **Legacy method (`metaboanalyst_legacy`).** It reproduces the pinned `xia-lab/MetaboAnalystR` Peaks-to-Pathways implementation at **two different strengths**, and the result says which is which:
 

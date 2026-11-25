@@ -19,10 +19,12 @@
 # ===========================================================================
 # TWO METHODS — `gsea_method` (resolved by mmc_gsea_method())
 # ===========================================================================
-#   "fgsea" (default)        standard preranked GSEA: fgsea::fgseaSimple() on the
-#                            named, signed EC-score vector, one ranking position
-#                            per EC. See mmc_gsea_fgsea(). Nothing about the
-#                            statistic, the permutations or the ties is ours.
+#   "fgsea" (default)        standard preranked GSEA: fgsea::fgsea() (adaptive
+#                            multilevel p-values) on the named, signed EC-score
+#                            vector, one ranking position per EC, through the
+#                            pipeline's shared run_fgsea_core() (R/core). See
+#                            mmc_gsea_fgsea(). Nothing about the statistic, the
+#                            p-value estimation or the ties is ours.
 #   "metaboanalyst_legacy"   the reproduction of MetaboAnalystR's vendored GSEA
 #                            described in the rest of this header. Kept ONLY to
 #                            reproduce results reported before the default
@@ -41,12 +43,27 @@
 #      position; a pathway holding two of them is refused by
 #      fgsea::calcGseaStat() and takes an ES = 0 / p = 1 fallback.
 #
-# Both methods use the same fixed-permutation GSEA (the vendored upstream code
-# is a copy of fgseaSimple): the same enrichment score, the same p-value and NES
-# definitions and BH over the tested pathways. They differ in the two points
-# above, and so in the permutation universe: the legacy method permutes over
-# distinct scores, the default over ECs. The EC scores, the ranking statistic
-# and the pathway sets are the same for both, and neither touches the ORA.
+# Both methods compute the same enrichment score, and BH over the tested
+# pathways. They differ in the two points above, and so in the permutation
+# universe: the legacy method permutes over distinct scores, the default over
+# ECs. They also estimate p-values differently:
+#
+#   * legacy   fixed permutations (the vendored upstream code is a copy of
+#              fgseaSimple), `gsea_permutations` of them, 100 by default, so
+#              a p-value cannot fall below what that many permutations resolve.
+#   * default  fgsea's adaptive multilevel estimate, as in the other omics
+#              pipelines, with nPermSimple = .MMC_GSEA_NPERM_SIMPLE. It has no
+#              "number of permutations" in the legacy sense, so
+#              `gsea_permutations` does not apply to it and is refused there
+#              rather than reinterpreted (see mmc_gsea_method()).
+#
+# Between the two there was briefly a third state: the default method ran
+# fgsea::fgseaSimple(). It is no longer runnable. A result or run record made
+# then names fgseaSimple in its own `method_label` and `reference`, and those
+# stored values are what is reported for it; they are never recomputed.
+#
+# The EC scores, the ranking statistic and the pathway sets are the same for
+# both methods, and neither touches the ORA.
 #
 # ===========================================================================
 # LEGACY METHOD: BEHAVIOURAL REFERENCE — pinned upstream version
@@ -159,7 +176,13 @@
 # Where the legacy method's defects are reported upstream.
 .MMC_GSEA_LEGACY_ISSUE <- "https://github.com/xia-lab/MetaboAnalystR/issues/381"
 
-# Settings defaults, shared by both methods. They are MetaboAnalyst's; for the
+# nPermSimple of the default method's fgsea call: the value the pipeline's
+# shared fgsea call (run_fgsea_core()) and the other omics pipelines use. Not a
+# config key, as it is not one there either. A test pins it to that default.
+.MMC_GSEA_NPERM_SIMPLE <- 10000L
+
+# Settings defaults. They are MetaboAnalyst's. `n_perm` is the legacy method's
+# only (the default method has no such setting); the others are shared. For the
 # legacy method, changing any of them is a deviation from the reference and is
 # recorded as such in the result (see run_mummichog_gsea()).
 .MMC_GSEA_DEFAULTS <- list(
@@ -577,6 +600,13 @@ mmc_pathway_ec_sets <- function(model_pathways, ec_candidates, ec_ids) {
 #' through this resolver too, so a partial name such as `"metaboanalyst"` can
 #' never select the legacy method by accident.
 #'
+#' It also refuses `gsea_permutations` together with the default method. That
+#' key is the number of permutations of the legacy method's fixed-permutation
+#' test. The default method estimates p-values with fgsea's multilevel scheme
+#' and has no such quantity, so a config that sets the key was written for a
+#' different test: running it under another meaning, or ignoring it, would both
+#' change what the config asked for without saying so.
+#'
 #' @param mummi_cfg The `modes.metabolomics.enrichment.mummichog` config block
 #'   (a list; may be empty).
 #' @return `"fgsea"` (also when the key is absent) or `"metaboanalyst_legacy"`.
@@ -585,13 +615,22 @@ mmc_pathway_ec_sets <- function(model_pathways, ec_candidates, ec_ids) {
 #' mmc_gsea_method(list(gsea_method = "metaboanalyst_legacy"))
 mmc_gsea_method <- function(mummi_cfg) {
   m <- mummi_cfg[["gsea_method"]]
-  if (is.null(m)) return(.MMC_GSEA_METHODS[[1]])
+  if (is.null(m)) m <- .MMC_GSEA_METHODS[[1]]
   if (!is.character(m) || length(m) != 1L || is.na(m) ||
       !m %in% .MMC_GSEA_METHODS) {
     .mmc_stop("mummichog.gsea_method must be \"fgsea\" (standard fgsea, the ",
               "default) or \"metaboanalyst_legacy\" (the earlier MetaboAnalyst-",
               "compatible GSEA, kept to reproduce earlier results); got '",
               paste(format(m), collapse = ", "), "'.")
+  }
+  if (identical(m, "fgsea") && !is.null(mummi_cfg[["gsea_permutations"]])) {
+    .mmc_stop("mummichog.gsea_permutations is set, but it applies only to ",
+              "gsea_method: metaboanalyst_legacy, where it is the number of ",
+              "permutations of that method's test. The default GSEA estimates ",
+              "p-values with fgsea's multilevel method and has no such setting, ",
+              "so the key is not reinterpreted. Remove gsea_permutations to run ",
+              "the default GSEA, or set gsea_method: metaboanalyst_legacy to ",
+              "run the analysis the key was written for.")
   }
   m
 }
@@ -617,8 +656,60 @@ mmc_gsea_method_label <- function(method = .MMC_GSEA_METHODS[[1]],
                   "), kept to reproduce earlier results; it has known defects (",
                   .MMC_GSEA_LEGACY_ISSUE, ")"))
   }
-  paste0("standard preranked GSEA (fgsea::fgseaSimple", ver,
+  paste0("standard preranked GSEA (fgsea::fgsea, adaptive multilevel", ver,
          ") on the signed EmpiricalCompound scores, one ranking position per EC")
+}
+
+#' Say how a GSEA result's p-values were estimated, from its recorded settings
+#'
+#' Reads the settings stored with the result, never the current defaults, so a
+#' result is described by what produced it: a result with `nperm_simple` came
+#' from fgsea's multilevel estimate; one with `n_perm` came from a
+#' fixed-permutation test (the legacy method, or the default method while it
+#' ran `fgsea::fgseaSimple()`).
+#'
+#' @param params The `params` list of a GSEA result or run record.
+#' @return A single character scalar.
+#' @examples
+#' mmc_gsea_permutation_label(list(nperm_simple = 10000L))
+#' mmc_gsea_permutation_label(list(n_perm = 100L))
+mmc_gsea_permutation_label <- function(params) {
+  one <- function(x) length(x) == 1L && !is.na(x)
+  # `[[` throughout: `$` matches list names partially, and a count read from
+  # the wrong field would be stated as fact.
+  n_simple <- if (is.list(params)) params[["nperm_simple"]] else NULL
+  n_fixed  <- if (is.list(params)) params[["n_perm"]] else NULL
+  if (one(n_simple)) {
+    return(sprintf("adaptive multilevel p-values, nPermSimple = %s",
+                   format(n_simple, scientific = FALSE)))
+  }
+  if (one(n_fixed)) {
+    return(sprintf("%s permutations", format(n_fixed, scientific = FALSE)))
+  }
+  "p-value estimation not recorded"
+}
+
+#' Summarise fgsea's error estimate of the p-values of one GSEA result
+#'
+#' `log2err` is fgsea's expected error of the log2 p-value. fgsea leaves it
+#' missing for a p-value it marks as likely overestimated, or as below its
+#' floor (1e-50), and for a pathway without a p-value. The per-pathway values
+#' stay in the engine result; this is what the report and the run record carry.
+#'
+#' @param res The data.frame `mmc_gsea_fgsea()` returns (uses `pval`,
+#'   `log2err`).
+#' @return A list: `max` (largest `log2err`; NULL when none, so that the JSON
+#'   run record reads back the same) and `n_unavailable`
+#'   (pathways WITH a p-value but without a `log2err`); or NULL when `res` has
+#'   no `log2err` column (the legacy method).
+#' @examples
+#' mmc_gsea_log2err_summary(data.frame(pval = c(0.01, 0.2, NA),
+#'                                     log2err = c(0.1, NA, NA)))
+mmc_gsea_log2err_summary <- function(res) {
+  if (!is.data.frame(res) || is.null(res$log2err)) return(NULL)
+  err <- suppressWarnings(as.numeric(res$log2err))
+  list(max = if (all(is.na(err))) NULL else max(err, na.rm = TRUE),
+       n_unavailable = sum(is.na(err) & !is.na(res$pval)))
 }
 
 #' The warning given whenever the legacy GSEA method is run
@@ -708,9 +799,11 @@ mmc_gsea_tie_sentence <- function(ties) {
 
 #' Standard preranked GSEA on EmpiricalCompound scores
 #'
-#' The default method: `fgsea::fgseaSimple()` on the named, signed EC-score
-#' vector, with every EC at its own ranking position. The enrichment score, the
-#' permutation null, the p-value, NES, the BH adjustment over the tested
+#' The default method: `fgsea::fgsea()` (adaptive multilevel p-values) on the
+#' named, signed EC-score vector, with every EC at its own ranking position,
+#' through the pipeline's shared `run_fgsea_core()` so that this is the same
+#' call, with the same nPermSimple, the other omics pipelines make. The
+#' enrichment score, the p-value, NES, the BH adjustment over the tested
 #' pathways and the leading edge are fgsea's; nothing is computed here.
 #'
 #' What this function adds is only what makes the call reproducible and its
@@ -719,54 +812,55 @@ mmc_gsea_tie_sentence <- function(ties) {
 #'   \item ECs with equal scores are put in a fixed order, by EC id in the C
 #'     locale, before the call. fgsea orders by score with a stable sort, so
 #'     that order is the one it scores. The scores are passed unchanged.
-#'   \item fgsea draws its permutation seeds from R's RNG, so the call runs
-#'     under `seed`, on a serial backend.
+#'   \item fgsea draws its seeds from R's RNG, so `run_fgsea_core()` runs it
+#'     under `seed`; it is given a serial backend.
 #'   \item fgsea's own tie warning is replaced by the tie summary and warning
 #'     below, because it says the order of tied items is arbitrary and here it
 #'     is not. Every other fgsea warning reaches the caller untouched.
-#'   \item the result is returned in the shape of `mmc_gsea_metaboanalyst()`.
+#'   \item the result is returned in the shape of `mmc_gsea_metaboanalyst()`,
+#'     in the order the pathways were given, plus fgsea's `log2err`.
 #' }
 #'
 #' Differences from the legacy method that follow from using fgsea as it is:
 #' the permutation universe is the ECs, not the distinct scores; a pathway
 #' holding ECs with equal scores is scored like any other (no ES = 0
 #' fallback); a pathway holding every ranked EC is not tested (fgsea caps the
-#' size at one less than the list); and a pathway whose permutations never
-#' produced a score of the observed sign has `NA` for NES, p and adjusted p,
-#' with fgsea's warning, rather than a number.
+#' size at one less than the list); and a pathway for which too few
+#' permutations gave a score of the observed sign (fewer than 10 of the
+#' nPermSimple) has `NA` for NES, p and adjusted p, with fgsea's warning,
+#' rather than a number. fgsea reports a p-value below 1e-50 as 1e-50.
 #'
 #' @param pathways  Named list: pathway -> character vector of EC ids.
 #' @param ec_scores Named numeric vector: one signed score per EC. ECs without
 #'   a finite score or a name are not ranked, as in the legacy method.
-#' @param n_perm    Permutations.
 #' @param min_size,max_size Bounds on the number of ranked ECs in a pathway.
-#' @param seed      Seed the permutations are drawn under.
-#' @return A data.frame with one row per tested pathway: `pathway`, `pval`,
-#'   `padj`, `ES`, `NES`, `nMoreExtreme`, `size`, `leadingEdge` (`"; "`-joined
-#'   EC ids), and `es_defaulted` (always FALSE) and `es_reason` (always NA),
-#'   kept so both methods return one shape. Zero rows when no pathway passes
-#'   the size filter. A non-empty result carries the attribute `"mmc_ties"`,
+#' @param seed      Seed the estimation runs under.
+#' @return A data.frame with one row per tested pathway, in the order of
+#'   `pathways`: `pathway`, `pval`, `padj`, `ES`, `NES`, `nMoreExtreme` (always
+#'   NA: the multilevel estimate reports none), `size`, `leadingEdge`
+#'   (`"; "`-joined EC ids), `es_defaulted` (always FALSE) and `es_reason`
+#'   (always NA) -- the legacy engine's columns, kept so both methods return
+#'   one shape -- and `log2err`, fgsea's expected error of the log2 p-value.
+#'   Zero rows when no pathway passes the size filter. A non-empty result carries the attribute `"mmc_ties"`,
 #'   the `mmc_gsea_tie_summary()` of the ranked ECs and the tested pathways.
 #' @examples
 #' \dontrun{
 #' mmc_gsea_fgsea(list(P = c("E1", "E2")), c(E1 = 2, E2 = 1, E3 = -1, E4 = -2))
 #' }
 mmc_gsea_fgsea <- function(pathways, ec_scores,
-                           n_perm   = .MMC_GSEA_DEFAULTS$n_perm,
                            min_size = .MMC_GSEA_DEFAULTS$min_size,
                            max_size = .MMC_GSEA_DEFAULTS$max_size,
                            seed     = .MMC_GSEA_DEFAULTS$seed) {
-  n_perm   <- .mmc_as_seed(n_perm, "n_perm")
   seed     <- .mmc_as_seed(seed, "seed")
   min_size <- .mmc_as_seed(min_size, "min_size")
   max_size <- .mmc_gsea_check_max_size(max_size)
-  if (n_perm < 1L) .mmc_stop("n_perm must be at least 1; got ", n_perm, ".")
 
   empty <- data.frame(pathway = character(0), pval = numeric(0),
                       padj = numeric(0), ES = numeric(0), NES = numeric(0),
                       nMoreExtreme = numeric(0), size = numeric(0),
                       leadingEdge = character(0), es_defaulted = logical(0),
-                      es_reason = character(0), stringsAsFactors = FALSE)
+                      es_reason = character(0), log2err = numeric(0),
+                      stringsAsFactors = FALSE)
   if (length(pathways) == 0 || length(ec_scores) == 0 ||
       is.null(names(ec_scores))) {
     return(empty)
@@ -791,31 +885,37 @@ mmc_gsea_fgsea <- function(pathways, ec_scores,
   ec   <- ec_scores[order(-ec_scores, names(ec_scores), method = "radix")]
   sets <- lapply(pathways, as.character)
 
-  res <- withr::with_seed(seed, withCallingHandlers(
-    fgsea::fgseaSimple(pathways = sets, stats = ec, nperm = n_perm,
-                       minSize = min_size, maxSize = max_size, gseaParam = 1,
-                       BPPARAM = BiocParallel::SerialParam()),
+  # The pipeline's one fgsea call (seeded there). The leading edge is asked for
+  # with the separator this table uses, so no id is ever split out of a string.
+  res <- withCallingHandlers(
+    run_fgsea_core(ranks = ec, gene_sets = sets, min_size = min_size,
+                   max_size = max_size, seed = seed,
+                   n_perm_simple = .MMC_GSEA_NPERM_SIMPLE,
+                   bpparam = BiocParallel::SerialParam(),
+                   leading_edge_sep = "; "),
     warning = function(w) {
       if (grepl("ties in the preranked stats", conditionMessage(w),
                 fixed = TRUE)) {
         invokeRestart("muffleWarning")
       }
-    }))
+    })
   if (nrow(res) == 0) return(empty)
+  # fgsea returns the pathways in its own order; keep the order they were given.
+  res <- res[order(match(as.character(res$pathway), names(sets))), , drop = FALSE]
 
+  lead <- as.character(res$leadingEdge)
   out <- data.frame(
     pathway      = as.character(res$pathway),
     pval         = as.numeric(res$pval),
     padj         = as.numeric(res$padj),
     ES           = as.numeric(res$ES),
     NES          = as.numeric(res$NES),
-    nMoreExtreme = as.numeric(res$nMoreExtreme),
+    nMoreExtreme = NA_real_,
     size         = as.numeric(res$size),
-    leadingEdge  = vapply(res$leadingEdge, function(x) {
-      if (length(x) == 0L) NA_character_ else paste(x, collapse = "; ")
-    }, character(1), USE.NAMES = FALSE),
+    leadingEdge  = ifelse(is.na(lead) | !nzchar(lead), NA_character_, lead),
     es_defaulted = FALSE,
     es_reason    = NA_character_,
+    log2err      = as.numeric(res$log2err),
     stringsAsFactors = FALSE
   )
   ties <- mmc_gsea_tie_summary(ec, sets[out$pathway])
@@ -1421,6 +1521,11 @@ mmc_gsea_nes_note <- function(method = .MMC_GSEA_METHODS[[1]]) {
 #' is reported back in `deviations`; for `"fgsea"` they are plain settings,
 #' reported in `params`.
 #'
+#' `n_perm` belongs to the legacy method alone. The default method estimates
+#' p-values with fgsea's multilevel scheme (nPermSimple fixed, see
+#' `mmc_gsea_fgsea()`), so passing `n_perm` with it is an error rather than a
+#' value that is quietly ignored or given another meaning.
+#'
 #' @param files    One contrast's mummichog output files.
 #' @param de_table That contrast's DE table (for the signed ranking statistic).
 #' @param model    Model index from `read_mummichog_model_pathways()` /
@@ -1431,7 +1536,9 @@ mmc_gsea_nes_note <- function(method = .MMC_GSEA_METHODS[[1]]) {
 #'   It decides the ranking statistic — see `mmc_gsea_rank_metric()`. Leave it
 #'   NULL only when the method genuinely is not known: the generic `statistic`
 #'   column is then not trusted, and the ranking falls to `logFC`.
-#' @param n_perm,min_size,max_size,gsea_param,seed See
+#' @param n_perm Legacy method only: its number of permutations (upstream
+#'   default 100). Must not be given with the default method.
+#' @param min_size,max_size,gsea_param,seed See
 #'   `mmc_gsea_metaboanalyst()`; defaults are the pinned upstream values.
 #' @param rank_metric How features sharing one m/z are merged (see
 #'   `mmc_ec_scores()`).
@@ -1456,6 +1563,10 @@ mmc_gsea_nes_note <- function(method = .MMC_GSEA_METHODS[[1]]) {
 #'       pathways; `NULL` for the legacy method.}
 #'     \item{n_p_unavailable}{Tested pathways without a p-value (fgsea could
 #'       not compute one); always 0 for the legacy method.}
+#'     \item{log2err, log2err_summary}{Default method only (NULL for legacy):
+#'       fgsea's expected error of each log2 p-value, named by pathway, and its
+#'       `mmc_gsea_log2err_summary()`. Not a column of `table`, whose schema is
+#'       the same for both methods.}
 #'     \item{metric, metric_label, de_method}{Which ranking statistic was
 #'       chosen, why, and the DE method that decided it.}
 #'     \item{nes_note}{`mmc_gsea_nes_note()`.}
@@ -1487,6 +1598,13 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   # quietly select the legacy method).
   method <- mmc_gsea_method(list(gsea_method = method))
   is_legacy <- identical(method, "metaboanalyst_legacy")
+  # Asked before n_perm is touched: missing() stops being reliable once an
+  # argument has been assigned to.
+  if (!is_legacy && !missing(n_perm)) {
+    .mmc_stop("n_perm is the legacy method's number of permutations and was ",
+              "given with method \"fgsea\", which has no such setting. Drop ",
+              "n_perm, or use method = \"metaboanalyst_legacy\".")
+  }
   .mmc_gsea_check_param(gsea_param)
   # Validated and normalised once, here, so the value that runs is the value
   # reported: a result that said min_size = 0 while 1 was applied could not be
@@ -1546,7 +1664,7 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
                              min_size = min_size, max_size = max_size,
                              gsea_param = gsea_param, seed = seed)
     } else {
-      mmc_gsea_fgsea(sets, ec_scores, n_perm = n_perm, min_size = min_size,
+      mmc_gsea_fgsea(sets, ec_scores, min_size = min_size,
                      max_size = max_size, seed = seed)
     },
     error = function(e) {
@@ -1685,8 +1803,9 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   n_p_unavailable <- sum(is.na(res$pval))
   if (n_p_unavailable > 0) {
     message("mummichog GSEA: ", n_p_unavailable, "/", nrow(res), " tested ",
-            "pathway(s) have no p-value: no permutation gave a score of the ",
-            "observed sign. They are kept in the results table with NA.")
+            "pathway(s) have no p-value: too few permutations gave a score of ",
+            "the observed sign for one to be estimated. They are kept in the ",
+            "results table with NA.")
   }
   message("mummichog GSEA (", method, "): ", nrow(tbl), " pathways over ",
           length(ec_scores), " EmpiricalCompounds (", n_positions,
@@ -1705,13 +1824,23 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
     metric_label = rank$label,
     de_method    = rank$de_method,
     nes_note     = mmc_gsea_nes_note(method),
-    params       = list(n_perm = n_perm, min_size = min_size,
-                        max_size = max_size, gsea_param = gsea_param,
-                        seed = seed, rank_metric = rank_metric,
-                        fgsea_version = fgsea_version),
+    # What ran, and only that: the default method has no n_perm, and the
+    # legacy method no nPermSimple. Readers tell the two apart by these names.
+    # Deliberately `nperm_simple`, not `n_perm_simple`: `$` matches list names
+    # partially, so `params$n_perm` on the latter would return nPermSimple as
+    # if it were a fixed permutation count.
+    params       = c(
+      if (is_legacy) list(n_perm = n_perm) else
+        list(nperm_simple = .MMC_GSEA_NPERM_SIMPLE),
+      list(min_size = min_size, max_size = max_size, gsea_param = gsea_param,
+           seed = seed, rank_metric = rank_metric,
+           fgsea_version = fgsea_version)),
+    log2err      = if (is.null(res$log2err)) NULL else
+      stats::setNames(as.numeric(res$log2err), res$pathway),
+    log2err_summary = mmc_gsea_log2err_summary(res),
     deviations   = deviations,
     reference    = if (!is_legacy) {
-      list(method = "fgsea::fgseaSimple", package = "fgsea",
+      list(method = "fgsea::fgsea (fgseaMultilevel)", package = "fgsea",
            version = fgsea_version)
     } else {
       # Scoped deliberately: the pin is evidence for the GSEA calculation,

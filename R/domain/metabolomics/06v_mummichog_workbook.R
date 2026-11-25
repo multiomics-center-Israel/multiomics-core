@@ -208,7 +208,7 @@ mmc_candidate_name_map <- function(feature_table, model) {
         ". The python engine's ORA p-value is empirical; it reports no adjusted value."),
     "GSEA" = paste0(
       "Uses every EC, ranked by a signed statistic (an EC's score is the maximum of ",
-      "its features'), with no significance cutoff. 'GSEA raw p' is the permutation ",
+      "its features'), with no significance cutoff. 'GSEA raw p' is the raw ",
       "p-value and 'GSEA BH FDR' its Benjamini-Hochberg adjustment over the pathways ",
       "GSEA tested that have a p-value. ",
       # Method and NES wording come from the result itself (06g), so the

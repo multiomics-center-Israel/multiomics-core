@@ -993,18 +993,25 @@ run_camerapr <- function(ranks, sets, inter_gene_cor = 0.01, use_ranks = FALSE) 
 #' @param n_perm_simple Number of permutations for the initial simple step.
 #' @param bpparam Optional BiocParallel backend passed to fgsea; NULL keeps
 #'   fgsea's default.
+#' @param leading_edge_sep Separator used to collapse each leading edge into
+#'   one string. The default is the comma the gene-based callers expect; a
+#'   caller whose ids are listed with another separator passes it here rather
+#'   than splitting the collapsed string again.
 #' @return data.frame with fgsea's columns (pathway, pval, padj, log2err, ES,
-#'   NES, size, leadingEdge), leadingEdge collapsed to a comma-separated
-#'   string; zero rows when no set passes the size limits.
+#'   NES, size, leadingEdge), leadingEdge collapsed to a
+#'   `leading_edge_sep`-separated string; zero rows when no set passes the
+#'   size limits.
 run_fgsea_core <- function(ranks, gene_sets, min_size = 10, max_size = 500,
-                           seed = 1L, n_perm_simple = 10000L, bpparam = NULL) {
+                           seed = 1L, n_perm_simple = 10000L, bpparam = NULL,
+                           leading_edge_sep = ",") {
     args <- list(pathways = gene_sets, stats = ranks, minSize = min_size,
                  maxSize = max_size, nPermSimple = n_perm_simple)
     if (!is.null(bpparam)) args$BPPARAM <- bpparam
     res <- withr::with_seed(seed, do.call(fgsea::fgsea, args))
     df <- as.data.frame(res)
     if (nrow(df) > 0) {
-        df$leadingEdge <- vapply(df$leadingEdge, paste, character(1), collapse = ",")
+        df$leadingEdge <- vapply(df$leadingEdge, paste, character(1),
+                                 collapse = leading_edge_sep)
     }
     df
 }

@@ -84,11 +84,15 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE,
         n_ec = 24L, n_tied_ec = 6L, prop_tied_ec = 0.25, n_tie_groups = 3L,
         tie_sensitive_pathways = tie_sensitive),
       n_p_unavailable = n_p_unavailable,
-      params = list(n_perm = 100L, min_size = 1, max_size = Inf,
-                    gsea_param = 1, seed = 123L),
+      log2err_summary = if (legacy) NULL else list(max = 0.12,
+                                                   n_unavailable = 1L),
+      params = c(if (legacy) list(n_perm = 100L) else
+                   list(nperm_simple = 10000L),
+                 list(min_size = 1, max_size = Inf, gsea_param = 1,
+                      seed = 123L)),
       reference = if (legacy) list(repo = "xia-lab/MetaboAnalystR",
                                    commit = .MMC_GSEA_REF_COMMIT) else
-        list(method = "fgsea::fgseaSimple", package = "fgsea",
+        list(method = "fgsea::fgsea (fgseaMultilevel)", package = "fgsea",
              version = "1.36.2"))
     gsea_plot <- plot_mummichog_gsea_scatter(gtab, title = "GSEA",
                                              p_cutoff = 0.05)
@@ -345,7 +349,16 @@ test_that("the mummichog section renders with GSEA and evidence", {
   expect_match(html, "unadjusted DE p-value below the configured Mummichog cutoff")
   # The default method: standard fgsea, named as such, with its own NES note
   # and its tie statistics. It is not described as MetaboAnalyst's GSEA.
-  expect_match(html, "fgsea::fgseaSimple", fixed = TRUE)
+  expect_match(html, "fgsea::fgsea, adaptive multilevel", fixed = TRUE)
+  expect_false(grepl("fgseaSimple", html, fixed = TRUE))
+  # How the p-values were estimated is read from the result's own settings,
+  # with fgsea's error estimate; no fixed permutation count is claimed.
+  expect_match(html, "adaptive multilevel p-values, nPermSimple = 10000",
+               fixed = TRUE)
+  expect_false(grepl("gseaParam = 1, 100 permutations", html, fixed = TRUE))
+  expect_match(html, "is at most 0.12 for these pathways", fixed = TRUE)
+  expect_match(html, "1 pathway(s) with a p-value have no error estimate",
+               fixed = TRUE)
   expect_match(html, "concentrated among the highest-scoring ECs", fixed = TRUE)
   expect_match(html, "not a per-metabolite direction of change", fixed = TRUE)
   expect_match(html, "6 of the 24 ranked EmpiricalCompounds (25.0%)", fixed = TRUE)
@@ -387,6 +400,11 @@ test_that("a legacy-method GSEA is named as legacy, with its defects, in visible
   expect_false(grepl("concentrated among the highest-scoring ECs", html, fixed = TRUE))
   expect_false(grepl("ranked EmpiricalCompounds share", html, fixed = TRUE))
   expect_false(grepl("permutations are drawn over ECs", html, fixed = TRUE))
+  # Its p-values come from its own fixed number of permutations, and it has
+  # no fgsea error estimate.
+  expect_match(html, "gseaParam = 1, 100 permutations", fixed = TRUE)
+  expect_false(grepl("adaptive multilevel", html, fixed = TRUE))
+  expect_false(grepl("P-value precision", html, fixed = TRUE))
 })
 
 test_that("tie-sensitive pathways and missing GSEA p-values are stated where they occur", {

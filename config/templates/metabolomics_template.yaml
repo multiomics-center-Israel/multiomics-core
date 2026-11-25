@@ -430,7 +430,8 @@ modes:
         gsea_enabled: true
 
         # GSEA method. Leave unset for the default, "fgsea": standard
-        # fgsea::fgseaSimple() on the signed EmpiricalCompound scores, every EC
+        # fgsea::fgsea() (adaptive multilevel p-values, the same call as the
+        # other omics' GSEA) on the signed EmpiricalCompound scores, every EC
         # at its own ranking position. "metaboanalyst_legacy" is the earlier
         # MetaboAnalyst-compatible GSEA; it has known defects (hit weights that
         # are not the hits' own, and ES = 0 for pathways holding ECs with equal
@@ -438,14 +439,19 @@ modes:
         # warns when used, and any other value stops the run.
         # gsea_method: metaboanalyst_legacy
 
-        # GSEA settings. All four are optional and commented out on purpose;
-        # the values shown are the defaults (MetaboAnalystR's). With the legacy
-        # method, overriding one is recorded as a deviation from the reference.
+        # GSEA settings. All optional and commented out on purpose; the values
+        # shown are the defaults (MetaboAnalystR's). With the legacy method,
+        # overriding one is recorded as a deviation from the reference.
         # gsea_seed is NOT the project seed above.
-        # gsea_permutations: 100
         # gsea_seed: 123
         # gsea_min_size: 1
         # gsea_max_size: .inf
+        #
+        # gsea_permutations belongs to gsea_method: metaboanalyst_legacy ONLY
+        # (default 100, that method's number of permutations). The default
+        # method has no permutation count to set, and setting this key with it
+        # stops the run instead of being ignored or given another meaning.
+        # gsea_permutations: 100
 
         # Metabolic model (precedence: model_ref > model_json > built-in human).
         # Required by the default engine. The built-in model belongs to the
