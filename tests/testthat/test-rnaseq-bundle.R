@@ -20,7 +20,9 @@ rna_bundle_inputs <- function() {
                            pathway_results = list(B_vs_A = data.frame(pathway = "P1")),
                            plot_files = c("/home/someone/run/plot.png")),
         annot = data.frame(gene_id = "G1", symbol = "ABC1"),
-        config = list(project = list(name = "Demo", analysis_round = "R1"),
+        # project$dir is required: omics_bundle_info() names the run through
+        # get_run_name(), which resolves the run folder under it.
+        config = list(project = list(dir = tempdir(), name = "Demo", analysis_round = "R1"),
                       modes = list(rna = list(de = list(p_cutoff = 0.05))),
                       .config_path = "/home/someone/config.yaml",
                       .config_mtime = 0)
