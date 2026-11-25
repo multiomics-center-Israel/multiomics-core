@@ -86,8 +86,9 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
   min_lib  <- num1(mummi_cfg$min_pathway_size, "min_pathway_size", 3)
   force_primary_ion <- .mmc_as_flag(mummi_cfg$force_primary_ion,
                                     "force_primary_ion") %||% TRUE
-  # GSEA: same switch and overrides as the python engine's; defaults are
-  # MetaboAnalyst's. It needs fgsea.
+  # GSEA: same switch, method and overrides as the python engine's. It needs
+  # fgsea. The method is resolved here, ahead of the per-contrast loop, so an
+  # invalid gsea_method stops the stage instead of failing each contrast's GSEA.
   gsea_on <- isTRUE(mummi_cfg$gsea_enabled %||% TRUE)
   if (gsea_on && !requireNamespace("fgsea", quietly = TRUE)) {
     message("mummichog (metaboanalyst): fgsea not available — GSEA skipped")
@@ -97,7 +98,8 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
     n_perm   = mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm,
     min_size = mummi_cfg$gsea_min_size     %||% .MMC_GSEA_DEFAULTS$min_size,
     max_size = mummi_cfg$gsea_max_size     %||% .MMC_GSEA_DEFAULTS$max_size,
-    seed     = mummi_cfg$gsea_seed         %||% .MMC_GSEA_DEFAULTS$seed)
+    seed     = mummi_cfg$gsea_seed         %||% .MMC_GSEA_DEFAULTS$seed,
+    method   = mmc_gsea_method(mummi_cfg))
 
   # -- model -> library, once ---------------------------------------------------
   network <- mmc_select_model(mummi_cfg,

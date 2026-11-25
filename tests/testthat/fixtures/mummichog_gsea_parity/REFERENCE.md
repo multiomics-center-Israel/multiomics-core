@@ -1,8 +1,16 @@
-# Mummichog GSEA parity reference
+# Mummichog GSEA parity reference (legacy method)
 
 `reference.rds` / `reference.tsv` hold the output of the **pinned MetaboAnalystR
 Peaks-to-Pathways GSEA engine**, run on the fixture in `generate_reference.R`.
-`test-mummichog-gsea-parity.R` asserts our implementation reproduces it.
+`test-mummichog-gsea-parity.R` asserts that the **legacy** method,
+`mmc_gsea_metaboanalyst()` (`gsea_method: metaboanalyst_legacy`), reproduces it.
+
+This is a historical-compatibility fixture. The pipeline's default GSEA is
+standard `fgsea::fgseaSimple()` (`mmc_gsea_fgsea()`), which is **not** expected
+to match these numbers: the reference carries the two upstream defects reported
+as [xia-lab/MetaboAnalystR#381](https://github.com/xia-lab/MetaboAnalystR/issues/381)
+and described under "Two upstream behaviours" below. The fixture files are not
+to be regenerated or repointed at the default method.
 
 | | |
 |---|---|
@@ -106,10 +114,14 @@ size 1 (kept because `minSize = 1`), and one with no detected EC (dropped).
    `ES fallback reason` classified from the actual condition — so a defaulted `0`
    is never read as a measured score, and a non-tie failure is never mislabelled
    as a tie.
-2. **Leading edges are often empty.** `abs()` is applied *before* the sort, so
-   pathway indices taken from the signed ordering address a differently-ordered
-   vector; the leading edge is then intersected with the pathway's own ECs and
-   frequently comes back empty. Reproduced, not "fixed".
+2. **Hit weights and leading edges are read from the wrong positions.** `abs()`
+   is applied *before* the sort, so pathway indices taken from the signed
+   ordering address a differently-ordered vector. Each hit is weighted by the
+   score at that position of the re-sorted vector, not by its own, which changes
+   ES, NES and p. The leading edge is read back through the same re-sorted
+   names and then intersected with the pathway's own ECs, so it often comes
+   back empty and can name a pathway EC that is not at the leading edge.
+   Reproduced here, not "fixed"; the default method does not have it.
 
 ## Regenerating
 

@@ -17,9 +17,41 @@
 #            ranking (ES / NES / p / BH-adjusted p).
 #
 # ===========================================================================
-# BEHAVIOURAL REFERENCE — pinned upstream version
+# TWO METHODS — `gsea_method` (resolved by mmc_gsea_method())
 # ===========================================================================
-# Everything below reproduces MetaboAnalystR at
+#   "fgsea" (default)        standard preranked GSEA: fgsea::fgseaSimple() on the
+#                            named, signed EC-score vector, one ranking position
+#                            per EC. See mmc_gsea_fgsea(). Nothing about the
+#                            statistic, the permutations or the ties is ours.
+#   "metaboanalyst_legacy"   the reproduction of MetaboAnalystR's vendored GSEA
+#                            described in the rest of this header. Kept ONLY to
+#                            reproduce results reported before the default
+#                            changed; it has two known defects and warns when
+#                            it is used.
+#
+# Why the default is no longer the MetaboAnalystR reproduction
+# (reported upstream as xia-lab/MetaboAnalystR#381):
+#
+#   1. Re-sort after abs(). Upstream takes `abs()` of the ranked scores and then
+#      sorts them decreasing, while pathway positions still index the SIGNED
+#      order. A hit is therefore weighted by the k-th largest |score| of the
+#      whole dataset rather than by its own score, and the leading edge is read
+#      back through the wrong names.
+#   2. Tied EC scores. ECs with equal scores are collapsed into ONE ranked
+#      position; a pathway holding two of them is refused by
+#      fgsea::calcGseaStat() and takes an ES = 0 / p = 1 fallback.
+#
+# Both methods use the same fixed-permutation GSEA (the vendored upstream code
+# is a copy of fgseaSimple): the same enrichment score, the same p-value and NES
+# definitions and BH over the tested pathways. They differ in the two points
+# above, and so in the permutation universe: the legacy method permutes over
+# distinct scores, the default over ECs. The EC scores, the ranking statistic
+# and the pathway sets are the same for both, and neither touches the ORA.
+#
+# ===========================================================================
+# LEGACY METHOD: BEHAVIOURAL REFERENCE — pinned upstream version
+# ===========================================================================
+# Everything in this section reproduces MetaboAnalystR at
 #
 #     repo:   xia-lab/MetaboAnalystR
 #     commit: 398476ae2a0c996e390925fa62adc46b5ecde334
@@ -120,8 +152,16 @@
 .MMC_GSEA_REF_COMMIT <- "398476ae2a0c996e390925fa62adc46b5ecde334"
 .MMC_GSEA_REF_REPO   <- "xia-lab/MetaboAnalystR"
 
-# MetaboAnalyst-equivalent defaults. Changing any of these is a methodological
-# deviation and is recorded as such in the result (see run_mummichog_gsea()).
+# The GSEA methods, first value the default. One list, so the resolver, the
+# two adapters and the reader of a stored run cannot disagree about the names.
+.MMC_GSEA_METHODS <- c("fgsea", "metaboanalyst_legacy")
+
+# Where the legacy method's defects are reported upstream.
+.MMC_GSEA_LEGACY_ISSUE <- "https://github.com/xia-lab/MetaboAnalystR/issues/381"
+
+# Settings defaults, shared by both methods. They are MetaboAnalyst's; for the
+# legacy method, changing any of them is a deviation from the reference and is
+# recorded as such in the result (see run_mummichog_gsea()).
 .MMC_GSEA_DEFAULTS <- list(
   n_perm     = 100L,      # PerformPSEA(permNum = 100)
   gsea_param = 1,         # .run_fgsea_inner(gseaParam = 1)
@@ -524,7 +564,275 @@ mmc_pathway_ec_sets <- function(model_pathways, ec_candidates, ec_ids) {
 }
 
 
-# ==== upstream ranked-input construction ====================================
+# ==== method selection ======================================================
+
+#' Resolve the mummichog GSEA method from the mummichog config block
+#'
+#' The one place `gsea_method` is read, so the stage, the report sections and
+#' their wording cannot each interpret it. Pure: it validates and returns, with
+#' no warning or message, so every consumer can call it. An unknown value stops
+#' rather than falling back, because the key decides which statistic is run.
+#'
+#' Matching is exact. The functions that take a `method` argument validate it
+#' through this resolver too, so a partial name such as `"metaboanalyst"` can
+#' never select the legacy method by accident.
+#'
+#' @param mummi_cfg The `modes.metabolomics.enrichment.mummichog` config block
+#'   (a list; may be empty).
+#' @return `"fgsea"` (also when the key is absent) or `"metaboanalyst_legacy"`.
+#' @examples
+#' mmc_gsea_method(list())
+#' mmc_gsea_method(list(gsea_method = "metaboanalyst_legacy"))
+mmc_gsea_method <- function(mummi_cfg) {
+  m <- mummi_cfg[["gsea_method"]]
+  if (is.null(m)) return(.MMC_GSEA_METHODS[[1]])
+  if (!is.character(m) || length(m) != 1L || is.na(m) ||
+      !m %in% .MMC_GSEA_METHODS) {
+    .mmc_stop("mummichog.gsea_method must be \"fgsea\" (standard fgsea, the ",
+              "default) or \"metaboanalyst_legacy\" (the earlier MetaboAnalyst-",
+              "compatible GSEA, kept to reproduce earlier results); got '",
+              paste(format(m), collapse = ", "), "'.")
+  }
+  m
+}
+
+#' Describe a GSEA method in one phrase, for reports and run records
+#'
+#' The single wording of what each method is, so the report, the workbook and
+#' the run record state the same thing and none of them decides it.
+#'
+#' @param method        `"fgsea"` or `"metaboanalyst_legacy"`.
+#' @param fgsea_version The fgsea version the run used, or NULL when unknown.
+#' @return A single character scalar.
+#' @examples
+#' mmc_gsea_method_label("fgsea", "1.36.2")
+mmc_gsea_method_label <- function(method = .MMC_GSEA_METHODS[[1]],
+                                  fgsea_version = NULL) {
+  method <- mmc_gsea_method(list(gsea_method = method))
+  ver <- if (length(fgsea_version) == 1L && !is.na(fgsea_version) &&
+             nzchar(fgsea_version)) paste0(", fgsea ", fgsea_version) else ""
+  if (identical(method, "metaboanalyst_legacy")) {
+    return(paste0("legacy MetaboAnalyst-compatible GSEA (", .MMC_GSEA_REF_REPO,
+                  " @ ", substr(.MMC_GSEA_REF_COMMIT, 1, 10), ver,
+                  "), kept to reproduce earlier results; it has known defects (",
+                  .MMC_GSEA_LEGACY_ISSUE, ")"))
+  }
+  paste0("standard preranked GSEA (fgsea::fgseaSimple", ver,
+         ") on the signed EmpiricalCompound scores, one ranking position per EC")
+}
+
+#' The warning given whenever the legacy GSEA method is run
+#' @return A single character scalar.
+#' @noRd
+.mmc_gsea_legacy_warning <- function() {
+  paste0("mummichog GSEA: gsea_method \"metaboanalyst_legacy\" reproduces ",
+         "MetaboAnalystR's peaks GSEA, which has known defects: a pathway's ",
+         "hits are weighted by scores that are not their own, and a pathway ",
+         "holding ECs with equal scores gets ES = 0 (",
+         .MMC_GSEA_LEGACY_ISSUE, "). Use it only to reproduce earlier ",
+         "results; the default \"fgsea\" is the standard analysis.")
+}
+
+
+# ==== standard GSEA (the default method) ====================================
+
+#' Summarise tied EC scores and the pathways they can affect
+#'
+#' Reporting only: nothing here changes a score or an order. ECs are tied when
+#' their scores are exactly equal. The order of tied ECs can change a pathway's
+#' enrichment score only when a set of equal-scored ECs holds both members and
+#' non-members of that pathway: swapping two members, or two non-members,
+#' leaves the running sum where it was. That condition is what is reported, so
+#' no threshold is involved.
+#'
+#' @param ec_scores Named numeric vector: one score per EC.
+#' @param pathways  Named list: pathway -> character vector of EC ids.
+#' @return A list: `n_ec`, `n_tied_ec` (ECs sharing their score with at least
+#'   one other EC), `prop_tied_ec`, `n_tie_groups` (distinct scores held by
+#'   more than one EC) and `tie_sensitive_pathways` (names of the pathways
+#'   whose enrichment score can depend on the order of tied ECs).
+#' @examples
+#' mmc_gsea_tie_summary(c(E1 = 2, E2 = 1, E3 = 1, E4 = -1),
+#'                      list(mixed = c("E1", "E2"), whole = c("E2", "E3")))
+mmc_gsea_tie_summary <- function(ec_scores, pathways) {
+  n     <- length(ec_scores)
+  group <- match(ec_scores, unique(ec_scores))   # exact equality, no rounding
+  size  <- tabulate(group, nbins = max(group, 0L))
+  tied  <- size[group] > 1L
+  sensitive <- vapply(pathways, function(p) {
+    inside <- tabulate(group[names(ec_scores) %in% as.character(p)],
+                       nbins = length(size))
+    any(inside > 0L & inside < size)
+  }, logical(1))
+  list(n_ec = n,
+       n_tied_ec = sum(tied),
+       prop_tied_ec = if (n > 0L) sum(tied) / n else NA_real_,
+       n_tie_groups = sum(size > 1L),
+       tie_sensitive_pathways = as.character(names(pathways)[sensitive]))
+}
+
+#' Say in words what a tie summary found, for the report
+#'
+#' The one wording of the tie statistics, so the report states what
+#' `mmc_gsea_tie_summary()` counted and decides nothing itself.
+#'
+#' @param ties A `mmc_gsea_tie_summary()` result, or NULL (the legacy method
+#'   reports no tie summary).
+#' @return A single character scalar, or NULL when `ties` is not a tie summary.
+#' @examples
+#' mmc_gsea_tie_sentence(mmc_gsea_tie_summary(
+#'   c(E1 = 2, E2 = 1, E3 = 1), list(P = c("E1", "E2"))))
+mmc_gsea_tie_sentence <- function(ties) {
+  if (!is.list(ties) || length(ties$n_ec) != 1L || length(ties$n_tied_ec) != 1L) {
+    return(NULL)
+  }
+  if (ties$n_tied_ec == 0) {
+    return(sprintf("None of the %d ranked EmpiricalCompounds share a score.",
+                   as.integer(ties$n_ec)))
+  }
+  n_sens <- length(ties$tie_sensitive_pathways)
+  sprintf(paste0(
+    "%d of the %d ranked EmpiricalCompounds (%.1f%%) share their score with at ",
+    "least one other EC. Each keeps its own ranking position; ECs with equal ",
+    "scores are ordered by EC id, and no score is altered. %s"),
+    as.integer(ties$n_tied_ec), as.integer(ties$n_ec),
+    100 * ties$n_tied_ec / ties$n_ec,
+    if (n_sens == 0L) {
+      "No tested pathway's enrichment score depends on that order."
+    } else {
+      sprintf(paste0("The enrichment score of %d tested pathway(s) can depend ",
+                     "on that order, because a group of equal-scored ECs holds ",
+                     "both members and non-members of the pathway."), n_sens)
+    })
+}
+
+#' Standard preranked GSEA on EmpiricalCompound scores
+#'
+#' The default method: `fgsea::fgseaSimple()` on the named, signed EC-score
+#' vector, with every EC at its own ranking position. The enrichment score, the
+#' permutation null, the p-value, NES, the BH adjustment over the tested
+#' pathways and the leading edge are fgsea's; nothing is computed here.
+#'
+#' What this function adds is only what makes the call reproducible and its
+#' result usable beside the legacy method's:
+#' \itemize{
+#'   \item ECs with equal scores are put in a fixed order, by EC id in the C
+#'     locale, before the call. fgsea orders by score with a stable sort, so
+#'     that order is the one it scores. The scores are passed unchanged.
+#'   \item fgsea draws its permutation seeds from R's RNG, so the call runs
+#'     under `seed`, on a serial backend.
+#'   \item fgsea's own tie warning is replaced by the tie summary and warning
+#'     below, because it says the order of tied items is arbitrary and here it
+#'     is not. Every other fgsea warning reaches the caller untouched.
+#'   \item the result is returned in the shape of `mmc_gsea_metaboanalyst()`.
+#' }
+#'
+#' Differences from the legacy method that follow from using fgsea as it is:
+#' the permutation universe is the ECs, not the distinct scores; a pathway
+#' holding ECs with equal scores is scored like any other (no ES = 0
+#' fallback); a pathway holding every ranked EC is not tested (fgsea caps the
+#' size at one less than the list); and a pathway whose permutations never
+#' produced a score of the observed sign has `NA` for NES, p and adjusted p,
+#' with fgsea's warning, rather than a number.
+#'
+#' @param pathways  Named list: pathway -> character vector of EC ids.
+#' @param ec_scores Named numeric vector: one signed score per EC. ECs without
+#'   a finite score or a name are not ranked, as in the legacy method.
+#' @param n_perm    Permutations.
+#' @param min_size,max_size Bounds on the number of ranked ECs in a pathway.
+#' @param seed      Seed the permutations are drawn under.
+#' @return A data.frame with one row per tested pathway: `pathway`, `pval`,
+#'   `padj`, `ES`, `NES`, `nMoreExtreme`, `size`, `leadingEdge` (`"; "`-joined
+#'   EC ids), and `es_defaulted` (always FALSE) and `es_reason` (always NA),
+#'   kept so both methods return one shape. Zero rows when no pathway passes
+#'   the size filter. A non-empty result carries the attribute `"mmc_ties"`,
+#'   the `mmc_gsea_tie_summary()` of the ranked ECs and the tested pathways.
+#' @examples
+#' \dontrun{
+#' mmc_gsea_fgsea(list(P = c("E1", "E2")), c(E1 = 2, E2 = 1, E3 = -1, E4 = -2))
+#' }
+mmc_gsea_fgsea <- function(pathways, ec_scores,
+                           n_perm   = .MMC_GSEA_DEFAULTS$n_perm,
+                           min_size = .MMC_GSEA_DEFAULTS$min_size,
+                           max_size = .MMC_GSEA_DEFAULTS$max_size,
+                           seed     = .MMC_GSEA_DEFAULTS$seed) {
+  n_perm   <- .mmc_as_seed(n_perm, "n_perm")
+  seed     <- .mmc_as_seed(seed, "seed")
+  min_size <- .mmc_as_seed(min_size, "min_size")
+  max_size <- .mmc_gsea_check_max_size(max_size)
+  if (n_perm < 1L) .mmc_stop("n_perm must be at least 1; got ", n_perm, ".")
+
+  empty <- data.frame(pathway = character(0), pval = numeric(0),
+                      padj = numeric(0), ES = numeric(0), NES = numeric(0),
+                      nMoreExtreme = numeric(0), size = numeric(0),
+                      leadingEdge = character(0), es_defaulted = logical(0),
+                      es_reason = character(0), stringsAsFactors = FALSE)
+  if (length(pathways) == 0 || length(ec_scores) == 0 ||
+      is.null(names(ec_scores))) {
+    return(empty)
+  }
+  for (pkg in c("fgsea", "BiocParallel")) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      .mmc_stop("package '", pkg, "' is required for the mummichog GSEA.")
+    }
+  }
+  # The same ranked universe as the legacy method: finite, named scores.
+  keep <- is.finite(ec_scores) & !is.na(names(ec_scores)) &
+    nzchar(names(ec_scores))
+  ec_scores <- ec_scores[keep]
+  if (length(ec_scores) == 0) return(empty)
+  if (anyDuplicated(names(ec_scores)) > 0L) {
+    .mmc_stop("EC scores must carry one score per EC id; ",
+              sum(duplicated(names(ec_scores))), " id(s) are repeated.")
+  }
+
+  # Equal scores in a fixed order: by EC id, in the C locale ("radix" sorts
+  # character keys that way on every platform). The scores are not changed.
+  ec   <- ec_scores[order(-ec_scores, names(ec_scores), method = "radix")]
+  sets <- lapply(pathways, as.character)
+
+  res <- withr::with_seed(seed, withCallingHandlers(
+    fgsea::fgseaSimple(pathways = sets, stats = ec, nperm = n_perm,
+                       minSize = min_size, maxSize = max_size, gseaParam = 1,
+                       BPPARAM = BiocParallel::SerialParam()),
+    warning = function(w) {
+      if (grepl("ties in the preranked stats", conditionMessage(w),
+                fixed = TRUE)) {
+        invokeRestart("muffleWarning")
+      }
+    }))
+  if (nrow(res) == 0) return(empty)
+
+  out <- data.frame(
+    pathway      = as.character(res$pathway),
+    pval         = as.numeric(res$pval),
+    padj         = as.numeric(res$padj),
+    ES           = as.numeric(res$ES),
+    NES          = as.numeric(res$NES),
+    nMoreExtreme = as.numeric(res$nMoreExtreme),
+    size         = as.numeric(res$size),
+    leadingEdge  = vapply(res$leadingEdge, function(x) {
+      if (length(x) == 0L) NA_character_ else paste(x, collapse = "; ")
+    }, character(1), USE.NAMES = FALSE),
+    es_defaulted = FALSE,
+    es_reason    = NA_character_,
+    stringsAsFactors = FALSE
+  )
+  ties <- mmc_gsea_tie_summary(ec, sets[out$pathway])
+  if (length(ties$tie_sensitive_pathways) > 0L) {
+    warning("mummichog GSEA: ", ties$n_tied_ec, " of ", ties$n_ec,
+            " EmpiricalCompounds share their score with another EC, and the ",
+            "enrichment score of ", length(ties$tie_sensitive_pathways),
+            " tested pathway(s) can depend on the order of those ECs. The ",
+            "order is fixed by EC id; the pathways are named in the result.",
+            call. = FALSE)
+  }
+  attr(out, "mmc_ties") <- ties
+  out
+}
+
+
+# ==== upstream ranked-input construction (legacy method) ====================
 
 #' Build the two ranked vectors MetaboAnalyst's GSEA engine consumes
 #'
@@ -1040,7 +1348,19 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
 
 #' The one sanctioned description of NES sign for this analysis
 #'
-#' Two independent reasons NES sign must not be over-read here:
+#' One sentence per method, kept in a single function so every table, plot,
+#' export and report sentence says the same thing, and so the regression tests
+#' have one place to assert.
+#'
+#' **`"fgsea"` (default).** The ranking is the signed EC score, so the sign is
+#' the ordinary GSEA one: which end of the ranked list the pathway's ECs are
+#' concentrated at. It is still not described as a per-metabolite direction,
+#' because an EC takes the largest signed score among its features (on the
+#' python engine, after features sharing an m/z are merged): a positive EC
+#' score says only that at least one of its features scores positive.
+#'
+#' **`"metaboanalyst_legacy"`.** Two independent reasons NES sign must not be
+#' over-read there:
 #'
 #'   1. the ranked vector is transformed to |score|
 #'      (`stats <- abs(stats)^gseaParam`), so it carries no direction; and
@@ -1053,12 +1373,24 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
 #' Sign is therefore retained purely for parity with the reference
 #' implementation, and is deliberately NOT described as a direction — neither
 #' biological up/down, nor a claim about the magnitude of the pathway members'
-#' own scores. Kept as a single function so every table, plot, export and
-#' report sentence says the same thing, and so the regression test has one
-#' place to assert.
+#' own scores.
 #'
+#' @param method `"fgsea"` (default) or `"metaboanalyst_legacy"`.
 #' @return A single character scalar.
-mmc_gsea_nes_note <- function() {
+#' @examples
+#' mmc_gsea_nes_note()
+#' mmc_gsea_nes_note("metaboanalyst_legacy")
+mmc_gsea_nes_note <- function(method = .MMC_GSEA_METHODS[[1]]) {
+  method <- mmc_gsea_method(list(gsea_method = method))
+  if (identical(method, "fgsea")) {
+    return(paste0(
+      "A positive NES means the pathway's EmpiricalCompounds are concentrated ",
+      "among the highest-scoring ECs of the ranked list, a negative NES among ",
+      "the lowest-scoring. An EC takes the largest signed score among its ",
+      "features, so a positive EC score says only that at least one of its ",
+      "features scores positive: NES sign is not a per-metabolite direction ",
+      "of change."))
+  }
   paste0("NES sign is retained to reproduce the pinned MetaboAnalystR result. ",
          "Because the reference implementation transforms and reorders the ",
          "score vector after pathway positions are constructed, NES sign ",
@@ -1070,17 +1402,24 @@ mmc_gsea_nes_note <- function() {
 
 # ==== the GSEA run ==========================================================
 
-#' Run MetaboAnalyst-style GSEA on the mummichog EmpiricalCompound universe
+#' Run GSEA on the python mummichog engine's EmpiricalCompound universe
 #'
 #' Uses the FULL ranked EC list — no feature significance cutoff — so this is a
 #' genuinely different question from the ORA the pinned engine already reported.
 #' The engine's own results are read-only inputs here; nothing of the ORA is
 #' recomputed or overwritten.
 #'
-#' Defaults are MetaboAnalyst's (`n_perm = 100`, `gsea_param = 1`,
-#' `min_size = 1`, `max_size = Inf`, `seed = 123`). Overriding any of them is a
-#' deliberate departure from the reference implementation and is reported back
-#' in `deviations`.
+#' The EC scores (`mmc_ec_scores()`) and the pathway EC sets
+#' (`mmc_pathway_ec_sets()`) are built the same way for both methods; `method`
+#' decides only how they are tested: `"fgsea"` hands them to
+#' `mmc_gsea_fgsea()`, `"metaboanalyst_legacy"` to `mmc_gsea_ranked_inputs()`
+#' and `mmc_gsea_metaboanalyst()`, with a warning.
+#'
+#' Setting defaults are MetaboAnalyst's (`n_perm = 100`, `gsea_param = 1`,
+#' `min_size = 1`, `max_size = Inf`, `seed = 123`). For the legacy method,
+#' overriding any of them is a departure from the reference implementation and
+#' is reported back in `deviations`; for `"fgsea"` they are plain settings,
+#' reported in `params`.
 #'
 #' @param files    One contrast's mummichog output files.
 #' @param de_table That contrast's DE table (for the signed ranking statistic).
@@ -1096,6 +1435,8 @@ mmc_gsea_nes_note <- function() {
 #'   `mmc_gsea_metaboanalyst()`; defaults are the pinned upstream values.
 #' @param rank_metric How features sharing one m/z are merged (see
 #'   `mmc_ec_scores()`).
+#' @param method `"fgsea"` (default) or `"metaboanalyst_legacy"`; resolve it
+#'   from config with `mmc_gsea_method()`.
 #' @return `NULL` when GSEA cannot run (fgsea unavailable, no model, no ECs, no
 #'   usable statistic, no pathway passing the size filter) and also when the
 #'   engine itself fails — the two are reported apart, by a warning naming the
@@ -1106,15 +1447,25 @@ mmc_gsea_nes_note <- function() {
 #'       `Pathway size (model compounds)`, `Detected ECs`, `Tested size`, `ES`,
 #'       `NES`, `P.Value`, `padj`, `Leading-edge EmpiricalCompounds`, sorted by
 #'       ascending `P.Value`.}
+#'     \item{method, method_label}{The method that ran and its one-phrase
+#'       description (`mmc_gsea_method_label()`).}
 #'     \item{ranks}{The signed EC score vector the ranking was built from.}
-#'     \item{stats, tie_ranks}{The two vectors handed to the engine.}
+#'     \item{stats, tie_ranks}{The two vectors handed to the legacy engine;
+#'       `NULL` for `"fgsea"`, which is given `ranks` itself.}
+#'     \item{ties}{`mmc_gsea_tie_summary()` of the ranked ECs and the tested
+#'       pathways; `NULL` for the legacy method.}
+#'     \item{n_p_unavailable}{Tested pathways without a p-value (fgsea could
+#'       not compute one); always 0 for the legacy method.}
 #'     \item{metric, metric_label, de_method}{Which ranking statistic was
 #'       chosen, why, and the DE method that decided it.}
 #'     \item{nes_note}{`mmc_gsea_nes_note()`.}
 #'     \item{params}{The exact engine settings used.}
-#'     \item{deviations}{Character vector of departures from the pinned
-#'       reference defaults; empty when there are none.}
-#'     \item{reference}{The pinned MetaboAnalystR repo + commit, with
+#'     \item{deviations}{Legacy method: character vector of departures from
+#'       the pinned reference defaults, empty when there are none. Always
+#'       empty for `"fgsea"`, which has no reference defaults to depart from.}
+#'     \item{reference}{For `"fgsea"`, the function and package version that
+#'       computed the result. For the legacy method, the pinned MetaboAnalystR
+#'       repo + commit, with
 #'       `verified` / `unverified` naming which half of the pipeline the pin is
 #'       evidence for: the GSEA calculation from the ranked EC inputs is checked
 #'       against a reference generated by running upstream; the construction of
@@ -1128,9 +1479,14 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
                                max_size   = .MMC_GSEA_DEFAULTS$max_size,
                                gsea_param = .MMC_GSEA_DEFAULTS$gsea_param,
                                seed       = .MMC_GSEA_DEFAULTS$seed,
-                               rank_metric = .MMC_GSEA_DEFAULTS$rank_metric) {
+                               rank_metric = .MMC_GSEA_DEFAULTS$rank_metric,
+                               method     = .MMC_GSEA_METHODS[[1]]) {
   # First, before the "cannot run here" branches below: an invalid parameter is
-  # a caller error and must not be reported as "GSEA was not applicable".
+  # a caller error and must not be reported as "GSEA was not applicable". The
+  # method is validated exactly (no partial matching: "metaboanalyst" must not
+  # quietly select the legacy method).
+  method <- mmc_gsea_method(list(gsea_method = method))
+  is_legacy <- identical(method, "metaboanalyst_legacy")
   .mmc_gsea_check_param(gsea_param)
   # Validated and normalised once, here, so the value that runs is the value
   # reported: a result that said min_size = 0 while 1 was applied could not be
@@ -1178,12 +1534,21 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
     message("mummichog GSEA: no pathway has a detected EmpiricalCompound — skipping")
     return(NULL)
   }
-  ranked <- mmc_gsea_ranked_inputs(ec_scores)
-
+  # The two methods are given the same EC scores and the same pathway sets.
+  ranked <- NULL
+  if (is_legacy) {
+    warning(.mmc_gsea_legacy_warning(), call. = FALSE)
+    ranked <- mmc_gsea_ranked_inputs(ec_scores)
+  }
   res <- tryCatch(
-    mmc_gsea_metaboanalyst(sets, ranked$stats, ranked$ranks, n_perm = n_perm,
-                           min_size = min_size, max_size = max_size,
-                           gsea_param = gsea_param, seed = seed),
+    if (is_legacy) {
+      mmc_gsea_metaboanalyst(sets, ranked$stats, ranked$ranks, n_perm = n_perm,
+                             min_size = min_size, max_size = max_size,
+                             gsea_param = gsea_param, seed = seed)
+    } else {
+      mmc_gsea_fgsea(sets, ec_scores, n_perm = n_perm, min_size = min_size,
+                     max_size = max_size, seed = seed)
+    },
     error = function(e) {
       warning("mummichog GSEA: engine failed: ", conditionMessage(e),
               call. = FALSE)
@@ -1204,8 +1569,9 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   # Three different quantities, all reported rather than conflated:
   #   * model compounds  — what the pathway contains
   #   * detected ECs     — what this dataset saw in it
-  #   * tested size      — the tie-group index vector the engine scored, which
-  #                        can exceed detected ECs when ECs share a score
+  #   * tested size      — what the method scored. "fgsea": the pathway's
+  #                        ranked ECs. Legacy: the tie-group index vector the
+  #                        engine scored (see mmc_gsea_metaboanalyst())
   model_size <- vapply(res$pathway,
                        function(p) as.numeric(length(model$pathways[[p]])),
                        numeric(1), USE.NAMES = FALSE)
@@ -1232,73 +1598,77 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   )
   tbl <- tbl[order(tbl[["P.Value"]], na.last = TRUE), , drop = FALSE]
 
-  # Any departure from the pinned reference defaults is recorded, not hidden.
+  # Legacy method: any departure from the pinned reference defaults is
+  # recorded, not hidden. "fgsea" has no reference defaults to depart from, so
+  # it reports its settings in `params` and no deviations.
   deviations <- character(0)
   d <- .MMC_GSEA_DEFAULTS
-  if (!identical(as.numeric(n_perm), as.numeric(d$n_perm))) {
-    deviations <- c(deviations, sprintf(
-      "n_perm = %s (MetaboAnalyst default %s)", n_perm, d$n_perm))
-  }
-  if (!identical(as.numeric(min_size), as.numeric(d$min_size))) {
-    deviations <- c(deviations, sprintf(
-      "min_size = %s (MetaboAnalyst default %s)", min_size, d$min_size))
-  }
-  if (!identical(as.numeric(max_size), as.numeric(d$max_size))) {
-    deviations <- c(deviations, sprintf(
-      "max_size = %s (MetaboAnalyst default Inf)", max_size))
-  }
-  # gsea_param is not listed: .mmc_gsea_check_param() admits only the reference
-  # value, so it can never be a deviation.
-  if (!identical(as.numeric(seed), as.numeric(d$seed))) {
-    deviations <- c(deviations, sprintf(
-      "seed = %s (MetaboAnalyst default %s)", seed, d$seed))
-  }
-  # How features sharing one m/z are merged changes every EC score, and so every
-  # statistic downstream of it. Left out, a "min"/"max"/"median" run would
-  # report an empty deviation list while differing from the reference at the
-  # first step.
-  if (!identical(rank_metric, d$rank_metric)) {
-    deviations <- c(deviations, sprintf(
-      "rank_metric = '%s' (MetaboAnalyst default '%s')",
-      rank_metric, d$rank_metric))
-  }
-  # The single-permutable-pathway branch is OURS, not upstream's: the reference
-  # leaves that loop to the BiocParallel worker's RNG, which is not
-  # seed-deterministic, so there is nothing stable to reproduce. We seed it
-  # instead -- better behaviour, but not validated parity, and the fixture's
-  # six pathways never reach it. The engine reports whether it ran; a row count
-  # no longer implies it, since unpermutable pathways are tested without being
-  # permuted.
-  if (isTRUE(attr(res, "mmc_single_pathway_rng"))) {
-    deviations <- c(deviations, paste0(
-      "one permutable pathway: the permutation loop is seeded here, where the ",
-      "reference leaves it to a non-deterministic worker RNG — reproducible, ",
-      "but this branch is not covered by the parity fixture"))
-  }
-  # Returning a row for a pathway that cannot be permuted is also ours: the
-  # reference aborts on that input and produces no table at all, so this is a
-  # departure even though it only applies where upstream yields nothing.
-  n_unpermutable <- attr(res, "mmc_unpermutable")
-  if (isTRUE(n_unpermutable > 0)) {
-    deviations <- c(deviations, sprintf(
-      paste0("%d pathway(s) tested but not permuted: no draw exists for them ",
-             "(a tie-expanded size above the ranking, or a sole pathway ",
-             "covering all of it), so they take an all-zero null (ES = 0, ",
-             "p = 1) where the reference implementation aborts"),
-      n_unpermutable))
-  }
-  # Same series as the validated fgsea build but a different patch: allowed,
-  # and recorded. A different series never gets this far.
-  fgsea_note <- .mmc_gsea_check_fgsea(warn = FALSE)
-  if (!is.null(fgsea_note)) deviations <- c(deviations, fgsea_note)
-  # Upstream aggregates its permutation tallies by data.table ROW, which is only
-  # well defined for a single batch; we sum per pathway across batches instead.
-  if (n_perm > .MMC_GSEA_GRANULARITY) {
-    deviations <- c(deviations, sprintf(
-      paste0("n_perm = %s exceeds upstream's batch granularity (%s); ",
-             "permutation tallies are summed per pathway across batches, ",
-             "which upstream's row-indexed aggregation does not do"),
-      n_perm, .MMC_GSEA_GRANULARITY))
+  if (is_legacy) {
+    if (!identical(as.numeric(n_perm), as.numeric(d$n_perm))) {
+      deviations <- c(deviations, sprintf(
+        "n_perm = %s (MetaboAnalyst default %s)", n_perm, d$n_perm))
+    }
+    if (!identical(as.numeric(min_size), as.numeric(d$min_size))) {
+      deviations <- c(deviations, sprintf(
+        "min_size = %s (MetaboAnalyst default %s)", min_size, d$min_size))
+    }
+    if (!identical(as.numeric(max_size), as.numeric(d$max_size))) {
+      deviations <- c(deviations, sprintf(
+        "max_size = %s (MetaboAnalyst default Inf)", max_size))
+    }
+    # gsea_param is not listed: .mmc_gsea_check_param() admits only the reference
+    # value, so it can never be a deviation.
+    if (!identical(as.numeric(seed), as.numeric(d$seed))) {
+      deviations <- c(deviations, sprintf(
+        "seed = %s (MetaboAnalyst default %s)", seed, d$seed))
+    }
+    # How features sharing one m/z are merged changes every EC score, and so every
+    # statistic downstream of it. Left out, a "min"/"max"/"median" run would
+    # report an empty deviation list while differing from the reference at the
+    # first step.
+    if (!identical(rank_metric, d$rank_metric)) {
+      deviations <- c(deviations, sprintf(
+        "rank_metric = '%s' (MetaboAnalyst default '%s')",
+        rank_metric, d$rank_metric))
+    }
+    # The single-permutable-pathway branch is OURS, not upstream's: the reference
+    # leaves that loop to the BiocParallel worker's RNG, which is not
+    # seed-deterministic, so there is nothing stable to reproduce. We seed it
+    # instead -- better behaviour, but not validated parity, and the fixture's
+    # six pathways never reach it. The engine reports whether it ran; a row count
+    # no longer implies it, since unpermutable pathways are tested without being
+    # permuted.
+    if (isTRUE(attr(res, "mmc_single_pathway_rng"))) {
+      deviations <- c(deviations, paste0(
+        "one permutable pathway: the permutation loop is seeded here, where the ",
+        "reference leaves it to a non-deterministic worker RNG — reproducible, ",
+        "but this branch is not covered by the parity fixture"))
+    }
+    # Returning a row for a pathway that cannot be permuted is also ours: the
+    # reference aborts on that input and produces no table at all, so this is a
+    # departure even though it only applies where upstream yields nothing.
+    n_unpermutable <- attr(res, "mmc_unpermutable")
+    if (isTRUE(n_unpermutable > 0)) {
+      deviations <- c(deviations, sprintf(
+        paste0("%d pathway(s) tested but not permuted: no draw exists for them ",
+               "(a tie-expanded size above the ranking, or a sole pathway ",
+               "covering all of it), so they take an all-zero null (ES = 0, ",
+               "p = 1) where the reference implementation aborts"),
+        n_unpermutable))
+    }
+    # Same series as the validated fgsea build but a different patch: allowed,
+    # and recorded. A different series never gets this far.
+    fgsea_note <- .mmc_gsea_check_fgsea(warn = FALSE)
+    if (!is.null(fgsea_note)) deviations <- c(deviations, fgsea_note)
+    # Upstream aggregates its permutation tallies by data.table ROW, which is only
+    # well defined for a single batch; we sum per pathway across batches instead.
+    if (n_perm > .MMC_GSEA_GRANULARITY) {
+      deviations <- c(deviations, sprintf(
+        paste0("n_perm = %s exceeds upstream's batch granularity (%s); ",
+               "permutation tallies are summed per pathway across batches, ",
+               "which upstream's row-indexed aggregation does not do"),
+        n_perm, .MMC_GSEA_GRANULARITY))
+    }
   }
 
   n_defaulted <- sum(res$es_defaulted)
@@ -1310,43 +1680,61 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
                   collapse = "; "),
             "); flagged in the results table with the reason.")
   }
-  message("mummichog GSEA: ", nrow(tbl), " pathways over ", length(ec_scores),
-          " EmpiricalCompounds (", length(ranked$stats),
+  # One ranked position per EC for "fgsea"; one per distinct score for legacy.
+  n_positions <- if (is_legacy) length(ranked$stats) else length(ec_scores)
+  n_p_unavailable <- sum(is.na(res$pval))
+  if (n_p_unavailable > 0) {
+    message("mummichog GSEA: ", n_p_unavailable, "/", nrow(res), " tested ",
+            "pathway(s) have no p-value: no permutation gave a score of the ",
+            "observed sign. They are kept in the results table with NA.")
+  }
+  message("mummichog GSEA (", method, "): ", nrow(tbl), " pathways over ",
+          length(ec_scores), " EmpiricalCompounds (", n_positions,
           " ranked positions), ranked by ", rank$label)
+  fgsea_version <- as.character(utils::packageVersion("fgsea"))
 
   list(
     table        = tbl,
+    method       = method,
+    method_label = mmc_gsea_method_label(method, fgsea_version),
     ranks        = ec_scores,
     stats        = ranked$stats,
     tie_ranks    = ranked$ranks,
+    ties         = attr(res, "mmc_ties"),
     metric       = rank$metric,
     metric_label = rank$label,
     de_method    = rank$de_method,
-    nes_note     = mmc_gsea_nes_note(),
+    nes_note     = mmc_gsea_nes_note(method),
     params       = list(n_perm = n_perm, min_size = min_size,
                         max_size = max_size, gsea_param = gsea_param,
                         seed = seed, rank_metric = rank_metric,
-                        fgsea_version = as.character(
-                          utils::packageVersion("fgsea"))),
+                        fgsea_version = fgsea_version),
     deviations   = deviations,
-    # Scoped deliberately: the pin is evidence for the GSEA calculation, which
-    # is checked against a reference generated by running upstream. It is not a
-    # claim that the ranked EC inputs were built the way upstream builds them —
-    # that part is matched by reading the source and is unverified (see
-    # mmc_ec_scores()). A consumer stating "reproduces MetaboAnalystR" from this
-    # field alone would be overstating what was checked.
-    reference    = list(repo = .MMC_GSEA_REF_REPO,
-                        commit = .MMC_GSEA_REF_COMMIT,
-                        verified = "GSEA calculation from the ranked EC inputs",
-                        unverified = paste0(
-                          "construction of the ranked EC inputs, in particular ",
-                          "the m/z merge in mmc_ec_scores(), which has no ",
-                          "counterpart in the single-dataset upstream path and ",
-                          "is covered by no parity fixture")),
+    reference    = if (!is_legacy) {
+      list(method = "fgsea::fgseaSimple", package = "fgsea",
+           version = fgsea_version)
+    } else {
+      # Scoped deliberately: the pin is evidence for the GSEA calculation,
+      # which is checked against a reference generated by running upstream. It
+      # is not a claim that the ranked EC inputs were built the way upstream
+      # builds them — that part is matched by reading the source and is
+      # unverified (see mmc_ec_scores()). A consumer stating "reproduces
+      # MetaboAnalystR" from this field alone would be overstating what was
+      # checked.
+      list(repo = .MMC_GSEA_REF_REPO,
+           commit = .MMC_GSEA_REF_COMMIT,
+           verified = "GSEA calculation from the ranked EC inputs",
+           unverified = paste0(
+             "construction of the ranked EC inputs, in particular ",
+             "the m/z merge in mmc_ec_scores(), which has no ",
+             "counterpart in the single-dataset upstream path and ",
+             "is covered by no parity fixture"))
+    },
     contrast     = contrast,
     n_ec         = length(ec_scores),
-    n_positions  = length(ranked$stats),
+    n_positions  = n_positions,
     n_pathways   = nrow(tbl),
+    n_p_unavailable = n_p_unavailable,
     n_es_defaulted = n_defaulted,
     es_fallback_reasons = if (n_defaulted == 0) character(0) else
       sort(unique(res$es_reason[res$es_defaulted]))

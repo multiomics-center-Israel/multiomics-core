@@ -113,6 +113,37 @@ test_that("the python engine keeps its own ORA semantics in the overview", {
   expect_identical(ov_row(ov, "b")[["GSEA status"]], "Not tested by GSEA")
 })
 
+test_that("a pathway GSEA tested without a p-value is not shown as untested", {
+  pw <- data.frame(pathway = c("a", "b", "c"), overlap_size = c(2, 1, 1),
+                   pathway_size = c(5, 4, 4), `p-value` = c(0.01, 0.3, 0.4),
+                   check.names = FALSE)
+  tbl <- build_mummichog_pathway_table(pw)
+  # "b" is in the GSEA table with no p-value (standard fgsea could not compute
+  # one); "c" is not in the table at all.
+  gsea <- data.frame(Pathway = c("a", "b"), P.Value = c(0.2, NA),
+                     padj = c(0.3, NA), stringsAsFactors = FALSE)
+  expect_identical(.MMC_GSEA_P_UNAVAILABLE, "Tested; p-value unavailable")
+
+  ov <- build_mummichog_overview(tbl, gsea_table = gsea, engine = "python")
+  expect_identical(ov_row(ov, "b")[["GSEA status"]], "Tested; p-value unavailable")
+  expect_identical(ov_row(ov, "c")[["GSEA status"]], "Not tested by GSEA")
+  expect_identical(ov_row(ov, "a")[["GSEA status"]], "Not nominal")
+  # the compact display shows the same status, since there is no p to format
+  disp <- mmc_overview_display(ov)
+  expect_identical(disp$GSEA[disp$Pathway == "b"], "Tested; p-value unavailable")
+
+  s <- build_mummichog_summary(tbl, gsea_table = gsea)
+  label <- stats::setNames(s[["Mummichog GSEA"]], s$Pathway)
+  expect_identical(label[["b"]], "Tested; p-value unavailable")
+  expect_identical(label[["c"]], "Not tested")
+  # a missing p is never a nominal signal
+  expect_false(s[["Nominal Mummichog signal"]][s$Pathway == "b"])
+
+  # GSEA not run at all stays a third, separate state.
+  none <- build_mummichog_summary(tbl, gsea_table = NULL)
+  expect_true(all(none[["Mummichog GSEA"]] == "Not run"))
+})
+
 test_that("the evidence level rule is the one shared rule", {
   expect_identical(.mmc_evidence_level(c(0.01, 0.01, 0.2, NA), c(0.02, 0.2, 0.01, NA),
                                        p_cutoff = 0.05),

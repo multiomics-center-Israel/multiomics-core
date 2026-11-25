@@ -8,6 +8,19 @@
 # ID-comparison paths are exercised realistically; pathway membership is
 # invented for the tests and is not a biological claim.
 
+# Evaluate code that uses the legacy GSEA method (gsea_method =
+# "metaboanalyst_legacy"), muffling ONLY the known-defects warning that method
+# always gives. That warning is asserted once, in test-mummichog-gsea.R; here
+# it would otherwise repeat in every historical-compatibility test. Any other
+# warning still surfaces.
+with_legacy_gsea <- function(expr) {
+  withCallingHandlers(expr, warning = function(w) {
+    if (grepl("metaboanalyst_legacy", conditionMessage(w), fixed = TRUE)) {
+      invokeRestart("muffleWarning")
+    }
+  })
+}
+
 # A larger synthetic mummichog tree + model, big enough for a real fgsea run:
 # 24 EmpiricalCompounds, each with one feature and one candidate compound, and
 # three pathways of 8 compounds each. Pathway "PW_pos" holds the 8 highest

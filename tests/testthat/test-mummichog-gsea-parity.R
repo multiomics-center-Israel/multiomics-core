@@ -1,7 +1,13 @@
 # tests/testthat/test-mummichog-gsea-parity.R
 #
-# Parity test: our MetaboAnalyst-style GSEA engine must reproduce the PINNED
-# MetaboAnalystR implementation exactly on a stored reference.
+# HISTORICAL-COMPATIBILITY test of the LEGACY GSEA method
+# (gsea_method = "metaboanalyst_legacy"): mmc_gsea_metaboanalyst() must
+# reproduce the PINNED MetaboAnalystR implementation exactly on a stored
+# reference. The pipeline's default method is standard fgsea
+# (mmc_gsea_fgsea(), tested in test-mummichog-gsea.R) and is NOT expected to
+# match this reference, which carries the upstream defects reported as
+# xia-lab/MetaboAnalystR#381. Every engine call below is the legacy engine, or
+# an adapter asked for it by name; the fixture is never repointed.
 #
 #   repo   xia-lab/MetaboAnalystR
 #   commit 398476ae2a0c996e390925fa62adc46b5ecde334
@@ -259,6 +265,12 @@ test_that("the MetaboAnalyst-equivalent defaults are the shipped defaults", {
   expect_identical(run$max_size,   quote(.MMC_GSEA_DEFAULTS$max_size))
   expect_identical(run$gsea_param, quote(.MMC_GSEA_DEFAULTS$gsea_param))
   expect_identical(run$seed,       quote(.MMC_GSEA_DEFAULTS$seed))
+
+  # The settings are shared, but the legacy METHOD is not a default anywhere:
+  # it runs only when it is named.
+  expect_identical(.MMC_GSEA_METHODS, c("fgsea", "metaboanalyst_legacy"))
+  expect_identical(run$method, quote(.MMC_GSEA_METHODS[[1]]))
+  expect_identical(formals(mmc_ma_gsea)$method, quote(.MMC_GSEA_METHODS[[1]]))
 })
 
 
@@ -288,18 +300,28 @@ test_that("an override of the reference defaults is reported as a deviation", {
   root <- withr::local_tempdir()
   f    <- build_gsea_fixture(root)
 
-  clean <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL",
-                              de_method = "limma")
+  clean <- with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "HL_vs_LL", de_method = "limma",
+    method = "metaboanalyst_legacy"))
   expect_length(clean$deviations, 0L)
   expect_identical(clean$params$n_perm, 100L)
   expect_equal(clean$params$min_size, 1)
   expect_equal(clean$params$max_size, Inf)
   expect_identical(clean$reference$commit, .MMC_GSEA_REF_COMMIT)
 
-  dev <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL",
-                            min_size = 3, n_perm = 200L)
+  dev <- with_legacy_gsea(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "HL_vs_LL", min_size = 3,
+    n_perm = 200L, method = "metaboanalyst_legacy"))
   expect_true(any(grepl("min_size = 3", dev$deviations)))
   expect_true(any(grepl("n_perm = 200", dev$deviations)))
+
+  # The default method has no reference defaults to depart from: the same
+  # overrides are settings there, reported in params, never as deviations.
+  std <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL",
+                            min_size = 3, n_perm = 200L)
+  expect_length(std$deviations, 0L)
+  expect_identical(std$params$n_perm, 200L)
+  expect_equal(std$params$min_size, 3)
 })
 
 
