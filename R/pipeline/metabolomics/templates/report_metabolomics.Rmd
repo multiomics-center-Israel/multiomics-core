@@ -88,7 +88,12 @@ make_dt <- function(df, caption = NULL, pageLength = 15, pval_cols = NULL,
     rownames = FALSE,
     class    = "compact stripe hover"
   )
-  # Format numeric columns: scientific notation for p-values, 2 decimals for the rest
+  # Format numeric columns: scientific notation for p-values, whole numbers for
+  # counts, and for the rest 2 decimals (with thousands separators) when
+  # |x| >= 1 but 3 significant digits when |x| < 1. Fixed 2 decimals showed
+  # small values (RF importances, loadings around 0.005) as 0.01 / 0.00, so
+  # rows that differed looked tied; 3 significant digits everywhere would
+  # instead turn 12345678 into 1.23e+7.
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   pval_pattern <- "^(p[._]?val|p[._]?adj|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
   pval_cols <- union(grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE),
@@ -96,7 +101,18 @@ make_dt <- function(df, caption = NULL, pageLength = 15, pval_cols = NULL,
   int_cols <- setdiff(intersect(extra_int, num_cols), pval_cols)
   other_cols <- setdiff(num_cols, c(pval_cols, int_cols))
   if (length(other_cols) > 0) {
-    tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+    other_idx <- which(names(df) %in% other_cols) - 1L
+    num_render <- DT::JS(
+      "function(data, type, row) {",
+      "  if (type !== 'display' || data === null || data === '') return data;",
+      "  var d = parseFloat(data);",
+      "  if (isNaN(d)) return data;",
+      "  if (d !== 0 && Math.abs(d) < 1) return d.toPrecision(3);",
+      "  return d.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});",
+      "}"
+    )
+    tbl$x$options$columnDefs <- c(tbl$x$options$columnDefs,
+                                  lapply(other_idx, function(i) list(targets = i, render = num_render)))
   }
   if (length(int_cols) > 0) {
     tbl <- DT::formatRound(tbl, columns = int_cols, digits = 0)
