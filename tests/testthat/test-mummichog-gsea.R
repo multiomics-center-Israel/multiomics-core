@@ -1416,6 +1416,12 @@ test_that("gsea_permutations is the legacy method's setting and is refused other
   expect_error(mmc_gsea_method(list(gsea_method = "fgsea",
                                     gsea_permutations = 10000)),
                "metaboanalyst_legacy")
+  # The message does not offer the legacy method as a way back to a result of
+  # the default method's former fgseaSimple calculation.
+  msg <- tryCatch(mmc_gsea_method(list(gsea_permutations = 100)),
+                  error = conditionMessage)
+  expect_match(msg, "it does not reproduce a result", fixed = TRUE)
+  expect_false(grepl("written for", msg, fixed = TRUE))
   # The legacy method keeps the key, with its meaning unchanged.
   expect_identical(mmc_gsea_method(list(gsea_method = "metaboanalyst_legacy",
                                         gsea_permutations = 200)),

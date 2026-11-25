@@ -67,9 +67,10 @@
 #'   flags), `method`, `method_label`, `params`, `deviations` (legacy only;
 #'   empty for `"fgsea"`), `reference`, `metric_label`, `nes_note`, `ties`
 #'   (`mmc_gsea_tie_summary()`; NULL for legacy), `n_p_unavailable`,
-#'   `log2err_summary` (`mmc_gsea_log2err_summary()`; NULL for legacy; the
-#'   per-pathway values are in `fgsea$log2err`), `n_ec`, `n_positions`,
-#'   `n_pathways`. The legacy method also returns `resmat`
+#'   `log2err` (fgsea's expected error of each log2 p-value, named by pathway,
+#'   as `run_mummichog_gsea()` returns it; NULL for legacy) and
+#'   `log2err_summary` (`mmc_gsea_log2err_summary()`; NULL for legacy), `n_ec`,
+#'   `n_positions`, `n_pathways`. The legacy method also returns `resmat`
 #'   (MetaboAnalyst's 5-column table, rounded and ordered as upstream), and its
 #'   `table` carries NES, p and adjusted p at MetaboAnalyst's 4 significant
 #'   digits; `"fgsea"` reports them unrounded.
@@ -88,7 +89,8 @@ mmc_ma_gsea <- function(ecs, pathways, n_perm = .MMC_GSEA_DEFAULTS$n_perm,
   if (identical(method, "fgsea") && !missing(n_perm)) {
     .mmc_stop("n_perm is the legacy method's number of permutations and was ",
               "given with method \"fgsea\", which has no such setting. Drop ",
-              "n_perm, or use method = \"metaboanalyst_legacy\".")
+              "n_perm. (method = \"metaboanalyst_legacy\" takes it, but is a ",
+              "different analysis.)")
   }
   sets <- stats::setNames(pathways$emp_cpds, pathways$name)
   fgsea_version <- as.character(utils::packageVersion("fgsea"))
@@ -136,6 +138,7 @@ mmc_ma_gsea <- function(ecs, pathways, n_perm = .MMC_GSEA_DEFAULTS$n_perm,
       metric_label = metric_label, nes_note = mmc_gsea_nes_note(method),
       ties = attr(res, "mmc_ties"),
       n_p_unavailable = sum(is.na(res$pval)),
+      log2err = stats::setNames(as.numeric(res$log2err), res$pathway),
       log2err_summary = mmc_gsea_log2err_summary(res),
       n_ec = length(ecs$ec_exp), n_positions = length(ranked_ecs),
       n_pathways = nrow(table)))
@@ -234,7 +237,7 @@ mmc_ma_gsea <- function(ecs, pathways, n_perm = .MMC_GSEA_DEFAULTS$n_perm,
                                        "engine's own ECs) and the GSEA ",
                                        "calculation from them")),
     metric_label = metric_label, nes_note = mmc_gsea_nes_note(method),
-    ties = NULL, n_p_unavailable = 0L, log2err_summary = NULL,
+    ties = NULL, n_p_unavailable = 0L, log2err = NULL, log2err_summary = NULL,
     n_ec = length(ecs$ec_exp), n_positions = length(ranked$stats),
     n_pathways = nrow(table))
 }

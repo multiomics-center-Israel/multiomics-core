@@ -234,6 +234,13 @@ test_that("GSEA is attached per contrast without disturbing the ORA fields", {
 
   # And the ORA table is untouched by GSEA running.
   expect_identical(s$table, build_mummichog_pathway_table(fx$pathways[["HL_vs_LL"]]))
+
+  # fgsea's error estimate for every tested pathway is kept in the section,
+  # named by the GSEA table's Pathway. This object (the sections target) is
+  # where the python engine's GSEA result lives; it has no run record on disk.
+  expect_true(is.numeric(s$gsea$log2err))
+  expect_setequal(names(s$gsea$log2err), s$gsea$table$Pathway)
+  expect_false("log2err" %in% names(s$gsea$table))
 })
 
 test_that("gsea_permutations reaches the legacy method only, and stops the default one", {

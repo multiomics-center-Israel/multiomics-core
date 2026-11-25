@@ -605,7 +605,10 @@ mmc_pathway_ec_sets <- function(model_pathways, ec_candidates, ec_ids) {
 #' test. The default method estimates p-values with fgsea's multilevel scheme
 #' and has no such quantity, so a config that sets the key was written for a
 #' different test: running it under another meaning, or ignoring it, would both
-#' change what the config asked for without saying so.
+#' change what the config asked for without saying so. The message does not
+#' offer the legacy method as a way back: a config written while the default
+#' ran `fgsea::fgseaSimple()` asked for that calculation, which the legacy
+#' method does not reproduce.
 #'
 #' @param mummi_cfg The `modes.metabolomics.enrichment.mummichog` config block
 #'   (a list; may be empty).
@@ -629,8 +632,11 @@ mmc_gsea_method <- function(mummi_cfg) {
               "permutations of that method's test. The default GSEA estimates ",
               "p-values with fgsea's multilevel method and has no such setting, ",
               "so the key is not reinterpreted. Remove gsea_permutations to run ",
-              "the default GSEA, or set gsea_method: metaboanalyst_legacy to ",
-              "run the analysis the key was written for.")
+              "the default GSEA. gsea_method: metaboanalyst_legacy still takes ",
+              "the key, but it is a different analysis (the earlier ",
+              "MetaboAnalyst-compatible GSEA): it does not reproduce a result ",
+              "the default method gave while it ran fgsea::fgseaSimple(), which ",
+              "can no longer be run.")
   }
   m
 }
@@ -1564,9 +1570,11 @@ mmc_gsea_nes_note <- function(method = .MMC_GSEA_METHODS[[1]]) {
 #'     \item{n_p_unavailable}{Tested pathways without a p-value (fgsea could
 #'       not compute one); always 0 for the legacy method.}
 #'     \item{log2err, log2err_summary}{Default method only (NULL for legacy):
-#'       fgsea's expected error of each log2 p-value, named by pathway, and its
-#'       `mmc_gsea_log2err_summary()`. Not a column of `table`, whose schema is
-#'       the same for both methods.}
+#'       fgsea's expected error of each log2 p-value, named by pathway (the
+#'       table's `Pathway`), and its `mmc_gsea_log2err_summary()`. Not a column
+#'       of `table`, whose schema is the same for both methods. The result is
+#'       not written to a run record by this engine: it is kept in the report
+#'       sections that hold it.}
 #'     \item{metric, metric_label, de_method}{Which ranking statistic was
 #'       chosen, why, and the DE method that decided it.}
 #'     \item{nes_note}{`mmc_gsea_nes_note()`.}
@@ -1603,7 +1611,8 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
   if (!is_legacy && !missing(n_perm)) {
     .mmc_stop("n_perm is the legacy method's number of permutations and was ",
               "given with method \"fgsea\", which has no such setting. Drop ",
-              "n_perm, or use method = \"metaboanalyst_legacy\".")
+              "n_perm. (method = \"metaboanalyst_legacy\" takes it, but is a ",
+              "different analysis.)")
   }
   .mmc_gsea_check_param(gsea_param)
   # Validated and normalised once, here, so the value that runs is the value
