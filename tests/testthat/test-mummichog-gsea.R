@@ -1368,6 +1368,10 @@ test_that("the default method is the pipeline's shared fgsea::fgsea() multilevel
   # the shared wrapper's own default, so neither can drift from the other.
   expect_identical(.MMC_GSEA_NPERM_SIMPLE, 10000L)
   expect_identical(.MMC_GSEA_NPERM_SIMPLE, formals(run_fgsea_core)$n_perm_simple)
+  # The call sets no eps, so fgsea's own default is the p-value floor. The
+  # report and the docs state it as 1e-50; this fails if fgsea's default is,
+  # or becomes, anything else.
+  expect_equal(eval(formals(fgsea::fgseaMultilevel)$eps), 1e-50)
 
   fx  <- gsea_tied_fixture()
   res <- suppressWarnings(mmc_gsea_fgsea(fx$sets, fx$ec, seed = 7))
@@ -1416,6 +1420,15 @@ test_that("gsea_permutations is the legacy method's setting and is refused other
   expect_error(mmc_gsea_method(list(gsea_method = "fgsea",
                                     gsea_permutations = 10000)),
                "metaboanalyst_legacy")
+  # With GSEA switched off nothing reads the key: it must not stop the ORA.
+  expect_identical(mmc_gsea_method(list(gsea_enabled = FALSE,
+                                        gsea_permutations = 100)), "fgsea")
+  expect_error(mmc_gsea_method(list(gsea_enabled = TRUE,
+                                    gsea_permutations = 100)),
+               "gsea_permutations")
+  # (an invalid method is still a config error either way)
+  expect_error(mmc_gsea_method(list(gsea_enabled = FALSE, gsea_method = "x")),
+               "gsea_method")
   # The message does not offer the legacy method as a way back to a result of
   # the default method's former fgseaSimple calculation.
   msg <- tryCatch(mmc_gsea_method(list(gsea_permutations = 100)),

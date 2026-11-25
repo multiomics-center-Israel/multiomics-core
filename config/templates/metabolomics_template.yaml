@@ -450,7 +450,8 @@ modes:
         # gsea_permutations belongs to gsea_method: metaboanalyst_legacy ONLY
         # (default 100, that method's number of permutations). The default
         # method has no permutation count to set, and setting this key with it
-        # stops the run instead of being ignored or given another meaning.
+        # (while gsea_enabled is true) stops the run instead of being ignored
+        # or given another meaning.
         # gsea_permutations: 100
 
         # Metabolic model (precedence: model_ref > model_json > built-in human).

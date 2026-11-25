@@ -600,7 +600,9 @@ mmc_pathway_ec_sets <- function(model_pathways, ec_candidates, ec_ids) {
 #' through this resolver too, so a partial name such as `"metaboanalyst"` can
 #' never select the legacy method by accident.
 #'
-#' It also refuses `gsea_permutations` together with the default method. That
+#' It also refuses `gsea_permutations` together with the default method,
+#' when GSEA is enabled (`gsea_enabled`, on by default); with GSEA switched off
+#' the key is never read and the ORA runs as before. That
 #' key is the number of permutations of the legacy method's fixed-permutation
 #' test. The default method estimates p-values with fgsea's multilevel scheme
 #' and has no such quantity, so a config that sets the key was written for a
@@ -626,7 +628,12 @@ mmc_gsea_method <- function(mummi_cfg) {
               "compatible GSEA, kept to reproduce earlier results); got '",
               paste(format(m), collapse = ", "), "'.")
   }
-  if (identical(m, "fgsea") && !is.null(mummi_cfg[["gsea_permutations"]])) {
+  # Only where GSEA is asked for (the switch as its consumers resolve it: on
+  # unless set otherwise). With GSEA off nothing reads the key, so nothing can
+  # be reinterpreted, and the ORA must not be stopped over it.
+  gsea_on <- isTRUE(mummi_cfg[["gsea_enabled"]] %||% TRUE)
+  if (gsea_on && identical(m, "fgsea") &&
+      !is.null(mummi_cfg[["gsea_permutations"]])) {
     .mmc_stop("mummichog.gsea_permutations is set, but it applies only to ",
               "gsea_method: metaboanalyst_legacy, where it is the number of ",
               "permutations of that method's test. The default GSEA estimates ",

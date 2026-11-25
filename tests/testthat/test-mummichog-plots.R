@@ -259,6 +259,12 @@ test_that("gsea_permutations reaches the legacy method only, and stops the defau
   # and not a value that is ignored or read as nPermSimple.
   expect_error(build(with_key(gsea_permutations = 200)), "gsea_permutations")
 
+  # ... unless GSEA is switched off: nothing reads the key then, and the ORA
+  # sections are built as usual, without a GSEA result.
+  off <- build(with_key(gsea_enabled = FALSE, gsea_permutations = 200))
+  expect_null(off[["HL_vs_LL"]]$gsea)
+  expect_s3_class(off[["HL_vs_LL"]]$plot, "ggplot")
+
   # Legacy method: the key is its number of permutations, as before.
   old <- suppressWarnings(build(with_key(
     gsea_method = "metaboanalyst_legacy", gsea_permutations = 200)))
