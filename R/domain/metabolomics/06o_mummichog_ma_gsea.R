@@ -1,7 +1,14 @@
 # R/domain/metabolomics/06o_mummichog_ma_gsea.R
 #
-# MetaboAnalyst-compatible mummichog GSEA on the engine's own joint-polarity
+# Mummichog GSEA on the MetaboAnalyst-compatible engine's own joint-polarity
 # empirical compounds.
+#
+# Two methods (`gsea_method`, see 06g): the default "fgsea" hands the two inputs
+# below to mmc_gsea_fgsea(), i.e. standard fgsea::fgseaSimple(), the same
+# function the python engine's GSEA uses. "metaboanalyst_legacy" reproduces
+# MetaboAnalystR's own peaks GSEA, with its known defects, and is described in
+# the rest of this header. The ECs, their scores and the pathway sets are the
+# engine's in both cases; only the test differs.
 #
 # MetaboAnalystR's peaks GSEA (.compute.mummichog.RT.fgsea) needs exactly two
 # inputs, and both are already produced — and validated — by this engine:
@@ -12,7 +19,7 @@
 #   * mSetObj$pathways$emp_cpds: pathway -> ECs after the minLib filter
 #     (.setup.psea.library; here mmc_ma_pathway_ecs()), i.e. the very pathway
 #     sets the ORA tests.
-# The statistical part is reused unchanged: mmc_gsea_ranked_inputs() (upstream
+# The legacy statistical part is reused unchanged: mmc_gsea_ranked_inputs() (upstream
 # L3470-L3483) and mmc_gsea_metaboanalyst() (util_fgsea.R .run_fgsea_inner),
 # both validated against the pinned reference by the GSEA parity fixture. What
 # the python adapter run_mummichog_gsea() adds — reading python mummichog's EC
@@ -33,22 +40,33 @@
 # row into a column; it is kept a row here.
 
 
-#' MetaboAnalyst-compatible GSEA over the engine's empirical compounds
+#' GSEA over the MetaboAnalyst-compatible engine's empirical compounds
+#'
+#' `"fgsea"` (default) is standard `fgsea::fgseaSimple()` through
+#' `mmc_gsea_fgsea()`; `"metaboanalyst_legacy"` reproduces MetaboAnalystR's
+#' peaks GSEA and warns. Both test the same EC scores (`ecs$ec_exp`) and
+#' pathway EC sets (`pathways$emp_cpds`).
 #'
 #' @param ecs      Output of `mmc_ma_build_ecs()` (uses `ec_exp`, `cpd_exp_dict`).
 #' @param pathways Output of `mmc_ma_pathway_ecs()`.
 #' @param n_perm,min_size,max_size,seed GSEA settings; defaults are
-#'   MetaboAnalyst's (100, 1, Inf, 123). Any other value is reported in
-#'   `deviations`.
+#'   MetaboAnalyst's (100, 1, Inf, 123). For the legacy method any other value
+#'   is reported in `deviations`.
 #' @param metric_label Provenance: how the features' scores were chosen.
+#' @param method `"fgsea"` (default) or `"metaboanalyst_legacy"`; resolve it
+#'   from config with `mmc_gsea_method()`.
 #' @return NULL when no pathway passes the size filter; otherwise a list with
-#'   `resmat` (MetaboAnalyst's 5-column table, rounded and ordered as upstream),
-#'   `fgsea` (the engine's full per-pathway result), `table` (the report table:
-#'   one row per tested pathway in `resmat` order, with `Pathway`, model size,
+#'   `fgsea` (the method's full per-pathway result), `table` (the report table:
+#'   one row per tested pathway ordered by p-value, with `Pathway`, model size,
 #'   matched compounds, detected ECs, tested size, `ES`, `NES`, `P.Value`,
 #'   `padj` (BH), the leading edge, the pathway's ECs and the ES-fallback
-#'   flags), `params`, `deviations`, `reference`, `metric_label`, `nes_note`,
-#'   `n_ec`, `n_positions`, `n_pathways`.
+#'   flags), `method`, `method_label`, `params`, `deviations` (legacy only;
+#'   empty for `"fgsea"`), `reference`, `metric_label`, `nes_note`, `ties`
+#'   (`mmc_gsea_tie_summary()`; NULL for legacy), `n_p_unavailable`, `n_ec`,
+#'   `n_positions`, `n_pathways`. The legacy method also returns `resmat`
+#'   (MetaboAnalyst's 5-column table, rounded and ordered as upstream), and its
+#'   `table` carries NES, p and adjusted p at MetaboAnalyst's 4 significant
+#'   digits; `"fgsea"` reports them unrounded.
 #' @examples
 #' \dontrun{
 #' g <- mmc_ma_gsea(ecs, pathways)
@@ -58,15 +76,66 @@ mmc_ma_gsea <- function(ecs, pathways, n_perm = .MMC_GSEA_DEFAULTS$n_perm,
                         min_size = .MMC_GSEA_DEFAULTS$min_size,
                         max_size = .MMC_GSEA_DEFAULTS$max_size,
                         seed = .MMC_GSEA_DEFAULTS$seed,
-                        metric_label = NA_character_) {
+                        metric_label = NA_character_,
+                        method = .MMC_GSEA_METHODS[[1]]) {
+  method <- mmc_gsea_method(list(gsea_method = method))
   sets <- stats::setNames(pathways$emp_cpds, pathways$name)
+  fgsea_version <- as.character(utils::packageVersion("fgsea"))
+
+  if (identical(method, "fgsea")) {
+    res <- mmc_gsea_fgsea(sets, ecs$ec_exp, n_perm = n_perm,
+                          min_size = min_size, max_size = max_size, seed = seed)
+    if (nrow(res) == 0) {
+      message("mummichog GSEA (fgsea): no pathway passed the size filter")
+      return(NULL)
+    }
+    res <- res[order(res$pval, na.last = TRUE), , drop = FALSE]
+    idx <- match(res$pathway, pathways$name)
+    ranked_ecs <- names(ecs$ec_exp)[is.finite(ecs$ec_exp)]
+    table <- data.frame(
+      check.names = FALSE, stringsAsFactors = FALSE,
+      "Pathway"                         = res$pathway,
+      "Pathway size (model compounds)"  = as.numeric(lengths(pathways$cpds)[idx]),
+      "Matched compounds"               = as.numeric(vapply(
+        pathways$cpds[idx], function(x)
+          length(intersect(x, names(ecs$cpd_exp_dict))), integer(1))),
+      "Detected ECs"                    = as.numeric(unname(lengths(sets[res$pathway]))),
+      "Tested size"                     = res$size,
+      "ES"                              = round(res$ES, 4),
+      "NES"                             = round(res$NES, 4),
+      "P.Value"                         = res$pval,
+      "padj"                            = res$padj,
+      "Leading-edge EmpiricalCompounds" = res$leadingEdge,
+      "EmpiricalCompounds"              = vapply(sets[res$pathway], function(p)
+        paste(p[p %in% ranked_ecs], collapse = ";"), character(1),
+        USE.NAMES = FALSE),
+      "ES defaulted by reference implementation" = res$es_defaulted,
+      "ES fallback reason"                       = res$es_reason)
+    rownames(table) <- NULL
+    return(list(
+      fgsea = res, table = table, method = method,
+      method_label = mmc_gsea_method_label(method, fgsea_version),
+      params = list(n_perm = n_perm, min_size = min_size, max_size = max_size,
+                    gsea_param = 1, seed = seed, fgsea_version = fgsea_version),
+      deviations = character(0),
+      reference = list(method = "fgsea::fgseaSimple", package = "fgsea",
+                       version = fgsea_version),
+      metric_label = metric_label, nes_note = mmc_gsea_nes_note(method),
+      ties = attr(res, "mmc_ties"),
+      n_p_unavailable = sum(is.na(res$pval)),
+      n_ec = length(ecs$ec_exp), n_positions = length(ranked_ecs),
+      n_pathways = nrow(table)))
+  }
+
+  # ---- legacy method: MetaboAnalystR's peaks GSEA, reproduced ----------------
+  warning(.mmc_gsea_legacy_warning(), call. = FALSE)
   ranked <- mmc_gsea_ranked_inputs(ecs$ec_exp)
   res <- mmc_gsea_metaboanalyst(sets, ranked$stats, ranked$ranks,
                                 n_perm = n_perm, min_size = min_size,
                                 max_size = max_size, gsea_param = 1,
                                 seed = seed)
   if (nrow(res) == 0) {
-    message("mummichog GSEA (metaboanalyst): no pathway passed the size filter")
+    message("mummichog GSEA (metaboanalyst_legacy): no pathway passed the size filter")
     return(NULL)
   }
 
@@ -141,16 +210,17 @@ mmc_ma_gsea <- function(ecs, pathways, n_perm = .MMC_GSEA_DEFAULTS$n_perm,
   if (!is.null(fgsea_note)) deviations <- c(deviations, fgsea_note)
 
   list(
-    resmat = res_mat, fgsea = res, table = table,
+    resmat = res_mat, fgsea = res, table = table, method = method,
+    method_label = mmc_gsea_method_label(method, fgsea_version),
     params = list(n_perm = n_perm, min_size = min_size, max_size = max_size,
-                  gsea_param = 1, seed = seed,
-                  fgsea_version = as.character(utils::packageVersion("fgsea"))),
+                  gsea_param = 1, seed = seed, fgsea_version = fgsea_version),
     deviations = deviations,
     reference = list(repo = .MMC_GSEA_REF_REPO, commit = .MMC_GSEA_REF_COMMIT,
                      verified = paste0("EC scores and pathway EC sets (the ",
                                        "engine's own ECs) and the GSEA ",
                                        "calculation from them")),
-    metric_label = metric_label, nes_note = mmc_gsea_nes_note(),
+    metric_label = metric_label, nes_note = mmc_gsea_nes_note(method),
+    ties = NULL, n_p_unavailable = 0L,
     n_ec = length(ecs$ec_exp), n_positions = length(ranked$stats),
     n_pathways = nrow(table))
 }

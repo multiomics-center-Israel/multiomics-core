@@ -429,9 +429,18 @@ modes:
         # On by default when mummichog is enabled; false runs the ORA alone.
         gsea_enabled: true
 
-        # GSEA settings. All four are optional and commented out on purpose:
-        # the values shown are the MetaboAnalystR defaults, and overriding any
-        # of them is a methodological deviation that the result records.
+        # GSEA method. Leave unset for the default, "fgsea": standard
+        # fgsea::fgseaSimple() on the signed EmpiricalCompound scores, every EC
+        # at its own ranking position. "metaboanalyst_legacy" is the earlier
+        # MetaboAnalyst-compatible GSEA; it has known defects (hit weights that
+        # are not the hits' own, and ES = 0 for pathways holding ECs with equal
+        # scores) and exists ONLY to reproduce results reported with it. It
+        # warns when used, and any other value stops the run.
+        # gsea_method: metaboanalyst_legacy
+
+        # GSEA settings. All four are optional and commented out on purpose;
+        # the values shown are the defaults (MetaboAnalystR's). With the legacy
+        # method, overriding one is recorded as a deviation from the reference.
         # gsea_seed is NOT the project seed above.
         # gsea_permutations: 100
         # gsea_seed: 123

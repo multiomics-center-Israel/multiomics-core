@@ -18,17 +18,20 @@
 #' One contrast's evidence for one pathway, as short text
 #'
 #' @param ora_lvl,gsea_lvl Levels from `.mmc_evidence_level()`.
-#' @param fdr Adjusted-p threshold (for the wording).
+#' @param gsea_p_unavailable Logical: GSEA tested the pathway but could give no
+#'   p-value. Its level is `"absent"` (there is no p to grade), yet it has a
+#'   result, so it must not read `"No result"`.
 #' @return Character vector, e.g. `"ORA Holm · GSEA nominal"`, `"—"` (results
 #'   but no nominal evidence) or `"No result"` (in neither test).
 #' @noRd
-.mmc_across_cell <- function(ora_lvl, gsea_lvl) {
+.mmc_across_cell <- function(ora_lvl, gsea_lvl,
+                             gsea_p_unavailable = rep(FALSE, length(gsea_lvl))) {
   ora  <- c(adjusted = "ORA Holm", nominal = "ORA nominal", none = "", absent = "")[ora_lvl]
   gsea <- c(adjusted = "GSEA FDR", nominal = "GSEA nominal", none = "", absent = "")[gsea_lvl]
   out <- ifelse(nzchar(ora) & nzchar(gsea), paste(ora, "·", gsea),
                 ifelse(nzchar(ora), ora, gsea))
   out[!nzchar(out)] <- "—"
-  out[ora_lvl == "absent" & gsea_lvl == "absent"] <- "No result"
+  out[ora_lvl == "absent" & gsea_lvl == "absent" & !gsea_p_unavailable] <- "No result"
   unname(out)
 }
 
@@ -108,7 +111,9 @@ build_mummichog_across_contrasts <- function(sections, fdr = .MMC_SUMMARY_FDR) {
       "GSEA BH FDR"         = ov[["GSEA BH FDR"]],
       "ORA level"           = ora_lvl,
       "GSEA level"          = gsea_lvl,
-      "Evidence"            = .mmc_across_cell(ora_lvl, gsea_lvl))
+      "Evidence"            = .mmc_across_cell(
+        ora_lvl, gsea_lvl,
+        gsea_p_unavailable = ov[["GSEA status"]] %in% .MMC_GSEA_P_UNAVAILABLE))
   }))
   if (is.null(long) || nrow(long) == 0L) return(NULL)
 

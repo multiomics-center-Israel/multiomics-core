@@ -192,6 +192,12 @@ build_mummichog_overview <- function(ora_table, gsea_table = NULL,
       nominal  = sprintf("Nominal (raw p < %g)", p_cutoff),
       none     = "Not nominal",
       absent   = "Not tested by GSEA")[gsea_lvl]
+  # A pathway in the GSEA table without a p-value was tested; "absent" above
+  # only means its p is missing, so name the real state.
+  if (is.data.frame(gsea_table)) {
+    gsea_status[is.na(gsea_p) & base$Pathway %in% gsea_table$Pathway] <-
+      .MMC_GSEA_P_UNAVAILABLE
+  }
 
   ora_nom  <- ora_lvl %in% c("adjusted", "nominal")
   gsea_nom <- gsea_lvl %in% c("adjusted", "nominal")

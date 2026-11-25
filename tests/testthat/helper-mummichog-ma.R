@@ -165,13 +165,15 @@ ma_evidence_fixture <- function(dir = tempfile("ma_ev_"), sig_ec = c(3, 1),
         "ES fallback reason" = NA_character_))
     }
     readr::write_tsv(gsea, file.path(ma_dir, "ma_gsea_results.tsv"), na = "NA")
-    info$gsea <- list(ran = TRUE,
+    # As the engine writes it for the default method. A record without
+    # `method` would be read as the legacy method (see 06n).
+    info$gsea <- list(ran = TRUE, method = "fgsea",
                       metric_label = "signed t statistic (synthetic)",
                       params = list(n_perm = 100, min_size = 3, max_size = 5000,
                                     seed = 123, fgsea_version = "0.0.0"),
                       deviations = list(),
-                      reference = list(repo = "xia-lab/MetaboAnalystR",
-                                       commit = "398476ae2a0c996e390925fa62adc46b5ecde334"),
+                      reference = list(method = "fgsea::fgseaSimple",
+                                       package = "fgsea", version = "0.0.0"),
                       adjustment = "BH (p.adjust 'fdr')", n_ec = 3, n_positions = 3,
                       n_pathways = 2)
   } else {
