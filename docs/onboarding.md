@@ -207,13 +207,16 @@ Next to the mode folders, the pipeline also writes `execution_info/`. It holds
 the config as used, its path, a timestamp, `sessionInfo()`, a copy of
 `_targets.R` and, when git is available, the commit hash. Keep it with the
 results, but treat it as a helpful record rather than proof of what ran:
-- **It can be stale.** It is a cached target, so it is rebuilt only when its
-  inputs (essentially the config) change. After a code-only change, its commit hash, timestamp and
-  session info can still describe an earlier build.
-- **It may be missing.** It is not built by every partial run, e.g.
-  `tar_make(names = starts_with("prot_"))`.
-- **A fresh run is reliable.** It is current after the first run in a new store,
-  or after `Rscript run.R --fresh`; the wizard always runs fresh.
+- **It is written when a run starts.** Every `tar_make()` that includes the
+  `execution_info_files` target rewrites it before any output is rebuilt.
+- **Check `run_status.txt`.** `completed` means `tar_make()` finished without
+  error; `failed` means it stopped, so outputs it did not reach are from an
+  earlier run. Only `Rscript run.R` records those two; a plain `tar_make()`
+  leaves `started`.
+- **Partial runs skip it unless named.** `tar_make(names = starts_with("prot_"))`
+  leaves it describing the previous run; add `execution_info_files` to `names`
+  (see the README). Even then, modes the partial run did not rebuild keep
+  outputs from an earlier run.
 
 To share results, zip the relevant `Results_*` folder.
 
@@ -245,9 +248,8 @@ For anything that is a chain of targets rather than a single function, run
 
 ## 7. Reproducing a previous run
 
-1.  Find the commit the run used. `execution_info/git_commit.txt` records it,
-    but check its date against `timestamp.txt` and your git history: it can be
-    stale (section 5).
+1.  Find the commit the run used. `execution_info/git_commit.txt` records it;
+    check that `run_status.txt` says `completed` (section 5).
 2.  Check out that commit and run `renv::restore()` with its `renv.lock`.
 3.  Use the config from `execution_info/config_used.yaml`, including its
     `params.seed`.
