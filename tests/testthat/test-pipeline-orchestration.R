@@ -83,6 +83,30 @@ test_that("everything that reads an RNA input file depends on rna_input_files", 
     }
 })
 
+test_that("the RNA bundle is a single-omics leaf written from finished objects", {
+    single <- pipe_rnaseq()
+    by_name <- setNames(single, get_target_names(single))
+
+    # Only a complete single-omics run writes a bundle.
+    expect_true("rna_bundle" %in% names(by_name))
+    expect_false("rna_bundle" %in% get_target_names(pipe_rnaseq(skip_outputs = TRUE)))
+    expect_identical(by_name$rna_bundle$settings$format, "file")
+
+    target_deps <- function(tgt) {
+        deps <- tgt$command$deps
+        if (length(deps) > 0) return(deps)
+        unlist(lapply(as.list(tgt$command$expr), all.vars))
+    }
+    expect_true(all(c("rna_pre", "rna_de_res", "rna_pathway_res", "rna_annot",
+                      "rna_trinotate_main", "config") %in% target_deps(by_name$rna_bundle)))
+
+    # A leaf: no other target reads it, so it cannot change any analysis or output.
+    readers <- names(by_name)[vapply(by_name, function(tgt) {
+        "rna_bundle" %in% target_deps(tgt)
+    }, logical(1))]
+    expect_length(readers, 0L)
+})
+
 test_that("every configured RNA input file is tracked, de_table lists included", {
     # load_omics_inputs() skips multi-value keys, but load_precomputed_rna_de()
     # reads files$de_table directly and supports one table per contrast. Left

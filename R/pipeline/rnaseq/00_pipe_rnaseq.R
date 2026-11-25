@@ -191,6 +191,28 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           clustering_res = rna_clustering_obj
         )
       ),
+      # Omics bundle: this run's finished objects, packaged for later
+      # integration (R/core/20_omics_bundle.R). A leaf: nothing reads it, so it
+      # cannot change any analysis, report or output. Written next to the
+      # Results_<name>_<round> folder, as <paths.out>/bundles/rnaseq/<id>/,
+      # where a rerun of the round does not overwrite it.
+      tar_target(
+        rna_bundle,
+        write_omics_bundle(
+          parts      = build_rnaseq_bundle_parts(
+            pre         = rna_pre,
+            de_res      = rna_de_res,
+            pathway_res = rna_pathway_res,
+            annot       = rna_annot,
+            trinotate   = rna_trinotate_main,
+            config      = config
+          ),
+          info       = omics_bundle_info(config, "rnaseq"),
+          root       = dirname(get_run_out_dir(config)),
+          provenance = bundle_provenance()
+        ),
+        format = "file"
+      ),
       # Legacy outputs (TSV files) - now receives clustering_res
       tar_target(
         rna_outputs_legacy,
