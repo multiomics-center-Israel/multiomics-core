@@ -75,6 +75,19 @@ test_that("objects that are not RNA results are refused", {
                                            de_res = list(dds = NULL, tables = list()),
                                            config = x$config),
                  "no DE tables")
+    # Header-only pre-computed DE file: one table, no rows.
+    empty_tab <- x$de_res$tables$B_vs_A[0, ]
+    expect_error(build_rnaseq_bundle_parts(pre = x$pre,
+                                           de_res = list(dds = NULL,
+                                                         tables = list(B_vs_A = empty_tab)),
+                                           config = x$config),
+                 "no DE tables")
+    # One empty table beside a non-empty one is still a usable result.
+    mixed <- list(dds = NULL, tables = list(B_vs_A = x$de_res$tables$B_vs_A,
+                                            C_vs_A = empty_tab))
+    expect_named(build_rnaseq_bundle_parts(pre = x$pre, de_res = mixed,
+                                           config = x$config)$de$tables,
+                 c("B_vs_A", "C_vs_A"))
     expect_error(build_rnaseq_bundle_parts(pre = list(meta = x$pre$meta),
                                            de_res = x$de_res, config = x$config))
 })

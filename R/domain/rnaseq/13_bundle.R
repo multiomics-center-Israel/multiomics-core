@@ -12,8 +12,8 @@
 #' @param pre Preprocessed RNA object (\code{rna_pre}): raw, filtered and
 #'   working matrices, the DE input, sample metadata, feature annotation, the
 #'   record of what ran (\code{info}) and the contrasts.
-#' @param de_res DE result (\code{rna_de_res}), with at least one table in
-#'   \code{tables}.
+#' @param de_res DE result (\code{rna_de_res}), with at least one non-empty
+#'   table in \code{tables}.
 #' @param pathway_res Enrichment result (\code{rna_pathway_res}), or NULL.
 #' @param annot Gene annotation (\code{rna_annot}), or NULL when not configured.
 #' @param trinotate Trinotate annotation (\code{rna_trinotate_main}), or NULL.
@@ -23,10 +23,13 @@
 build_rnaseq_bundle_parts <- function(pre, de_res, pathway_res = NULL, annot = NULL,
                                       trinotate = NULL, config) {
     assert_pre_contract(pre, stage = "rna")
-    # An empty list counts as missing: run_deseq2_de() returns tables = list()
-    # when every contrast was skipped, and a bundle with no contrast results
-    # would be advertised as complete while holding nothing to integrate.
-    if (!is.list(de_res) || length(de_res$tables) == 0) {
+    # Tables with no rows count as missing too: run_deseq2_de() returns
+    # tables = list() when every contrast was skipped, and a header-only
+    # pre-computed DE file loads as a zero-row table. Either way a bundle would
+    # be advertised as complete while holding nothing to integrate.
+    has_rows <- is.list(de_res) && is.list(de_res$tables) &&
+        any(vapply(de_res$tables, function(t) NROW(t) > 0L, logical(1)))
+    if (!has_rows) {
         stop("RNA bundle: de_res has no DE tables, so there is nothing to ",
              "integrate. Check the warnings from the DE step (a contrast whose ",
              "levels are not in the metadata is skipped); expected the output ",
