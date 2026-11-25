@@ -48,6 +48,45 @@ test_that("auto-generated contrasts are returned as the DE step resolved them", 
                      direct_limma_de(pre, expected, cfg))
 })
 
+# Pre-computed route: one small DE table per file, in a temp raw directory.
+precomputed_de_config <- function(files) {
+    dir <- withr::local_tempdir(.local_envir = parent.frame())
+    for (f in files) {
+        utils::write.table(
+            data.frame(FeatureID = c("g1", "g2"), log2FoldChange = c(1, -1),
+                       pvalue = c(0.01, 0.5), padj = c(0.02, 0.5)),
+            file.path(dir, f), sep = "\t", quote = FALSE, row.names = FALSE)
+    }
+    list(project = list(dir = dir), paths = list(raw = "."),
+         modes = list(rna = list(files = list(de_table = as.list(files)))))
+}
+
+test_that("pre-computed DE keeps supplied contrasts that labelled its tables", {
+    cfg <- precomputed_de_config(c("de_first.tsv", "de_second.tsv"))
+    supplied <- data.frame(Contrast_name = c("B_vs_A", "C_vs_A"), Factor = "Group",
+                           Numerator = c("B", "C"), Denominator = "A",
+                           stringsAsFactors = FALSE)
+
+    res <- suppressMessages(load_precomputed_rna_de(cfg, contrasts_df = supplied))
+
+    expect_named(res$tables, supplied$Contrast_name)
+    expect_identical(res$contrasts, supplied)
+})
+
+test_that("pre-computed DE records no contrasts when labels came from file names", {
+    # Two files, one supplied contrast: the loader cannot pair them and names
+    # the tables after the files, so the supplied table does not describe them.
+    cfg <- precomputed_de_config(c("de_first.tsv", "de_second.tsv"))
+    supplied <- data.frame(Contrast_name = "B_vs_A", Factor = "Group",
+                           Numerator = "B", Denominator = "A",
+                           stringsAsFactors = FALSE)
+
+    res <- suppressMessages(load_precomputed_rna_de(cfg, contrasts_df = supplied))
+
+    expect_named(res$tables, c("first", "second"))
+    expect_null(res$contrasts)
+})
+
 test_that("the RNA bundle carries the resolved contrasts", {
     skip_if_not_installed("limma")
     pre <- make_bc_pre()

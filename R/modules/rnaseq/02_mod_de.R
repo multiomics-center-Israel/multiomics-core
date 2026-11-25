@@ -9,7 +9,11 @@
 #' @return The DE result of the route that ran (\code{tables}, \code{design},
 #'   and \code{dds} for DESeq2), plus \code{contrasts}: the contrast table the
 #'   DE step used -- the supplied one, or the auto-generated one when none was
-#'   supplied. NULL only on the pre-computed route without a contrasts file.
+#'   supplied. On the pre-computed route it is set by
+#'   \code{load_precomputed_rna_de()}, and is NULL when the table names came
+#'   from the file names rather than from a contrasts table. Match it to
+#'   \code{tables} by \code{Contrast_name}: a contrast DESeq2 skipped (a level
+#'   absent from the metadata) has a row here but no table.
 mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
     assert_pre_contract(pre, stage = "rna")
 
@@ -20,10 +24,9 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
 
     if (has_precomputed) {
         message("RNA DE: loading pre-computed DE tables (skipping limma/DESeq2)")
-        de_res <- load_precomputed_rna_de(config, contrasts_df = inputs$contrasts)
-        # This route has no auto-generated fallback: the supplied table or NULL.
-        de_res$contrasts <- inputs$contrasts
-        return(de_res)
+        # The loader sets $contrasts itself: it alone knows whether the
+        # supplied names labelled the tables or it fell back to file names.
+        return(load_precomputed_rna_de(config, contrasts_df = inputs$contrasts))
     }
 
     # Extract DE configuration
