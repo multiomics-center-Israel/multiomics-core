@@ -191,11 +191,24 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           clustering_res = rna_clustering_obj
         )
       ),
-      # Omics bundle: this run's finished objects, packaged for later
-      # integration (R/core/20_omics_bundle.R). A leaf: nothing reads it, so it
-      # cannot change any analysis, report or output. Written next to the
-      # Results_<name>_<round> folder, as <paths.out>/bundles/rnaseq/<id>/,
-      # where a rerun of the round does not overwrite it.
+      # Omics bundle: this run's finished scientific objects (preprocessing,
+      # DE, pathway analysis, annotation), packaged for later integration
+      # (R/core/20_omics_bundle.R). Written next to the Results_<name>_<round>
+      # folder, as <paths.out>/bundles/rnaseq/<id>/, where a rerun of the round
+      # does not overwrite it. A leaf: nothing reads it, so it cannot change any
+      # analysis, report or output.
+      #
+      # Contract: a bundle is complete when its scientific inputs are available
+      # and its own integrity checks pass. It deliberately does not wait for the
+      # reporting targets (outputs, Shiny payload, fact sheet, report, summary)
+      # and does not certify that they succeeded: a failed HTML render does not
+      # make the DE or pathway results any less valid to integrate.
+      #
+      # The reverse holds too: error = "continue", so a failed bundle write is
+      # recorded as an errored target without stopping the reporting targets.
+      # Nothing is published on failure (staged write, checksums last), the
+      # target is retried on the next tar_make(), and run.R reports it, since
+      # tar_make() itself returns normally in that case.
       tar_target(
         rna_bundle,
         write_omics_bundle(
@@ -211,7 +224,8 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           root       = dirname(get_run_out_dir(config)),
           provenance = bundle_provenance()
         ),
-        format = "file"
+        format = "file",
+        error  = "continue"
       ),
       # Legacy outputs (TSV files) - now receives clustering_res
       tar_target(

@@ -100,6 +100,16 @@ test_that("the RNA bundle is a single-omics leaf written from finished objects",
     expect_true(all(c("rna_pre", "rna_de_res", "rna_pathway_res", "rna_annot",
                       "rna_trinotate_main", "config") %in% target_deps(by_name$rna_bundle)))
 
+    # A bundle failure must not stop the reporting targets (error = "continue")...
+    expect_identical(by_name$rna_bundle$settings$error, "continue")
+
+    # ...and the bundle does not wait for reporting: its contract is the
+    # scientific results, not every report artefact.
+    reporting <- c("rna_outputs_legacy", "rna_shiny_payload", "rna_fact_sheet",
+                   "rna_exec_summary", "rna_commentary_file", "rna_report",
+                   "rna_pipeline_summary")
+    expect_length(intersect(reporting, target_deps(by_name$rna_bundle)), 0L)
+
     # A leaf: no other target reads it, so it cannot change any analysis or output.
     readers <- names(by_name)[vapply(by_name, function(tgt) {
         "rna_bundle" %in% target_deps(tgt)
