@@ -320,7 +320,7 @@
 # What the metabolomics DE stage puts in its generic `statistic` column, per
 # method (R/domain/metabolomics/03_differential.R):
 #
-#   limma                      topTable()$t              signed moderated t
+#   limma, limma_percontrast   topTable()$t              signed moderated t
 #   t_test / t_test_equal      t.test()$statistic        signed t
 #   wilcoxon                   wilcox.test()$statistic   UNSIGNED rank-sum W
 #   precomputed                dropped by the loader     (not available)
@@ -330,7 +330,7 @@
 # known to put a signed score there. W is non-negative and scales with group
 # size: ranking on it would order EmpiricalCompounds by rank-sum magnitude with
 # no direction at all, while the report claimed a moderated t.
-.MMC_GSEA_SIGNED_STAT_METHODS <- c("limma", "t_test", "t_test_equal")
+.MMC_GSEA_SIGNED_STAT_METHODS <- c("limma", "limma_percontrast", "t_test", "t_test_equal")
 .MMC_GSEA_UNSIGNED_STAT_METHODS <- c("wilcoxon")
 
 #' Choose and extract the signed GSEA ranking statistic from a DE table
@@ -339,7 +339,7 @@
 #' name alone:
 #'
 #' \describe{
-#'   \item{`limma`, `t_test`, `t_test_equal`}{rank on the signed t statistic the
+#'   \item{`limma`, `limma_percontrast`, `t_test`, `t_test_equal`}{rank on the signed t statistic the
 #'     stage stores in `statistic` (a literal `t` column is also accepted).}
 #'   \item{`wilcoxon`}{rank on `logFC`. The `statistic` column holds Wilcoxon's
 #'     unsigned W, which cannot order a signed ranking; it is never read here.
