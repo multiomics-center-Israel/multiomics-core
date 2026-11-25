@@ -30,10 +30,13 @@ gs_pathways <- list(
 
 test_that("the default GSEA is standard fgsea on the ECs' scores and the ORA's pathway EC sets", {
   ecs <- gs_ecs()
-  g <- mmc_ma_gsea(ecs, gs_pathways, n_perm = 100)
+  g <- suppressWarnings(mmc_ma_gsea(ecs, gs_pathways))
   expect_identical(g$method, "fgsea")
-  expect_match(g$method_label, "fgsea::fgseaSimple", fixed = TRUE)
-  expect_identical(g$reference$method, "fgsea::fgseaSimple")
+  expect_match(g$method_label, "fgsea::fgsea, adaptive multilevel", fixed = TRUE)
+  expect_false(grepl("fgseaSimple", g$method_label, fixed = TRUE))
+  expect_identical(g$reference$method, "fgsea::fgsea (fgseaMultilevel)")
+  expect_identical(g$params$nperm_simple, 10000L)
+  expect_null(g$params[["n_perm"]])           # no fixed permutation count
   expect_null(g$reference$commit)
   expect_null(g$resmat)                       # MetaboAnalyst's matrix is legacy-only
   expect_length(g$deviations, 0L)
@@ -43,8 +46,15 @@ test_that("the default GSEA is standard fgsea on the ECs' scores and the ORA's p
   expect_identical(g$n_p_unavailable, 0L)
 
   # The same function the python adapter calls, on this engine's own inputs.
-  direct <- mmc_gsea_fgsea(stats::setNames(gs_pathways$emp_cpds, gs_pathways$name),
-                           ecs$ec_exp, n_perm = 100)
+  direct <- suppressWarnings(mmc_gsea_fgsea(
+    stats::setNames(gs_pathways$emp_cpds, gs_pathways$name), ecs$ec_exp))
+  expect_identical(g$log2err_summary, mmc_gsea_log2err_summary(direct))
+  # Per pathway too, in the python adapter's shape: named by the table's
+  # Pathway. Beside the table, not in it.
+  expect_setequal(names(g$log2err), g$table$Pathway)
+  expect_equal(g$log2err[direct$pathway], stats::setNames(direct$log2err,
+                                                          direct$pathway))
+  expect_false("log2err" %in% names(g$table))
   k <- match(g$table$Pathway, direct$pathway)
   expect_setequal(g$table$Pathway, gs_pathways$name)
   expect_equal(g$table[["P.Value"]], direct$pval[k])
@@ -108,11 +118,15 @@ test_that("legacy: non-default GSEA settings are reported as deviations", {
   expect_true(any(grepl("^n_perm = 50", g$deviations)))
   expect_true(any(grepl("^seed = 7", g$deviations)))
 
-  # Under the default method the same values are settings, not deviations.
-  std <- mmc_ma_gsea(gs_ecs(), gs_pathways, n_perm = 50, seed = 7)
+  # Under the default method a seed is a setting, not a deviation, and there
+  # is no permutation count: n_perm is refused rather than given a meaning.
+  std <- suppressWarnings(mmc_ma_gsea(gs_ecs(), gs_pathways, seed = 7))
   expect_length(std$deviations, 0L)
-  expect_identical(std$params$n_perm, 50)
   expect_identical(std$params$seed, 7)
+  expect_error(mmc_ma_gsea(gs_ecs(), gs_pathways, n_perm = 50),
+               "n_perm is the legacy method")
+  expect_null(g$log2err_summary)              # legacy: no fgsea error estimate
+  expect_null(g$log2err)
 })
 
 test_that("GSEA does not change the ORA, and travels through the result files", {
@@ -156,6 +170,56 @@ test_that("GSEA does not change the ORA, and travels through the result files", 
   expect_identical(g$ties$tie_sensitive_pathways,
                    with$gsea$ties$tie_sensitive_pathways)
   expect_equal(g$n_p_unavailable, with$gsea$n_p_unavailable)
+  # ... and how its p-values were estimated, with fgsea's error summary.
+  expect_identical(g$reference$method, "fgsea::fgsea (fgseaMultilevel)")
+  expect_identical(mmc_gsea_permutation_label(g$params),
+                   "adaptive multilevel p-values, nPermSimple = 10000")
+  expect_equal(g$log2err_summary, with$gsea$log2err_summary)
+  # ... and fgsea's error estimate for every tested pathway, each with its
+  # pathway name, restored in the shape the engine returned it.
+  expect_identical(names(g$log2err), names(with$gsea$log2err))
+  expect_equal(as.numeric(g$log2err), as.numeric(with$gsea$log2err))
+  expect_setequal(names(g$log2err), g$table$Pathway)
+  expect_length(attr(g$log2err, "pathway_id"), length(g$log2err))
+  # The table that the exports and the Shiny payload carry is unchanged.
+  expect_false("log2err" %in% names(g$table))
+  expect_identical(names(g$table), names(with$gsea$table))
+
+  # A record written while the default method ran fgsea::fgseaSimple() names
+  # the same method, "fgsea". It is described by what it stores -- its label,
+  # its reference and its permutation count -- and never as multilevel.
+  new_file <- files[basename(files) == "ma_run_info.json"]
+  rec <- jsonlite::fromJSON(new_file, simplifyVector = FALSE)
+  simple_label <- paste0("standard preranked GSEA (fgsea::fgseaSimple, fgsea ",
+                         "0.0.0) on the signed EmpiricalCompound scores, one ",
+                         "ranking position per EC")
+  rec$gsea$method_label <- simple_label
+  rec$gsea$reference$method <- "fgsea::fgseaSimple"
+  rec$gsea$params$nperm_simple <- NULL
+  rec$gsea$params$n_perm <- 100L
+  rec$gsea$log2err <- NULL
+  jsonlite::write_json(rec, new_file, auto_unbox = TRUE, pretty = TRUE,
+                       digits = NA, null = "null")
+  was <- attr(read_mummichog_ma_pathways(files), "ma_gsea")
+  expect_identical(was$method, "fgsea")
+  expect_identical(was$method_label, simple_label)
+  expect_identical(was$reference$method, "fgsea::fgseaSimple")
+  expect_identical(mmc_gsea_permutation_label(was$params), "100 permutations")
+  expect_null(was$log2err_summary)
+  # It stored no per-pathway estimate: absent, not "present with gaps".
+  rec$gsea$log2err_by_pathway <- NULL
+  jsonlite::write_json(rec, new_file, auto_unbox = TRUE, pretty = TRUE,
+                       digits = NA, null = "null")
+  was <- attr(read_mummichog_ma_pathways(files), "ma_gsea")
+  expect_null(was$log2err)
+  expect_null(was$log2err_summary)
+  # Even without its stored label, such a record is not given today's.
+  rec$gsea$method_label <- NULL
+  jsonlite::write_json(rec, new_file, auto_unbox = TRUE, pretty = TRUE,
+                       digits = NA, null = "null")
+  bare <- attr(read_mummichog_ma_pathways(files), "ma_gsea")
+  expect_false(grepl("multilevel", bare$method_label, fixed = TRUE))
+  expect_match(bare$method_label, "fgsea::fgseaSimple", fixed = TRUE)
 
   # Legacy, when asked for by name, is recorded and read back as legacy.
   old <- suppressWarnings(do.call(mmc_ma_run_contrast, c(args, list(gsea = list(
@@ -168,6 +232,9 @@ test_that("GSEA does not change the ORA, and travels through the result files", 
   expect_identical(og$method, "metaboanalyst_legacy")
   expect_identical(og$nes_note, mmc_gsea_nes_note("metaboanalyst_legacy"))
   expect_null(og$ties)
+  expect_identical(mmc_gsea_permutation_label(og$params), "100 permutations")
+  expect_null(og$log2err_summary)
+  expect_null(og$log2err)
 
   # A run record written before the method was recorded names no method. It
   # can only be the legacy method, and must be described as such, whatever the
@@ -188,6 +255,54 @@ test_that("GSEA does not change the ORA, and travels through the result files", 
   jsonlite::write_json(info, info_file, auto_unbox = TRUE, pretty = TRUE,
                        digits = NA, null = "null")
   expect_error(read_mummichog_ma_pathways(old_files), "unknown GSEA method")
+})
+
+test_that("per-pathway log2err survives the run record, missing values and ids included", {
+  # Three tested pathways: an estimate, a p-value without one, and no p-value.
+  # A pathway name that needs JSON escaping, and one the model has no id for.
+  err <- c("Alpha pathway" = 0.125, "Beta \"quoted\", pathway" = NA_real_,
+           "Gamma pathway" = NA_real_)
+  ids <- c("Alpha pathway" = "map00010", "Beta \"quoted\", pathway" = "map00020")
+
+  entries <- .mmc_ma_log2err_entries(err, ids)
+  expect_length(entries, 3L)
+  expect_identical(entries[[1]],
+                   list(pathway = "Alpha pathway", pathway_id = "map00010",
+                        log2err = 0.125))
+  expect_null(entries[[2]]$log2err)           # NA is written as JSON null
+  expect_null(entries[[3]]$pathway_id)        # no id for this pathway
+
+  # Through the JSON the writer produces and the reader parses.
+  path <- withr::local_tempfile(fileext = ".json")
+  jsonlite::write_json(list(gsea = list(log2err_by_pathway = entries)), path,
+                       auto_unbox = TRUE, pretty = TRUE, digits = NA,
+                       null = "null")
+  expect_false(any(grepl("\"NA\"", readLines(path), fixed = TRUE)))
+  back <- .mmc_ma_log2err_restore(
+    jsonlite::fromJSON(path, simplifyVector = TRUE)$gsea[["log2err_by_pathway"]])
+  expect_identical(names(back), names(err))
+  expect_equal(as.numeric(back), as.numeric(err))
+  expect_identical(attr(back, "pathway_id"), c("map00010", "map00020", NA))
+
+  # The same entries unsimplified, as a list of records.
+  as_list <- .mmc_ma_log2err_restore(
+    jsonlite::fromJSON(path, simplifyVector = FALSE)$gsea[["log2err_by_pathway"]])
+  expect_identical(names(as_list), names(err))
+  expect_equal(as.numeric(as_list), as.numeric(err))
+  expect_identical(attr(as_list, "pathway_id"), c("map00010", "map00020", NA))
+
+  # All values missing, a single pathway, and no ids at all.
+  one <- .mmc_ma_log2err_entries(c(Only = NA_real_))
+  jsonlite::write_json(list(x = one), path, auto_unbox = TRUE, null = "null")
+  back1 <- .mmc_ma_log2err_restore(jsonlite::fromJSON(path)$x)
+  expect_identical(names(back1), "Only")
+  expect_true(is.numeric(back1) && is.na(back1[[1]]))
+  expect_identical(attr(back1, "pathway_id"), NA_character_)
+
+  # Absent is absent: the legacy method, and every record written before the
+  # values were stored.
+  expect_null(.mmc_ma_log2err_entries(NULL))
+  expect_null(.mmc_ma_log2err_restore(NULL))
 })
 
 # ---- parity with the pinned MetaboAnalystR peaks GSEA --------------------------

@@ -168,11 +168,14 @@ ma_evidence_fixture <- function(dir = tempfile("ma_ev_"), sig_ec = c(3, 1),
     # As the engine writes it for the default method. A record without
     # `method` would be read as the legacy method (see 06n).
     info$gsea <- list(ran = TRUE, method = "fgsea",
+                      method_label = mmc_gsea_method_label("fgsea", "0.0.0"),
                       metric_label = "signed t statistic (synthetic)",
-                      params = list(n_perm = 100, min_size = 3, max_size = 5000,
-                                    seed = 123, fgsea_version = "0.0.0"),
+                      log2err = list(max = 0.1, n_unavailable = 0),
+                      params = list(nperm_simple = 10000, min_size = 3,
+                                    max_size = 5000, seed = 123,
+                                    fgsea_version = "0.0.0"),
                       deviations = list(),
-                      reference = list(method = "fgsea::fgseaSimple",
+                      reference = list(method = "fgsea::fgsea (fgseaMultilevel)",
                                        package = "fgsea", version = "0.0.0"),
                       adjustment = "BH (p.adjust 'fdr')", n_ec = 3, n_positions = 3,
                       n_pathways = 2)

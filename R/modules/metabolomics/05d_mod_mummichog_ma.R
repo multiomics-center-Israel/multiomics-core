@@ -95,11 +95,16 @@ mod_mummichog_metaboanalyst <- function(pre, de_res, config, out_dir) {
     gsea_on <- FALSE
   }
   gsea_settings <- list(
-    n_perm   = mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm,
     min_size = mummi_cfg$gsea_min_size     %||% .MMC_GSEA_DEFAULTS$min_size,
     max_size = mummi_cfg$gsea_max_size     %||% .MMC_GSEA_DEFAULTS$max_size,
     seed     = mummi_cfg$gsea_seed         %||% .MMC_GSEA_DEFAULTS$seed,
     method   = mmc_gsea_method(mummi_cfg))
+  # The permutation count is the legacy method's setting only; the default
+  # method has none (mmc_gsea_method() refuses the key).
+  if (identical(gsea_settings$method, "metaboanalyst_legacy")) {
+    gsea_settings$n_perm <-
+      mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm
+  }
 
   # -- model -> library, once ---------------------------------------------------
   network <- mmc_select_model(mummi_cfg,

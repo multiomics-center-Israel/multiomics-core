@@ -298,8 +298,8 @@ build_mummichog_summary <- function(ora_table, gsea_table = NULL,
   ora_label <- ifelse(is.na(ora_p), "Not tested", paste("p =", fmt(ora_p)))
   # Three states, kept apart: GSEA did not run; the pathway is not in its
   # table (not tested); or it is in the table without a p-value, which the
-  # standard fgsea method reports when no permutation gave a score of the
-  # observed sign. The last is a tested pathway and must not read "Not tested".
+  # standard fgsea method reports when too few permutations gave a score of
+  # the observed sign. The last is a tested pathway and must not read "Not tested".
   gsea_label <- if (!is.data.frame(gsea_table)) rep("Not run", n) else
     ifelse(is.na(gsea_p),
            ifelse(pw %in% gsea_table$Pathway, .MMC_GSEA_P_UNAVAILABLE,

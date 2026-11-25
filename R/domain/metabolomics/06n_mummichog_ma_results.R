@@ -196,7 +196,8 @@ write_mummichog_ma_failure <- function(dir, contrast, error) {
 #' @param rt_frac Retention-time tolerance fraction (default 0.02).
 #' @param min_lib Smallest pathway kept, in compounds (default 3).
 #' @param gsea NULL to skip GSEA, or a list of `mmc_ma_gsea()` settings
-#'   (`n_perm`, `min_size`, `max_size`, `seed`, `method`, `metric_label`). It runs on the
+#'   (`min_size`, `max_size`, `seed`, `method`, `metric_label`, and `n_perm`
+#'   for the legacy method only). It runs on the
 #'   same ECs and pathway sets as the ORA, after it, and changes nothing in it.
 #'   GSEA is optional: an error in it is caught and returned as `gsea_error`,
 #'   so the ORA result is kept.
@@ -248,7 +249,8 @@ mmc_ma_run_contrast <- function(peaks, lib, mode, ppm, cutoff, n_perm = 100,
 #'     match with its EC, feature id and polarity.}
 #'   \item{ma_input.tsv}{The peak list the analysis was given.}
 #'   \item{ma_run_info.json}{Engine, reference, parameters, model, Gamma fit
-#'     and counts.}
+#'     and counts; when the default GSEA ran, also fgsea's `log2err` for every
+#'     tested pathway (`gsea$log2err_by_pathway`) and its summary.}
 #' }
 #' and, when GSEA ran, `ma_gsea_results.tsv` (the GSEA table in
 #' MetaboAnalyst's order; its settings and provenance go into the run record;
@@ -325,6 +327,9 @@ write_mummichog_ma_results <- function(run, peaks, dir, info, pathway_ids) {
                       method_label = gs$method_label,
                       metric_label = gs$metric_label,
                       ties = gs$ties, n_p_unavailable = gs$n_p_unavailable,
+                      log2err = gs$log2err_summary,
+                      log2err_by_pathway = .mmc_ma_log2err_entries(
+                        gs$log2err, pathway_ids),
                       params = gs$params, deviations = gs$deviations,
                       reference = gs$reference, adjustment = "BH (p.adjust 'fdr')",
                       n_ec = gs$n_ec, n_positions = gs$n_positions,
@@ -336,6 +341,61 @@ write_mummichog_ma_results <- function(run, peaks, dir, info, pathway_ids) {
   jsonlite::write_json(info, file.path(dir, .MMC_MA_INFO_FILE), auto_unbox = TRUE,
                        pretty = TRUE, digits = NA, null = "null")
   paths
+}
+
+#' Per-pathway `log2err` values as run-record entries
+#'
+#' One entry per tested pathway, so each value stays with its pathway's name
+#' and model id. A missing value is written as JSON `null` (an entry whose
+#' `log2err` is NULL), not as the string a numeric vector's NA would become.
+#'
+#' @param log2err Numeric vector named by pathway, or NULL (legacy method).
+#' @param pathway_ids Named character vector, pathway name -> model pathway
+#'   id, or NULL.
+#' @return A list of `list(pathway, pathway_id, log2err)`, or NULL when
+#'   `log2err` is NULL.
+#' @noRd
+.mmc_ma_log2err_entries <- function(log2err, pathway_ids = NULL) {
+  if (is.null(log2err)) return(NULL)
+  lapply(seq_along(log2err), function(i) {
+    pw <- names(log2err)[[i]]
+    id <- if (is.null(pathway_ids)) NA_character_ else unname(pathway_ids[pw])
+    list(pathway = pw,
+         pathway_id = if (is.na(id)) NULL else id,
+         log2err = if (is.na(log2err[[i]])) NULL else log2err[[i]])
+  })
+}
+
+#' Restore per-pathway `log2err` values from a run record
+#'
+#' The inverse of `.mmc_ma_log2err_entries()`. A record without the entries
+#' (the legacy method, or any record written before they were stored) gives
+#' NULL: absent, which is not the same as present with missing values.
+#'
+#' @param entries `gsea$log2err_by_pathway` as read from `ma_run_info.json`: a
+#'   data frame when jsonlite simplified the entries, else a list of them.
+#' @return Numeric vector named by pathway (NA where fgsea gave no estimate),
+#'   with the model pathway ids as `attr(, "pathway_id")`; or NULL.
+#' @noRd
+.mmc_ma_log2err_restore <- function(entries) {
+  if (is.null(entries)) return(NULL)
+  if (!is.data.frame(entries)) {
+    field <- function(e, key, as) {
+      v <- if (is.list(e)) e[[key]] else NULL
+      if (is.null(v) || length(v) != 1L) as(NA) else as(v)
+    }
+    entries <- data.frame(
+      pathway    = vapply(entries, field, character(1), "pathway", as.character),
+      pathway_id = vapply(entries, field, character(1), "pathway_id", as.character),
+      log2err    = vapply(entries, field, numeric(1), "log2err", as.numeric),
+      stringsAsFactors = FALSE)
+  }
+  n <- nrow(entries)
+  col <- function(key, as) if (is.null(entries[[key]])) as(rep(NA, n)) else
+    as(entries[[key]])
+  out <- stats::setNames(col("log2err", as.numeric), col("pathway", as.character))
+  attr(out, "pathway_id") <- col("pathway_id", as.character)
+  out
 }
 
 #' Read one contrast's MetaboAnalyst-compatible pathway table for the report
@@ -406,12 +466,26 @@ read_mummichog_ma_pathways <- function(files) {
     # The shape the report's GSEA tab and Summary read (as for python GSEA).
     attr(tbl, "ma_gsea") <- list(
       table = g, method = g_method,
+      # A stored label is the record's own account of what ran and is never
+      # recomputed: "fgsea" has meant fgseaSimple (briefly) and then
+      # multilevel. Without one, today's label is used only where the record
+      # still shows which of the two it was.
       method_label = gi$method_label %||%
-        mmc_gsea_method_label(g_method, gi$params$fgsea_version),
+        if (identical(g_method, "fgsea") && is.null(gi$params[["nperm_simple"]])) {
+          paste0("standard preranked GSEA (",
+                 gi$reference$method %||% "fgsea; p-value algorithm not recorded",
+                 ")")
+        } else {
+          mmc_gsea_method_label(g_method, gi$params$fgsea_version)
+        },
       metric_label = gi$metric_label, params = gi$params,
       deviations = as.character(unlist(gi$deviations)),
       reference = gi$reference, nes_note = mmc_gsea_nes_note(g_method),
       ties = g_ties, n_p_unavailable = gi$n_p_unavailable %||% 0L,
+      # `[[`: `$` would match `log2err_by_pathway` for a record that has no
+      # `log2err`, and hand the entries over as the summary.
+      log2err = .mmc_ma_log2err_restore(gi[["log2err_by_pathway"]]),
+      log2err_summary = gi[["log2err"]],
       n_ec = gi$n_ec, n_positions = gi$n_positions, n_pathways = nrow(g),
       adjustment = gi$adjustment, engine = "metaboanalyst")
   }

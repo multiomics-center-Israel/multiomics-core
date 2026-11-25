@@ -399,7 +399,7 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
                 "table — skipping GSEA for it (ORA and evidence are unaffected)")
       } else {
         gsea <- tryCatch(
-          run_mummichog_gsea(
+          do.call(run_mummichog_gsea, c(list(
             files     = cfiles,
             de_table  = de_tbl,
             model     = model,
@@ -417,12 +417,15 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
             de_method = if (is.data.frame(de_res)) NULL else de_res$method,
             # Default settings unless the config overrides them; for the
             # legacy method run_mummichog_gsea() records that as a deviation.
-            n_perm   = mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm,
             seed     = mummi_cfg$gsea_seed         %||% .MMC_GSEA_DEFAULTS$seed,
             min_size = mummi_cfg$gsea_min_size     %||% .MMC_GSEA_DEFAULTS$min_size,
             max_size = mummi_cfg$gsea_max_size     %||% .MMC_GSEA_DEFAULTS$max_size,
-            method   = gsea_method
-          ),
+            method   = gsea_method),
+            # The permutation count is the legacy method's setting only; the
+            # default method has none (mmc_gsea_method() refuses the key).
+            if (identical(gsea_method, "metaboanalyst_legacy")) list(
+              n_perm = mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm)
+          )),
           error = function(e) {
             warning("mummichog GSEA: contrast '", contrast, "' failed: ",
                     conditionMessage(e), call. = FALSE)

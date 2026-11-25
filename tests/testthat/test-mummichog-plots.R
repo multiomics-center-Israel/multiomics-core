@@ -234,6 +234,50 @@ test_that("GSEA is attached per contrast without disturbing the ORA fields", {
 
   # And the ORA table is untouched by GSEA running.
   expect_identical(s$table, build_mummichog_pathway_table(fx$pathways[["HL_vs_LL"]]))
+
+  # fgsea's error estimate for every tested pathway is kept in the section,
+  # named by the GSEA table's Pathway. This object (the sections target) is
+  # where the python engine's GSEA result lives; it has no run record on disk.
+  expect_true(is.numeric(s$gsea$log2err))
+  expect_setequal(names(s$gsea$log2err), s$gsea$table$Pathway)
+  expect_false("log2err" %in% names(s$gsea$table))
+})
+
+test_that("gsea_permutations reaches the legacy method only, and stops the default one", {
+  skip_unless_gsea_deps()
+  fx <- gsea_wiring_fixture(withr::local_tempdir())
+  with_key <- function(...) {
+    cfg <- fx$config
+    cfg$modes$metabolomics$enrichment$mummichog <- utils::modifyList(
+      cfg$modes$metabolomics$enrichment$mummichog, list(...))
+    cfg
+  }
+  build <- function(cfg) build_mummichog_report_sections(
+    fx$pathways, cfg, files = fx$files, de_res = fx$de_res, model = fx$model)
+
+  # Default method: a config error that stops, not a per-contrast "GSEA failed"
+  # and not a value that is ignored or read as nPermSimple.
+  expect_error(build(with_key(gsea_permutations = 200)), "gsea_permutations")
+
+  # ... unless GSEA is switched off: nothing reads the key then, and the ORA
+  # sections are built as usual, without a GSEA result.
+  off <- build(with_key(gsea_enabled = FALSE, gsea_permutations = 200))
+  expect_null(off[["HL_vs_LL"]]$gsea)
+  expect_s3_class(off[["HL_vs_LL"]]$plot, "ggplot")
+
+  # Legacy method: the key is its number of permutations, as before.
+  old <- suppressWarnings(build(with_key(
+    gsea_method = "metaboanalyst_legacy", gsea_permutations = 200)))
+  g <- old[["HL_vs_LL"]]$gsea
+  expect_identical(g$method, "metaboanalyst_legacy")
+  expect_equal(g$params[["n_perm"]], 200)
+  expect_true(any(grepl("n_perm = 200", g$deviations, fixed = TRUE)))
+
+  # No key: the default method runs with no permutation count recorded.
+  std <- suppressWarnings(build(fx$config))[["HL_vs_LL"]]$gsea
+  expect_identical(std$method, "fgsea")
+  expect_null(std$params[["n_perm"]])
+  expect_identical(std$params[["nperm_simple"]], 10000L)
 })
 
 test_that("the DE method decides the ranking statistic, not the column name", {

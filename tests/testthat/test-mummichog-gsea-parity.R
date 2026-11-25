@@ -315,13 +315,17 @@ test_that("an override of the reference defaults is reported as a deviation", {
   expect_true(any(grepl("min_size = 3", dev$deviations)))
   expect_true(any(grepl("n_perm = 200", dev$deviations)))
 
-  # The default method has no reference defaults to depart from: the same
-  # overrides are settings there, reported in params, never as deviations.
-  std <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL",
-                            min_size = 3, n_perm = 200L)
+  # The default method has no reference defaults to depart from: an override
+  # is a setting there, reported in params, never as a deviation. It has no
+  # permutation count at all, so n_perm is refused rather than recorded.
+  std <- suppressWarnings(run_mummichog_gsea(
+    f$files, f$de_table, f$model, contrast = "HL_vs_LL", min_size = 3))
   expect_length(std$deviations, 0L)
-  expect_identical(std$params$n_perm, 200L)
   expect_equal(std$params$min_size, 3)
+  expect_null(std$params[["n_perm"]])
+  expect_error(run_mummichog_gsea(f$files, f$de_table, f$model,
+                                  contrast = "HL_vs_LL", n_perm = 200L),
+               "n_perm is the legacy method")
 })
 
 

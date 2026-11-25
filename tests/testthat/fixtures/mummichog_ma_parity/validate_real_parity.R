@@ -75,10 +75,14 @@ fpi <- isTRUE(p$force_primary_ion)
 # ---- ours -----------------------------------------------------------------------
 lib <- mmc_ma_library_from_model(model)
 gp <- info$gsea$params
-gsea_settings <- if (isTRUE(info$gsea$ran)) list(
-  n_perm = gp$n_perm, min_size = gp$min_size,
+# The comparison is with upstream's own GSEA, so the legacy method is run
+# whatever the recorded run used. A run recorded by the default method has no
+# permutation count; the legacy default then applies.
+gsea_settings <- if (isTRUE(info$gsea$ran)) c(list(
+  min_size = gp$min_size,
   max_size = suppressWarnings(as.numeric(gp$max_size)), seed = gp$seed,
-  metric_label = info$gsea$metric_label) else NULL
+  metric_label = info$gsea$metric_label, method = "metaboanalyst_legacy"),
+  if (!is.null(gp[["n_perm"]])) list(n_perm = gp[["n_perm"]])) else NULL
 ours <- suppressWarnings(mmc_ma_run_contrast(
   peaks, lib, p$ionization_mode, ppm = p$tolerance_ppm, cutoff = p$p_cutoff,
   n_perm = p$n_permutations, force_primary_ion = fpi, rt_frac = p$rt_frac,
