@@ -296,8 +296,10 @@ Any other value stops the run, including when `gsea_enabled` is `false`: the key
 
 - **The permutation universe.** Every EC has its own ranking position, including ECs with equal scores, so permutations are drawn over ECs. The legacy method ranks distinct scores, so its universe is smaller whenever scores are tied. The two results are not comparable pathway for pathway.
 - **Tied scores.** ECs with equal scores are ordered by EC id, in a locale-independent order, and no score is altered. The result reports how many ECs are tied and their proportion, and names the pathways whose enrichment score can depend on that order: those for which a group of equal-scored ECs holds both members and non-members. A warning is given when there is at least one such pathway. There is no threshold.
-- **Missing p-values.** fgsea gives no p-value when fewer than 10 of its 10,000 initial permutations produced an enrichment score of the observed sign. Such a pathway is kept in the table with empty NES, p and `padj`, counted in the result, and shown as `Tested; p-value unavailable`, never as `Not tested`. It is not part of the BH family: `padj` is adjusted over the tested pathways that have a p-value.
+- **Missing p-values.** fgsea gives no p-value when fewer than 10 of its 10,000 initial permutations produced an enrichment score of the observed sign. Such a pathway is kept in the table with empty NES, p and `padj`, counted in the result, and shown as `Tested; p-value unavailable`, never as `Not tested`. It has no `padj`. `padj` is fgsea's own BH adjustment and is passed through unchanged: fgsea adjusts over the pathways that have a p-value, except when it settles every p-value in its initial permutation step, where the adjustment was made before those p-values were withheld and so still counts them (slightly conservative for the others).
 - **A pathway holding every ranked EC** is not tested (fgsea caps the size at one less than the list).
+- **NES sign** is the ordinary GSEA one: which end of the ranked list the pathway's ECs are concentrated at. An EC takes the largest signed score among its features, so it is still not a per-metabolite direction of change.
+- **The table schema is unchanged.** `ES defaulted by reference implementation` and `ES fallback reason` stay, as `FALSE` and empty, because the default method has no fallback.
 
 #### P-value estimation
 
@@ -310,10 +312,6 @@ The default method estimates p-values with fgsea's adaptive multilevel scheme ra
 #### Earlier results
 
 `gsea_method: fgsea` has named two calculations. For a short period the default ran `fgsea::fgseaSimple()` with a fixed number of permutations (100 unless `gsea_permutations` said otherwise); it now runs `fgsea::fgsea()` as above. The earlier calculation can no longer be run. Results it produced are not relabeled: a result or run record states its own method label, `reference.method` (`fgsea::fgseaSimple`) and `params.n_perm`, and the report and workbook describe it from those stored fields. A multilevel result stores `reference.method` `fgsea::fgsea (fgseaMultilevel)` and `params.nperm_simple` instead, and no `n_perm`.
-- **NES sign** is the ordinary GSEA one: which end of the ranked list the pathway's ECs are concentrated at. An EC takes the largest signed score among its features, so it is still not a per-metabolite direction of change.
-- **The table schema is unchanged.** `ES defaulted by reference implementation` and `ES fallback reason` stay, as `FALSE` and empty, because the default method has no fallback.
-
-The number of permutations is unchanged (100 by default).
 
 In the HTML report each contrast has five tabs: **Summary → ORA plot → GSEA plot → Pathway Evidence → Advanced / Downloads** (see [The report section](#the-report-section)). The ORA bubble and the GSEA scatter each keep their own tab under their own name; the ORA bubble is never shown under a GSEA heading. A contrast without GSEA gets the explanation in its GSEA plot tab instead of a plot — see [When GSEA has no results](#when-gsea-has-no-results).
 

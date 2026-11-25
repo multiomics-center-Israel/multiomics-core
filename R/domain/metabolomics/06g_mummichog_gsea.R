@@ -43,8 +43,8 @@
 #      position; a pathway holding two of them is refused by
 #      fgsea::calcGseaStat() and takes an ES = 0 / p = 1 fallback.
 #
-# Both methods compute the same enrichment score, and BH over the tested
-# pathways. They differ in the two points above, and so in the permutation
+# Both methods compute the same enrichment score and adjust p-values with
+# BH. They differ in the two points above, and so in the permutation
 # universe: the legacy method permutes over distinct scores, the default over
 # ECs. They also estimate p-values differently:
 #

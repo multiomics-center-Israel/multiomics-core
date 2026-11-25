@@ -2697,7 +2697,7 @@ if (identical(mummi_engine, "metaboanalyst")) {
       cat(sprintf("**This GSEA used the legacy MetaboAnalyst-compatible method** (`gsea_method: metaboanalyst_legacy`), kept to reproduce earlier results. It has known defects: a pathway's hits are weighted by scores that are not their own, and a pathway holding ECs with equal scores gets ES = 0 ([upstream report](%s)). The default method is standard fgsea.\n\n", .MMC_GSEA_LEGACY_ISSUE))
     }
     info_panel("GSEA and its interpretation", sprintf(
-      "GSEA on the **same** EmpiricalCompounds and pathway sets as the ORA, using the **complete ranked EC list without a significance cutoff**. Each feature is scored by the %s; an EC's score is the **maximum** over its member features, which in mixed mode can come from both polarities. Method: %s (%s, minimum set size %s, seed %s). It reports a raw p-value and its **Benjamini–Hochberg FDR**, computed over the tested pathways that have a p-value; the ORA is Holm-adjusted, and the two control different error rates. A pathway can have a GSEA signal without an ORA signal; ORA evidence is then never shown as its support. %s%s\n\n",
+      "GSEA on the **same** EmpiricalCompounds and pathway sets as the ORA, using the **complete ranked EC list without a significance cutoff**. Each feature is scored by the %s; an EC's score is the **maximum** over its member features, which in mixed mode can come from both polarities. Method: %s (%s, minimum set size %s, seed %s). It reports a raw p-value and its **Benjamini–Hochberg FDR** (a tested pathway without a p-value has none); the ORA is Holm-adjusted, and the two control different error rates. A pathway can have a GSEA signal without an ORA signal; ORA evidence is then never shown as its support. %s%s\n\n",
       if (length(labels) == 1L) labels else paste0("statistic chosen per contrast (", paste(labels, collapse = "; "), ")"),
       paste(gsea_method_labels, collapse = "; "),
       mmc_gsea_permutation_label(g1$params), g1$params$min_size %||% "?", g1$params$seed %||% "?",
@@ -3122,13 +3122,26 @@ for (contrast in names(mummi_sections)) {
 
   if (!is.null(s$gsea)) {
     advanced_block("Full Mummichog GSEA table", function() {
-      # BH is taken over the tested pathways that have a p-value: a pathway
+      # The BH family is stated as the method that ran defines it. fgsea's
+      # multilevel result is passed through unchanged, and its adjustment can
+      # still count pathways whose p-value it withheld (when every p-value was
+      # settled in its initial step), so no family size is claimed there.
+      # Otherwise BH is over the tested pathways that have a p-value: a pathway
       # without one has no adjusted value and is not in the family.
       gsea_no_p <- as.integer(s$gsea$n_p_unavailable %||% 0L)
-      cat(sprintf("`P.Value` is the raw p-value (%s) and `padj` its Benjamini-Hochberg adjustment over the %d tested pathways%s.\n\n",
-                  mmc_gsea_permutation_label(s$gsea$params),
-                  as.integer(s$gsea$n_pathways) - gsea_no_p,
-                  if (gsea_no_p > 0L) sprintf(" that have a p-value (%d of the %d tested pathways have none)", gsea_no_p, as.integer(s$gsea$n_pathways)) else ""))
+      gsea_multilevel <- !is.null(s$gsea$params[["nperm_simple"]])
+      if (gsea_no_p > 0L && gsea_multilevel) {
+        cat(sprintf("`P.Value` is the raw p-value (%s) and `padj` its Benjamini-Hochberg adjustment as fgsea computes it. %d of the %d tested pathways have no p-value and no adjusted value; depending on the step at which fgsea settled the p-values, its adjustment is over the other %d pathways or still counts all %d.\n\n",
+                    mmc_gsea_permutation_label(s$gsea$params), gsea_no_p,
+                    as.integer(s$gsea$n_pathways),
+                    as.integer(s$gsea$n_pathways) - gsea_no_p,
+                    as.integer(s$gsea$n_pathways)))
+      } else {
+        cat(sprintf("`P.Value` is the raw p-value (%s) and `padj` its Benjamini-Hochberg adjustment over the %d tested pathways%s.\n\n",
+                    mmc_gsea_permutation_label(s$gsea$params),
+                    as.integer(s$gsea$n_pathways) - gsea_no_p,
+                    if (gsea_no_p > 0L) sprintf(" that have a p-value (%d of the %d tested pathways have none)", gsea_no_p, as.integer(s$gsea$n_pathways)) else ""))
+      }
       # fgsea's own error estimate, present only for results of its multilevel
       # method; described, not interpreted.
       l2e <- s$gsea$log2err_summary

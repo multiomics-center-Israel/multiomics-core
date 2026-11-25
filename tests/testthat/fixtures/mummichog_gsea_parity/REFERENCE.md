@@ -6,7 +6,7 @@ Peaks-to-Pathways GSEA engine**, run on the fixture in `generate_reference.R`.
 `mmc_gsea_metaboanalyst()` (`gsea_method: metaboanalyst_legacy`), reproduces it.
 
 This is a historical-compatibility fixture. The pipeline's default GSEA is
-standard `fgsea::fgseaSimple()` (`mmc_gsea_fgsea()`), which is **not** expected
+standard `fgsea::fgsea()` (`mmc_gsea_fgsea()`), which is **not** expected
 to match these numbers: the reference carries the two upstream defects reported
 as [xia-lab/MetaboAnalystR#381](https://github.com/xia-lab/MetaboAnalystR/issues/381)
 and described under "Two upstream behaviours" below. The fixture files are not

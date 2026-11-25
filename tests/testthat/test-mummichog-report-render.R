@@ -420,6 +420,11 @@ test_that("tie-sensitive pathways and missing GSEA p-values are stated where the
                fixed = TRUE)
   expect_match(html, "1 tested pathway(s) have no GSEA p-value", fixed = TRUE)
   expect_match(html, "they are not untested pathways", fixed = TRUE)
+  # For a multilevel result the adjusted value is fgsea's own, and no family
+  # size is claimed that fgsea may not have used.
+  expect_match(html, "1 of the 2 tested pathways have no p-value and no adjusted value",
+               fixed = TRUE)
+  expect_false(grepl("adjustment over the 1 tested pathways", html, fixed = TRUE))
 })
 
 test_that("every EC's feature table shows annotation and agreement, not only Mixed ECs", {

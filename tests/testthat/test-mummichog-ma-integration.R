@@ -56,6 +56,14 @@ ma_run_stage <- function(ref, mode) {
 
 # ---- engine switch -------------------------------------------------------------
 
+test_that("the stage stops on gsea_permutations with the default GSEA method", {
+  # Resolved before any input is read: a config error, not a per-contrast GSEA
+  # failure that would leave the ORA written and the key silently unused.
+  expect_error(suppressMessages(mod_mummichog_metaboanalyst(
+    list(), list(), ma_cfg(gsea_permutations = 200), tempfile("ma_perm_"))),
+    "gsea_permutations")
+})
+
 # ---- engine selection, default and record -------------------------------------
 # An enabled config that names no engine gets metaboanalyst; python stays an
 # explicit choice; a disabled config selects nothing.

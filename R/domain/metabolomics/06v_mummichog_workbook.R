@@ -209,8 +209,8 @@ mmc_candidate_name_map <- function(feature_table, model) {
     "GSEA" = paste0(
       "Uses every EC, ranked by a signed statistic (an EC's score is the maximum of ",
       "its features'), with no significance cutoff. 'GSEA raw p' is the raw ",
-      "p-value and 'GSEA BH FDR' its Benjamini-Hochberg adjustment over the pathways ",
-      "GSEA tested that have a p-value. ",
+      "p-value and 'GSEA BH FDR' its Benjamini-Hochberg adjustment; a tested pathway ",
+      "without a p-value has none. ",
       # Method and NES wording come from the result itself (06g), so the
       # workbook says what the report says.
       if (!is.null(gsea$method_label)) paste0("Method: ", gsea$method_label, ". ") else "",
