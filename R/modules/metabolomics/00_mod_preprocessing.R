@@ -300,7 +300,9 @@ mod_met_filtered <- function(raw, config) {
 #'
 #' @param filtered List returned by \code{mod_met_filtered()}.
 #' @param config  Full pipeline config list.
-#' @return list with: \code{mat}, \code{meta}, \code{row_data}.
+#' @return list with: \code{mat}, \code{meta}, \code{row_data}, and
+#'   \code{transform}, the method applied (resolved here once, so the report
+#'   names what ran instead of re-reading the config).
 #'
 mod_met_log <- function(filtered, config) {
   norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
@@ -311,9 +313,10 @@ mod_met_log <- function(filtered, config) {
                              pseudocount = pseudocount)
   
   list(
-    mat      = mat_log,
-    meta     = filtered$meta,
-    row_data = filtered$row_data
+    mat       = mat_log,
+    meta      = filtered$meta,
+    row_data  = filtered$row_data,
+    transform = method
   )
 }
 
