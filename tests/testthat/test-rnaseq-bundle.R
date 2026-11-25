@@ -84,7 +84,10 @@ test_that("an RNA bundle written from these parts reads back unchanged", {
     path <- write_omics_bundle(build_parts(x), omics_bundle_info(x$config, "rnaseq"),
                                root, prov)
 
-    expect_identical(dirname(path), file.path(root, "bundles", "rnaseq"))
+    # Normalised: on Windows the temp dir can carry backslashes that dirname()
+    # turns into forward slashes.
+    norm <- function(p) normalizePath(p, winslash = "/", mustWork = TRUE)
+    expect_identical(norm(dirname(path)), norm(file.path(root, "bundles", "rnaseq")))
     b <- read_omics_bundle(path)
     expect_identical(b$parts, build_parts(x))
     expect_identical(b$manifest$project, "Demo")
