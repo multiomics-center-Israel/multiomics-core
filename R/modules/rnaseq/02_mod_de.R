@@ -1,5 +1,19 @@
 # 03_mod_rnaseq_de
-# mod_rnaseq_de
+#' Run (or load) RNA-seq differential expression
+#'
+#' @param pre Preprocessed RNA object (\code{rna_pre}).
+#' @param inputs Loaded RNA inputs (\code{rna_inputs}); \code{inputs$contrasts}
+#'   is the supplied contrasts table, or NULL.
+#' @param config Validated config.
+#' @param verbose Unused; kept for the module signature.
+#' @return The DE result of the route that ran (\code{tables}, \code{design},
+#'   and \code{dds} for DESeq2), plus \code{contrasts}: the contrast table the
+#'   DE step used -- the supplied one, or the auto-generated one when none was
+#'   supplied. On the pre-computed route it is set by
+#'   \code{load_precomputed_rna_de()}, and is NULL when the table names came
+#'   from the file names rather than from a contrasts table. Match it to
+#'   \code{tables} by \code{Contrast_name}: a contrast DESeq2 skipped (a level
+#'   absent from the metadata) has a row here but no table.
 mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
     assert_pre_contract(pre, stage = "rna")
 
@@ -10,6 +24,8 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
 
     if (has_precomputed) {
         message("RNA DE: loading pre-computed DE tables (skipping limma/DESeq2)")
+        # The loader sets $contrasts itself: it alone knows whether the
+        # supplied names labelled the tables or it fell back to file names.
         return(load_precomputed_rna_de(config, contrasts_df = inputs$contrasts))
     }
 
@@ -30,7 +46,7 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
                    attr(pre$de_input, "source_type") %||%
                    "matrix"
 
-    if (source_type == "preprocessed") {
+    de_res <- if (source_type == "preprocessed") {
         run_limma_rna_de(
             expr = pre$expr_work,
             meta = pre$meta,
@@ -47,6 +63,12 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
             batch_cfg = batch_cfg
         )
     }
+    # Keep the contrast table this step resolved. Auto-generated contrasts
+    # exist nowhere else (pre$contrasts is NULL then), and the table names
+    # alone cannot say which level is the numerator; the omics bundle carries
+    # this so integration need not resolve the contrasts a second time.
+    de_res$contrasts <- contrasts_df
+    de_res
 }
 
 #' Auto-generate all pairwise contrasts from metadata

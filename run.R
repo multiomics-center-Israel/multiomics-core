@@ -2519,6 +2519,34 @@ wizard_multiomics <- function(project_dir, project_name, analyst, round) {
 }
 
 # --- Pipeline Runner ----------------------------------------------------------
+#' Closing lines of a pipeline run, given the targets that errored
+#'
+#' Targets with \code{error = "continue"} (the RNA bundle) can fail while
+#' \code{tar_make()} returns normally, so the run has to say so itself rather
+#' than end on "Pipeline complete.".
+#'
+#' @param errored Names of the errored targets, as \code{targets::tar_errored()}
+#'   returns them.
+#' @param store The run's own targets store. Named in the suggested command
+#'   because the default \code{_targets/} store is not the one this run used.
+#' @return Character vector of lines to print.
+pipeline_completion_lines <- function(errored, store) {
+  errored <- sort(unique(as.character(errored)))
+  if (length(errored) == 0) return("  Pipeline complete.")
+  lines <- character(0)
+  if ("rna_bundle" %in% errored) {
+    lines <- c(lines,
+      "  WARNING: RNA bundle export failed (target rna_bundle). No new RNA bundle",
+      "  was written for this run, even if the reports above were generated. An RNA",
+      "  bundle already listed for this project and round predates this run and",
+      "  does not reflect it. Fix the cause and run again: only the bundle is rebuilt.")
+  }
+  c(lines,
+    sprintf("  Pipeline finished with errored targets: %s", paste(errored, collapse = ", ")),
+    sprintf("  Error messages: targets::tar_meta(fields = error, complete_only = TRUE, store = \"%s\")",
+            store))
+}
+
 run_pipeline <- function(config_path, fresh = FALSE) {
   config_path <- normalizePath(config_path, mustWork = TRUE)
   cat(sprintf("\n  Config: %s\n", config_path))
@@ -2614,7 +2642,9 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     cat(sprintf("\n  Proteomics Report: %s\n", prot_report_path))
     cat("  Open in browser to view results.\n")
   }
-  cat("\n  Pipeline complete.\n")
+  # Read from this run's own store, the one tar_make() just built in.
+  errored <- targets::tar_errored(store = store)
+  cat("\n", paste(pipeline_completion_lines(errored, store), collapse = "\n"), "\n", sep = "")
 }
 # --- Main Entry Point ---------------------------------------------------------
 main <- function() {

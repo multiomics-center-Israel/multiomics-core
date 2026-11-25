@@ -100,6 +100,25 @@ bundle_provenance <- function(repo_dir = ".") {
 }
 
 
+#' Bundle identity of one single-omics run, read from its config
+#'
+#' Project and analysis round fall back exactly as \code{get_run_out_dir()}
+#' does (\code{"Project"}, \code{"Analysis"}), so a bundle always names the run
+#' its \code{Results_<name>_<round>} folder belongs to.
+#'
+#' @param config Validated config of the run.
+#' @param omics Omics name for the bundle (e.g. \code{"rnaseq"}).
+#' @return List with \code{omics}, \code{project}, \code{analysis_round} and
+#'   \code{run_name}, ready to pass to \code{write_omics_bundle()} as
+#'   \code{info}.
+omics_bundle_info <- function(config, omics) {
+    list(omics          = omics,
+         project        = as.character(config$project$name %||% "Project"),
+         analysis_round = as.character(config$project$analysis_round %||% "Analysis"),
+         run_name       = get_run_name(config))
+}
+
+
 #' Write a new, immutable omics bundle
 #'
 #' Each part is saved as its own RDS file under a hidden \code{.partial_*}

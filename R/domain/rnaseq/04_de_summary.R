@@ -451,7 +451,9 @@ run_limma_rna_de <- function(expr, meta, contrasts_df, de_cfg, batch_cfg = NULL)
 #' @param config Full pipeline config.
 #' @param contrasts_df Optional contrasts data frame (with Contrast_name column).
 #'   When provided, contrast names from this table are used instead of filenames.
-#' @return List with 'dds' (NULL) and 'tables' (named list of DE data frames).
+#' @return List with 'dds' (NULL), 'tables' (named list of DE data frames) and
+#'   'contrasts': \code{contrasts_df} when its names labelled the tables, NULL
+#'   when the labels came from the file names instead.
 load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
     cfg <- config$modes$rna
 
@@ -617,6 +619,9 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
 
     list(
         dds    = NULL,
-        tables = tables
+        tables = tables,
+        # The supplied contrast table only when its labels named the tables; on
+        # the filename fallback they did not, so it does not describe them.
+        contrasts = if (labels_from_file) NULL else contrasts_df
     )
 }
