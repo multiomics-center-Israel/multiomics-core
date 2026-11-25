@@ -33,7 +33,9 @@ test_that("a failed RNA bundle is reported even when the reports were written", 
   lines <- run_r_function("pipeline_completion_lines")
   out <- paste(lines("rna_bundle", store), collapse = "\n")
   expect_match(out, "WARNING: RNA bundle export failed", fixed = TRUE)
-  expect_match(out, "No RNA bundle is", fixed = TRUE)
+  expect_match(out, "No new RNA bundle", fixed = TRUE)
+  # An older bundle of the same round stays listed; say it is not this run's.
+  expect_match(out, "predates this run", fixed = TRUE)
   expect_match(out, "errored targets: rna_bundle", fixed = TRUE)
   expect_false(grepl("Pipeline complete.", out, fixed = TRUE))
 })

@@ -2536,9 +2536,10 @@ pipeline_completion_lines <- function(errored, store) {
   lines <- character(0)
   if ("rna_bundle" %in% errored) {
     lines <- c(lines,
-      "  WARNING: RNA bundle export failed (target rna_bundle). No RNA bundle is",
-      "  available for this run, even if the reports above were generated. Fix the",
-      "  cause and run again: only the bundle is rebuilt.")
+      "  WARNING: RNA bundle export failed (target rna_bundle). No new RNA bundle",
+      "  was written for this run, even if the reports above were generated. An RNA",
+      "  bundle already listed for this project and round predates this run and",
+      "  does not reflect it. Fix the cause and run again: only the bundle is rebuilt.")
   }
   c(lines,
     sprintf("  Pipeline finished with errored targets: %s", paste(errored, collapse = ", ")),
