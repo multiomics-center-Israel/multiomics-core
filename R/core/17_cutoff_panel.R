@@ -209,9 +209,13 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
   // means "did not pass". Treating null as "no flag available" let a feature
   // qualify on its p-value alone and made the live counts disagree with the
   // static table by one.
-  function classify(logFC, pval, lfcCut, pCut, passFlag) {
+  // strictP: the pipeline behind this plot calls a feature significant at p < cutoff
+  // (metabolomics) rather than p <= cutoff (the default here), so a p exactly
+  // at the cutoff is classified the way that pipeline classifies it.
+  function classify(logFC, pval, lfcCut, pCut, passFlag, strictP) {
     if (passFlag !== undefined && passFlag !== 1) return "NS";
-    if (pval !== null && !isNaN(pval) && pval <= pCut &&
+    var pOk = strictP ? pval < pCut : pval <= pCut;
+    if (pval !== null && !isNaN(pval) && pOk &&
         Math.abs(logFC) >= lfcCut) {
       return logFC > 0 ? "Up" : "Down";
     }
@@ -246,7 +250,7 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
       // Only report "no flag" when the whole array is absent; a null element is
       // a real NA from the pipeline and must reach classify() as null.
       var pf_i = data.passFlag ? data.passFlag[i] : undefined;
-      var dir = classify(lfc_i, pval_i, currentLfc, currentPval, pf_i);
+      var dir = classify(lfc_i, pval_i, currentLfc, currentPval, pf_i, reg.strictP === true);
       groups[dir].push(i);
     }
 
@@ -446,10 +450,13 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
 #' @param entity_label  "Protein", "Gene", or "Metabolite"
 #' @param contrast      Character; contrast name (for linking to summary spans)
 #' @param ycap          Numeric or NULL; y-axis cap for volcano plots
+#' @param strict_p      Logical; TRUE when the pipeline behind this plot calls
+#'                      a feature significant at p < cutoff rather than
+#'                      p <= cutoff. Default FALSE keeps the existing behaviour.
 #' @return Raw HTML string (use cat(...) in asis chunk)
 cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
                                   entity_label = "Protein", contrast = "",
-                                  ycap = NULL) {
+                                  ycap = NULL, strict_p = FALSE) {
   df <- point_data_df
 
   # digits = NA keeps full double precision. jsonlite's default (4 decimals)
@@ -491,6 +498,7 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
   }
 
   js_ycap <- if (is.null(ycap)) "null" else as.character(ycap)
+  js_strictP <- if (isTRUE(strict_p)) "true" else "false"
 
   sprintf('
 <script>
@@ -501,6 +509,7 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
     entityLabel: "%s",
     contrast: "%s",
     ycap: %s,
+    strictP: %s,
     data: {
       name: %s,
       logFC: %s,
@@ -513,7 +522,7 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
   };
 })();
 </script>',
-    plot_id, plot_type, entity_label, contrast, js_ycap,
+    plot_id, plot_type, entity_label, contrast, js_ycap, js_strictP,
     js_name, js_logFC, js_pval, js_avgExpr, js_avgExprLabel, js_adjPval, js_passFlag)
 }
 

@@ -61,6 +61,23 @@ tryCatch({
 }, error = function(e) message("cutoff_panel helpers not found: ", e$message))
 
 # ---------------------------------------------------------------------------
+# Helper: exact logFC for the cutoff panel
+# ---------------------------------------------------------------------------
+# The summary table keeps only linearFC rounded to 3 significant digits, so a
+# logFC rebuilt from it can land on the other side of the FC cutoff than the
+# pipeline's exact value. The panel recomputes significance itself, so give it
+# the DE table's logFC (matched by feature_id); fall back to the rebuilt value
+# for features the DE table lacks.
+metab_panel_logfc <- function(ctr_tbl, de_tables, ctr_label) {
+  tbl <- if (is.null(de_tables)) NULL else de_tables[[ctr_label]]
+  if (is.null(tbl) || !all(c("feature_id", "logFC") %in% names(tbl))) {
+    return(ctr_tbl$logFC)
+  }
+  exact <- tbl$logFC[match(ctr_tbl$feature_id, tbl$feature_id)]
+  ifelse(is.na(exact), ctr_tbl$logFC, exact)
+}
+
+# ---------------------------------------------------------------------------
 # Helper: downloadable DT table with CSV/Excel export (proteomics style)
 # ---------------------------------------------------------------------------
 make_dt <- function(df, caption = NULL, pageLength = 15, pval_cols = NULL,
@@ -1251,23 +1268,23 @@ if (!is.null(de_contrasts)) {
       if (exists("cutoff_register_plot")) {
         vol_reg_df <- data.frame(
           name = as.character(ctr_tbl$Name),
-          logFC = ctr_tbl$logFC,
+          logFC = metab_panel_logfc(ctr_tbl, de_res$de_tables, ctr_label),
           pval = ctr_tbl$P.Value,
           adjPval = ctr_tbl$adj.P.Val,
           stringsAsFactors = FALSE
         )
-        # Pipeline pass flag — single source of truth for DE counts
-        pass_col_m <- paste0("pass.", ctr_label)
-        if (!is.null(de_res$summary_df) && pass_col_m %in% names(de_res$summary_df)) {
-          pf <- as.numeric(de_res$summary_df[[pass_col_m]])
-          # Align to ctr_tbl rows by feature_id
-          pf_aligned <- pf[match(ctr_tbl$feature_id, de_res$summary_df$feature_id)]
-          vol_reg_df$passFlag <- ifelse(is.na(pf_aligned), 0, pf_aligned)
-        }
+        # No passFlag. The cutoff panel treats it as a hard gate: a feature
+        # the pipeline did not pass stays NS at any cutoff or p-value type,
+        # so switching to raw p or loosening the cutoffs changed nothing.
+        # Metabolomics pass.<contrast> is only (adj. or raw, per
+        # de.use_adjusted_pval) p < cutoff and |log2FC| >= cutoff, which the
+        # panel recomputes from pval/adjPval and logFC; its default p-value
+        # type follows the same setting.
         # The plotly widget is inside the wrapper div; JS uses querySelector fallback
         cat(cutoff_register_plot(
           paste0("volcano_plot_", vol_cid),
-          vol_reg_df, "volcano", "Metabolite", ctr
+          vol_reg_df, "volcano", "Metabolite", ctr,
+          strict_p = TRUE  # pass.<contrast> uses p < cutoff (03_differential.R)
         ))
       }
 
@@ -1435,21 +1452,17 @@ if (!is.null(de_contrasts)) {
         if (exists("cutoff_register_plot")) {
           ma_reg_df <- data.frame(
             name = as.character(ctr_tbl$Name),
-            logFC = ctr_tbl$logFC,
+            logFC = metab_panel_logfc(ctr_tbl, de_res$de_tables, ctr_label),
             pval = ctr_tbl$P.Value,
             avgExpr = ctr_tbl$AveExpr,
             adjPval = ctr_tbl$adj.P.Val,
             stringsAsFactors = FALSE
           )
-          pass_col_m <- paste0("pass.", ctr_label)
-          if (!is.null(de_res$summary_df) && pass_col_m %in% names(de_res$summary_df)) {
-            pf <- as.numeric(de_res$summary_df[[pass_col_m]])
-            pf_aligned <- pf[match(ctr_tbl$feature_id, de_res$summary_df$feature_id)]
-            ma_reg_df$passFlag <- ifelse(is.na(pf_aligned), 0, pf_aligned)
-          }
+          # No passFlag, for the same reason as the volcano registration.
           cat(cutoff_register_plot(
             paste0("ma_plot_", ma_cid),
-            ma_reg_df, "ma", "Metabolite", ctr
+            ma_reg_df, "ma", "Metabolite", ctr,
+            strict_p = TRUE
           ))
         }
 
